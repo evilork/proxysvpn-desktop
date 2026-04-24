@@ -1,0 +1,35 @@
+# Node
+node_modules/
+dist/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+src-tauri/Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+*.dmg
+*.msi
+*.AppImage
+*.deb
+
+# Large binaries — fetched separately by scripts/fetch-binaries.sh
+src-tauri/binaries/xray-*
+src-tauri/binaries/geoip.dat
+src-tauri/binaries/geosite.dat
+
+# Large binaries — fetched separately by scripts/fetch-binaries.sh
+src-tauri/binaries/xray-*
+src-tauri/binaries/geoip.dat
+src-tauri/binaries/geosite.dat
