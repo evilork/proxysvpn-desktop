@@ -1,7 +1,7 @@
 // src-tauri/src/xray_manager.rs
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use tauri::Manager;
@@ -20,46 +20,58 @@ pub fn new_state() -> SharedXrayState {
     Arc::new(Mutex::new(XrayState::default()))
 }
 
-/// Returns (xray_binary, assets_dir). assets_dir contains geoip.dat + geosite.dat.
 pub fn xray_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf)> {
     let triple = current_target_triple();
     let mut bin_candidates: Vec<PathBuf> = Vec::new();
     let mut asset_dirs: Vec<PathBuf> = Vec::new();
 
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        bin_candidates.push(resource_dir.join(format!("xray-{}", triple)));
-        bin_candidates.push(resource_dir.join("xray"));
-        bin_candidates.push(resource_dir.join("binaries").join(format!("xray-{}", triple)));
-        bin_candidates.push(resource_dir.join("binaries").join("xray"));
-        asset_dirs.push(resource_dir.clone());
-        asset_dirs.push(resource_dir.join("binaries"));
+    // 1. Directory of the current executable (in .app: Contents/MacOS/)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            bin_candidates.push(dir.join("xray"));
+            bin_candidates.push(dir.join(format!("xray-{}", triple)));
+            asset_dirs.push(dir.to_path_buf());
+            // And sibling Resources/ — Tauri puts geoip.dat/geosite.dat there
+            if let Some(contents) = dir.parent() {
+                asset_dirs.push(contents.join("Resources"));
+                asset_dirs.push(contents.join("Resources").join("_up_").join("binaries"));
+            }
+        }
     }
 
-    bin_candidates.push(PathBuf::from("binaries").join(format!("xray-{}", triple)));
-    bin_candidates.push(PathBuf::from("binaries").join("xray"));
-    asset_dirs.push(PathBuf::from("binaries"));
+    // 2. Tauri-provided resource_dir (Resources folder)
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        bin_candidates.push(resource_dir.join("xray"));
+        bin_candidates.push(resource_dir.join(format!("xray-{}", triple)));
+        bin_candidates.push(resource_dir.join("binaries").join("xray"));
+        bin_candidates.push(resource_dir.join("binaries").join(format!("xray-{}", triple)));
+        asset_dirs.push(resource_dir.clone());
+        asset_dirs.push(resource_dir.join("binaries"));
+        // Tauri resource paths with _up_ prefix
+        asset_dirs.push(resource_dir.join("_up_").join("binaries"));
+    }
 
+    // 3. Dev mode — look relative to Cargo manifest
     if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
         let base = PathBuf::from(manifest_dir);
         bin_candidates.push(base.join("binaries").join(format!("xray-{}", triple)));
-        bin_candidates.push(base.join("binaries").join("xray"));
         asset_dirs.push(base.join("binaries"));
     }
 
     let bin = bin_candidates
         .iter()
         .find(|p| p.exists())
-        .cloned()
+        .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
         .ok_or_else(|| anyhow!("xray binary not found; tried: {:?}", bin_candidates))?;
 
     let assets = asset_dirs
         .iter()
         .find(|p| p.join("geoip.dat").exists())
-        .cloned()
-        .ok_or_else(|| anyhow!("geoip.dat not found; tried: {:?}", asset_dirs))?;
+        .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
+        .unwrap_or_else(|| bin.parent().unwrap().to_path_buf());
 
-    println!("[xray_manager] binary: {}", bin.display());
-    println!("[xray_manager] assets: {}", assets.display());
+    println!("[xray] binary: {}", bin.display());
+    println!("[xray] assets: {}", assets.display());
     Ok((bin, assets))
 }
 
@@ -79,8 +91,8 @@ fn current_target_triple() -> &'static str {
 
 pub async fn start(
     state: &SharedXrayState,
-    xray_path: &PathBuf,
-    assets_dir: &PathBuf,
+    bin: &Path,
+    assets_dir: &Path,
     config: Value,
 ) -> Result<()> {
     let mut guard = state.lock().await;
@@ -90,11 +102,10 @@ pub async fn start(
 
     let config_str = serde_json::to_string(&config)?;
 
-    let mut cmd = Command::new(xray_path);
+    let mut cmd = Command::new(bin);
     cmd.arg("run")
         .arg("-config")
         .arg("stdin:")
-        // Tell xray where to find geoip.dat/geosite.dat
         .env("XRAY_LOCATION_ASSET", assets_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -102,11 +113,7 @@ pub async fn start(
         .kill_on_drop(true);
 
     let mut child = cmd.spawn().context("failed to spawn xray process")?;
-
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| anyhow!("xray stdin not captured"))?;
+    let stdin = child.stdin.take().ok_or_else(|| anyhow!("xray stdin not captured"))?;
     let mut stdin = stdin;
     stdin.write_all(config_str.as_bytes()).await?;
     stdin.shutdown().await?;
@@ -115,7 +122,7 @@ pub async fn start(
         tokio::spawn(async move {
             let mut lines = BufReader::new(out).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                println!("[xray stdout] {}", line);
+                crate::logger::log("info", "xray", &line);
             }
         });
     }
@@ -123,16 +130,14 @@ pub async fn start(
         tokio::spawn(async move {
             let mut lines = BufReader::new(err).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                eprintln!("[xray stderr] {}", line);
+                crate::logger::log("warn", "xray", &line);
             }
         });
     }
 
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     match child.try_wait() {
-        Ok(Some(status)) => {
-            return Err(anyhow!("xray exited immediately with status: {}", status));
-        }
+        Ok(Some(status)) => return Err(anyhow!("xray exited with status: {}", status)),
         Ok(None) => {}
         Err(e) => return Err(anyhow!("xray try_wait failed: {}", e)),
     }

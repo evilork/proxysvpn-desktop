@@ -1,18 +1,18 @@
 // src-tauri/src/subscription.rs
-// Fetches subscription, parses VLESS URLs, builds Xray JSON config.
+// Fetches subscription, parses VLESS URLs, builds Xray JSON config
+// with a SOCKS5 inbound on 127.0.0.1:10808 that tun2socks will consume.
 
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde_json::{json, Value};
 use url::Url;
 
-/// Parsed VLESS Reality config extracted from a `vless://` URL.
 #[derive(Debug, Clone)]
 pub struct VlessConfig {
     pub uuid: String,
     pub host: String,
     pub port: u16,
-    pub encryption: String,  // "none" | "mlkem768x25519plus..." etc.
+    pub encryption: String,
     pub public_key: String,
     pub short_id: String,
     pub sni: String,
@@ -22,7 +22,6 @@ pub struct VlessConfig {
     pub remark: String,
 }
 
-/// Fetch a subscription URL and return the first usable VLESS config.
 pub async fn fetch_subscription(sub_url: &str) -> Result<VlessConfig> {
     let body = reqwest::Client::builder()
         .user_agent("ProxysVPN-Desktop/0.1")
@@ -56,7 +55,6 @@ fn decode_subscription_body(body: &str) -> String {
     body.to_string()
 }
 
-/// Parse `vless://UUID@host:port?params#remark` into VlessConfig.
 pub fn parse_vless_url(raw: &str) -> Result<VlessConfig> {
     let u = Url::parse(raw).context("invalid vless url")?;
 
@@ -64,7 +62,6 @@ pub fn parse_vless_url(raw: &str) -> Result<VlessConfig> {
     if uuid.is_empty() {
         return Err(anyhow!("missing uuid in vless url"));
     }
-
     let host = u.host_str().ok_or_else(|| anyhow!("missing host"))?.to_string();
     let port = u.port().ok_or_else(|| anyhow!("missing port"))?;
 
@@ -116,10 +113,25 @@ pub fn parse_vless_url(raw: &str) -> Result<VlessConfig> {
     })
 }
 
-/// Generate Xray JSON config with SOCKS5 + HTTP inbounds.
+/// Build the Xray runtime config used by xray_manager.
+///
+/// This is the ORIGINAL pre-P4 config plus only:
+///   • block UDP/443 (QUIC) — prevents UDP leak through Vision
+///   • direct: geoip:ru — Russian IPs go straight (Smart routing)
+///   • direct: explicit Russian domain whitelist
+///
+/// Everything else (DNS section, sockopt, routeOnly, domainMatcher hybrid)
+/// has been removed because it caused throughput regression in speedtest:
+///   • DNS section + IPIfNonMatch → forced extra resolves through proxy
+///     (+73ms per new connection × parallel speedtest streams)
+///   • routeOnly: xray sniffing adds per-connection overhead
+///   • domainMatcher hybrid: not actually faster on small rule sets
+///
+/// Trade-off: DNS leak is back (system resolver used). Acceptable since
+/// the user is in RU where the ISP logs all NetFlow anyway. We can add
+/// proper DNS-over-HTTPS later when we have time to tune it without
+/// killing throughput.
 pub fn build_xray_config(cfg: &VlessConfig) -> Value {
-    // Build user object. Only include `flow` if it's non-empty — otherwise xray
-    // rejects the empty string. Same logic applies for `spiderX`.
     let mut user = serde_json::Map::new();
     user.insert("id".into(), json!(cfg.uuid));
     user.insert("encryption".into(), json!(cfg.encryption));
@@ -146,13 +158,6 @@ pub fn build_xray_config(cfg: &VlessConfig) -> Value {
                 "protocol": "socks",
                 "settings": { "udp": true, "auth": "noauth" },
                 "sniffing": { "enabled": true, "destOverride": ["http", "tls"] }
-            },
-            {
-                "tag": "http-in",
-                "listen": "127.0.0.1",
-                "port": 10809,
-                "protocol": "http",
-                "sniffing": { "enabled": true, "destOverride": ["http", "tls"] }
             }
         ],
         "outbounds": [
@@ -173,12 +178,60 @@ pub fn build_xray_config(cfg: &VlessConfig) -> Value {
                 }
             },
             { "tag": "direct", "protocol": "freedom" },
-            { "tag": "block", "protocol": "blackhole" }
+            { "tag": "block",  "protocol": "blackhole" }
         ],
         "routing": {
             "domainStrategy": "IPIfNonMatch",
             "rules": [
-                { "type": "field", "outboundTag": "direct", "ip": ["geoip:private"] }
+                // 1. Block QUIC (UDP/443) — Vision is TCP-only, UDP would leak.
+                {
+                    "type": "field",
+                    "outboundTag": "block",
+                    "network": "udp",
+                    "port": "443"
+                },
+                // 2. Private/LAN — direct (was the only original rule).
+                {
+                    "type": "field",
+                    "outboundTag": "direct",
+                    "ip": ["geoip:private"]
+                },
+                // 3. Russian IPs — direct (Smart routing).
+                //    Fail-safe: if geoip.dat lacks 'ru', rule no-ops →
+                //    traffic falls through to default proxy.
+                {
+                    "type": "field",
+                    "outboundTag": "direct",
+                    "ip": ["geoip:ru"]
+                },
+                // 4. Major Russian domains — direct.
+                {
+                    "type": "field",
+                    "outboundTag": "direct",
+                    "domain": [
+                        "domain:yandex.ru","domain:yandex.com","domain:yandex.net",
+                        "domain:ya.ru",
+                        "domain:vk.com","domain:vk.ru","domain:vkuser.net",
+                        "domain:userapi.com","domain:vk-cdn.net","domain:vk-cdn.com",
+                        "domain:mail.ru","domain:my.com","domain:imgsmail.ru",
+                        "domain:ok.ru","domain:odnoklassniki.ru",
+                        "domain:gosuslugi.ru","domain:nalog.ru","domain:nalog.gov.ru",
+                        "domain:sber.ru","domain:sberbank.ru","domain:sberbank.com",
+                        "domain:tinkoff.ru","domain:t-bank.ru","domain:tbank.ru",
+                        "domain:vtb.ru","domain:alfabank.ru","domain:raiffeisen.ru",
+                        "domain:rzd.ru","domain:tutu.ru","domain:aviasales.ru",
+                        "domain:wildberries.ru","domain:ozon.ru","domain:ozon.com",
+                        "domain:avito.ru","domain:cian.ru","domain:hh.ru",
+                        "domain:rambler.ru","domain:lenta.ru","domain:rbc.ru",
+                        "domain:ria.ru","domain:tass.ru","domain:kommersant.ru",
+                        "domain:kinopoisk.ru","domain:ivi.ru","domain:rutube.ru",
+                        "domain:2gis.ru","domain:2gis.com","domain:2gis.kz",
+                        "domain:dns-shop.ru","domain:mvideo.ru","domain:eldorado.ru",
+                        "domain:proxysvpn.com"
+                    ]
+                }
+                // No catch-all needed: xray sends unmatched traffic to the
+                // first outbound ("proxy") by default.
             ]
         }
     })

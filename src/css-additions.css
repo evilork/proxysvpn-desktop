@@ -1,68 +1,3 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-:root {
-  --nm-bg: #1a1d24;
-  --nm-surface: #222630;
-  --nm-text: #e4e6eb;
-  --nm-text-secondary: #9ca3af;
-  --nm-accent: #4ade80;
-  --nm-shadow-dark: #14171c;
-  --nm-shadow-light: #2a2f3a;
-}
-
-html, body, #root {
-  margin: 0;
-  padding: 0;
-  height: 100vh;
-  width: 100vw;
-  overflow: hidden;
-  background: var(--nm-bg);
-  color: var(--nm-text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  user-select: none;
-}
-
-.nm-raised {
-  background: var(--nm-surface);
-  border-radius: 16px;
-  box-shadow: 6px 6px 12px var(--nm-shadow-dark), -6px -6px 12px var(--nm-shadow-light);
-}
-.nm-pressed {
-  background: var(--nm-surface);
-  border-radius: 16px;
-  box-shadow: inset 4px 4px 8px var(--nm-shadow-dark), inset -4px -4px 8px var(--nm-shadow-light);
-}
-.nm-pressed-sm {
-  background: var(--nm-surface);
-  border-radius: 10px;
-  box-shadow: inset 2px 2px 4px var(--nm-shadow-dark), inset -2px -2px 4px var(--nm-shadow-light);
-}
-.nm-btn {
-  background: var(--nm-surface);
-  border: none;
-  border-radius: 12px;
-  box-shadow: 4px 4px 8px var(--nm-shadow-dark), -4px -4px 8px var(--nm-shadow-light);
-  transition: all 0.15s ease;
-  color: var(--nm-text);
-}
-.nm-btn:hover { transform: translateY(-1px); }
-.nm-btn:active { box-shadow: inset 2px 2px 4px var(--nm-shadow-dark), inset -2px -2px 4px var(--nm-shadow-light); transform: translateY(0); }
-.nm-btn-accent {
-  background: linear-gradient(145deg, #4ade80, #22c55e);
-  border: none;
-  border-radius: 12px;
-  color: #0d1117;
-  font-weight: 600;
-  box-shadow: 4px 4px 12px rgba(74, 222, 128, 0.3), -2px -2px 8px var(--nm-shadow-light);
-  transition: all 0.15s ease;
-}
-.nm-btn-accent:hover { transform: translateY(-1px); box-shadow: 6px 6px 16px rgba(74, 222, 128, 0.4), -2px -2px 8px var(--nm-shadow-light); }
-.nm-btn-accent:active { transform: translateY(0); box-shadow: inset 2px 2px 4px rgba(0,0,0,0.2); }
-.nm-btn-accent:disabled { opacity: 0.5; cursor: not-allowed; }
-
 /* ==========================================================================
    ADDITIONS for light theme + LogViewer + ThemeToggle
    APPEND this to the END of src/App.css (do not replace existing content).
@@ -261,19 +196,4 @@ html, body, .nm-raised, .nm-pressed, .nm-pressed-sm, .nm-btn, .nm-btn-sm {
   padding: 1px 5px;
   border-radius: 4px;
   font-family: ui-monospace, monospace;
-}
-
-
-/* Floating version label — bottom-left corner, mirrors LogViewer button */
-.version-label {
-  position: fixed;
-  bottom: 14px;
-  left: 14px;
-  z-index: 50;
-  font-size: 10px;
-  color: var(--nm-text-secondary);
-  opacity: 0.55;
-  user-select: none;
-  pointer-events: none;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 }

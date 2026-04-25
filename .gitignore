@@ -30,6 +30,18 @@ src-tauri/binaries/geoip.dat
 src-tauri/binaries/geosite.dat
 
 # Large binaries — fetched separately by scripts/fetch-binaries.sh
-src-tauri/binaries/xray-*
-src-tauri/binaries/geoip.dat
-src-tauri/binaries/geosite.dat
+
+# Sidecar binaries — fetched via scripts/fetch-binaries.sh (do not commit)
+src-tauri/binaries/tun2socks-*
+
+# Local backups from patch scripts
+*.bak
+*.bak2
+
+# Internal devscripts (not for public repo)
+apply.py
+INSTRUCTIONS.txt
+src-tauri/scripts/bench-configs.sh
+
+# Build/release temp
+scripts/release-templates/

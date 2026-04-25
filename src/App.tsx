@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { Power, Zap, AlertCircle } from "lucide-react";
 import logo from "./assets/logo.png";
 import "./App.css";
+import ThemeToggle from "./components/ThemeToggle";
+import LogViewer from "./components/LogViewer";
 
 type Status = "disconnected" | "connecting" | "connected";
 
@@ -124,7 +126,6 @@ function App() {
           <img src={logo} alt="ProxysVPN" className="w-6 h-6 rounded" />
           <span className="font-semibold text-sm">ProxysVPN</span>
         </div>
-        <span className="text-xs text-nm-text-secondary">v0.1.0</span>
       </div>
 
       {status !== "connected" && (
@@ -183,6 +184,9 @@ function App() {
           ? `${info.remark || info.host}`
           : "Введите ссылку подписки и нажмите кнопку"}
       </div>
+          <span className="version-label">v0.1.0</span>
+          <ThemeToggle />
+      <LogViewer />
     </div>
   );
 }
