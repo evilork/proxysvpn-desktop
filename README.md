@@ -8,7 +8,6 @@ Native macOS VPN client for the [ProxysVPN](https://proxysvpn.com) service. Rout
 
 - **System-wide VPN** via TUN device (`utun225`) and `tun2socks` — every TCP/UDP socket on the machine routes through the tunnel
 - **VLESS Reality** with post-quantum **ML-KEM** key exchange — censorship-resistant, indistinguishable from regular HTTPS
-- **One-click installer** in the DMG — no Terminal needed
 - **Single admin prompt** when starting the VPN (needed to install network routes)
 - **System tray** with Show / Disconnect / Quit; closing the window keeps the VPN connected in background
 - **Live ping** through the tunnel, smart reconnect on network changes
@@ -19,13 +18,11 @@ Native macOS VPN client for the [ProxysVPN](https://proxysvpn.com) service. Rout
 
 1. Download **`ProxysVPN_0.1.0_aarch64.dmg`** from the [latest release](https://github.com/evilork/proxysvpn-desktop/releases/latest)
 2. Open the `.dmg` (double-click)
-3. Double-click **"ProxysVPN Installer"**
-4. Click **"Install"** → enter admin password if prompted
-5. Done — the app launches automatically
+3. Drag **ProxysVPN** into the **Applications** folder (like any other Mac app)
+4. **First launch:** right-click (or Ctrl+click) on `ProxysVPN` in Applications → select **"Open"** → in the popup, click **"Open"** again
+5. Enter your subscription URL (get one at [proxysvpn.com](https://proxysvpn.com)) and click the power button
 
-> On the first Installer launch, macOS may say "from an unidentified developer" — click **"Open"** or go to *System Settings → Privacy & Security → Open Anyway*. One-time action.
-
-After launch, enter your subscription URL (get one at [proxysvpn.com](https://proxysvpn.com)) and click the power button.
+> Step 4 is needed only on the first launch. This is macOS Gatekeeper — because the app isn't yet signed with an Apple Developer ID. After the first launch, it opens with a normal double-click.
 
 ## System requirements
 
@@ -74,9 +71,8 @@ bash src-tauri/scripts/fetch-binaries.sh
 # Install JS deps
 npm install
 
-# Build a signed .app + .dmg with embedded Installer
+# Build a signed .app + .dmg
 bash src-tauri/scripts/build-release.sh
-bash src-tauri/scripts/bundle-installer-into-dmg.sh
 ```
 
 The signed `.dmg` will appear in `src-tauri/target/release/bundle/dmg/`.
@@ -91,7 +87,7 @@ The signed `.dmg` will appear in `src-tauri/target/release/bundle/dmg/`.
 
 | Problem | Fix |
 |---|---|
-| Installer says "from an unidentified developer" | *System Settings → Privacy & Security → Open Anyway* |
+| "macOS cannot verify that this app is free of malware" | Right-click on ProxysVPN → "Open" → in the popup, click "Open" again. First launch only |
 | App freezes on launch / no admin prompt | Quit fully, then `sudo pkill -9 -x proxysvpn-desktop`, relaunch |
 | Connected but Telegram/Instagram won't load | DPI fragmentation issue. Open the logs viewer (bottom-right corner) and send the export to support |
 | VPN drops every few minutes | Click the (i) icon in the corner → Download .txt → send to support |
