@@ -30,7 +30,7 @@ After launch, enter your subscription URL (get one at [proxysvpn.com](https://pr
 ## System requirements
 
 - macOS 11 Big Sur or newer
-- Apple Silicon (M1/M2/M3/M4). Intel Mac support planned for v0.2.
+- Apple Silicon — any ARM64 Mac (M-series, A-series). Intel Mac support planned for v0.2.
 
 ## Architecture
 
