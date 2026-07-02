@@ -22,6 +22,7 @@ pub struct VlessConfig {
     pub remark: String,
 }
 
+#[allow(dead_code)]
 pub async fn fetch_subscription(sub_url: &str) -> Result<VlessConfig> {
     let body = reqwest::Client::builder()
         .user_agent("ProxysVPN-Desktop/0.1")
@@ -43,6 +44,179 @@ pub async fn fetch_subscription(sub_url: &str) -> Result<VlessConfig> {
         .ok_or_else(|| anyhow!("no vless config in subscription"))?;
 
     parse_vless_url(first_vless)
+}
+
+/// Краткая информация о сервере для UI (без секретов).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ServerInfo {
+    pub index: usize,
+    pub remark: String,
+    pub host: String,
+    pub port: u16,
+    pub proto: String,
+}
+
+/// Парсит ВСЕ vless-серверы из подписки (hy2 пока пропускается — нужен др. движок).
+pub async fn fetch_all_vless(sub_url: &str) -> Result<Vec<VlessConfig>> {
+    let body = reqwest::Client::builder()
+        .user_agent("ProxysVPN-Desktop/0.1")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?
+        .get(sub_url)
+        .send()
+        .await
+        .context("subscription request failed")?
+        .text()
+        .await
+        .context("subscription body read failed")?;
+
+    let decoded = decode_subscription_body(&body);
+    let servers: Vec<VlessConfig> = decoded
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("vless://"))
+        .filter_map(|l| parse_vless_url(l).ok())
+        .collect();
+
+    if servers.is_empty() {
+        return Err(anyhow!("no vless servers in subscription"));
+    }
+    Ok(servers)
+}
+
+#[derive(Debug, Clone)]
+pub struct Hy2Config {
+    pub password: String,
+    pub host: String,
+    pub port: u16,
+    pub sni: String,
+    pub pin_sha256: String,
+    pub insecure: bool,
+    pub remark: String,
+}
+
+/// Извлекает чистый хост из возможной Markdown-ссылки [host](url) или мусора.
+fn clean_sni(raw: &str) -> String {
+    let s = raw.trim();
+    let candidate = if let Some(start) = s.find('[') {
+        if let Some(end) = s[start + 1..].find(']') {
+            &s[start + 1..start + 1 + end]
+        } else {
+            s
+        }
+    } else {
+        s
+    };
+    candidate
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
+        .collect()
+}
+
+pub fn parse_hy2_url(raw: &str) -> Result<Hy2Config> {
+    // hy2://password@host:port/?sni=..&pinSHA256=..&insecure=1#remark
+    let u = Url::parse(raw).context("invalid hy2 url")?;
+    let password = u.username().to_string();
+    if password.is_empty() {
+        return Err(anyhow!("missing password in hy2 url"));
+    }
+    let host = u.host_str().ok_or_else(|| anyhow!("missing host"))?.to_string();
+    let port = u.port().ok_or_else(|| anyhow!("missing port"))?;
+
+    let mut sni = String::new();
+    let mut pin_sha256 = String::new();
+    let mut insecure = false;
+    for (k, v) in u.query_pairs() {
+        match k.as_ref() {
+            "sni" => sni = v.into_owned(),
+            "pinSHA256" | "pinsha256" => pin_sha256 = v.into_owned(),
+            "insecure" => insecure = v == "1" || v == "true",
+            _ => {}
+        }
+    }
+    if sni.is_empty() {
+        sni = host.clone();
+    }
+    // SNI может прийти как Markdown [host](url) из-за бага бэкенда — извлекаем host.
+    sni = clean_sni(&sni);
+    // При pinSHA256 серт верифицируется по отпечатку, стандартная x509-проверка
+    // не нужна и ломает self-signed серверы. insecure=true безопасен с пином.
+    if !pin_sha256.is_empty() {
+        insecure = true;
+    }
+    let remark = u
+        .fragment()
+        .map(|f| urlencoding::decode(f).map(|c| c.into_owned()).unwrap_or_else(|_| f.to_string()))
+        .unwrap_or_default();
+
+    Ok(Hy2Config { password, host, port, sni, pin_sha256, insecure, remark })
+}
+
+/// Единый список серверов из подписки: и vless, и hy2.
+#[derive(Debug, Clone)]
+pub enum ServerConfig {
+    Vless(VlessConfig),
+    Hy2(Hy2Config),
+}
+
+impl ServerConfig {
+    pub fn host(&self) -> &str {
+        match self {
+            ServerConfig::Vless(c) => &c.host,
+            ServerConfig::Hy2(c) => &c.host,
+        }
+    }
+    pub fn port(&self) -> u16 {
+        match self {
+            ServerConfig::Vless(c) => c.port,
+            ServerConfig::Hy2(c) => c.port,
+        }
+    }
+    pub fn remark(&self) -> &str {
+        match self {
+            ServerConfig::Vless(c) => &c.remark,
+            ServerConfig::Hy2(c) => &c.remark,
+        }
+    }
+    pub fn proto(&self) -> &'static str {
+        match self {
+            ServerConfig::Vless(_) => "VLESS",
+            ServerConfig::Hy2(_) => "Hysteria2",
+        }
+    }
+}
+
+/// Парсит ВСЕ серверы (vless + hy2) из подписки в едином порядке.
+pub async fn fetch_all_servers(sub_url: &str) -> Result<Vec<ServerConfig>> {
+    let body = reqwest::Client::builder()
+        .user_agent("ProxysVPN-Desktop/0.1")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?
+        .get(sub_url)
+        .send()
+        .await
+        .context("subscription request failed")?
+        .text()
+        .await
+        .context("subscription body read failed")?;
+
+    let decoded = decode_subscription_body(&body);
+    let mut servers: Vec<ServerConfig> = Vec::new();
+    for line in decoded.lines().map(str::trim) {
+        if line.starts_with("vless://") {
+            if let Ok(c) = parse_vless_url(line) {
+                servers.push(ServerConfig::Vless(c));
+            }
+        } else if line.starts_with("hy2://") || line.starts_with("hysteria2://") {
+            if let Ok(c) = parse_hy2_url(line) {
+                servers.push(ServerConfig::Hy2(c));
+            }
+        }
+    }
+    if servers.is_empty() {
+        return Err(anyhow!("no servers in subscription"));
+    }
+    Ok(servers)
 }
 
 fn decode_subscription_body(body: &str) -> String {

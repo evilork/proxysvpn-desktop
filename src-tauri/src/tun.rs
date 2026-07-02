@@ -19,6 +19,7 @@ pub struct TunState {
     child: Option<Child>,
     server_ip: Option<String>,
     original_gateway: Option<String>,
+    watchdog: Option<tokio::task::JoinHandle<()>>,
 }
 
 pub type SharedTunState = Arc<Mutex<TunState>>;
@@ -89,10 +90,19 @@ async fn resolve_host(host: &str) -> Result<String> {
 async fn current_default_gateway() -> Result<String> {
     let out = Command::new("route").args(["-n", "get", "default"]).output().await?;
     let text = String::from_utf8_lossy(&out.stdout);
+    let mut iface: Option<String> = None;
     for line in text.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("gateway:") {
             return Ok(rest.trim().to_string());
+        }
+        if let Some(rest) = trimmed.strip_prefix("interface:") {
+            iface = Some(rest.trim().to_string());
+        }
+    }
+    if let Some(i) = iface {
+        if i.starts_with("utun") {
+            return Err(anyhow!("default route goes through {} — отключите другой VPN", i));
         }
     }
     Err(anyhow!("could not parse default gateway"))
@@ -116,6 +126,7 @@ pub async fn start(
     state: &SharedTunState,
     app: &tauri::AppHandle,
     server_host: &str,
+    socks_port: u16,
 ) -> Result<()> {
     if !is_root() {
         return Err(anyhow!(
@@ -147,7 +158,7 @@ pub async fn start(
     let mut cmd = Command::new(&tun2socks);
     cmd.args([
         "-device", TUN_NAME,
-        "-proxy", &format!("socks5://127.0.0.1:{}", SOCKS_PORT),
+        "-proxy", &format!("socks5://127.0.0.1:{}", socks_port),
         "-loglevel", "info",
     ])
     .stdout(Stdio::piped())
@@ -211,13 +222,79 @@ pub async fn start(
     .context("add route 128.0.0.0/1")?;
 
     guard.child = Some(child);
-    guard.server_ip = Some(server_ip);
+    guard.server_ip = Some(server_ip.clone());
     guard.original_gateway = Some(original_gw);
+
+    let wd = tokio::spawn(watchdog_loop(server_ip));
+    guard.watchdog = Some(wd);
     Ok(())
+}
+
+/// Каждые 5с проверяет, живы ли маршруты VPN, и переустанавливает пропавшие.
+/// Решает «отвал через время»: смена сети / wake из сна сносит таблицу маршрутов.
+async fn watchdog_loop(server_ip: String) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+        // tun2socks жив?
+        let alive = Command::new("pgrep").arg("-x").arg("tun2socks").output().await
+            .map(|o| !o.stdout.is_empty()).unwrap_or(false);
+        if !alive {
+            crate::logger::log("warn", "watchdog", "tun2socks died, stopping watchdog");
+            return;
+        }
+
+        // host-route на сервер жив? нет — переустановить через текущий шлюз
+        if !route_exists(&server_ip).await {
+            if let Ok(gw) = current_default_gateway().await {
+                let _ = run_cmd("/sbin/route", &["-n", "delete", "-host", &server_ip]).await;
+                let _ = run_cmd("/sbin/route", &["-n", "add", "-host", &server_ip, &gw]).await;
+                crate::logger::log("warn", "watchdog", &format!("re-added host route {} via {}", server_ip, gw));
+            }
+        }
+
+        // split-default жив? проверяем по utun225
+        if !tun_default_routes_ok().await {
+            let _ = run_cmd("/sbin/route", &["-n", "add", "-net", "0.0.0.0/1", "-interface", TUN_NAME]).await;
+            let _ = run_cmd("/sbin/route", &["-n", "add", "-net", "128.0.0.0/1", "-interface", TUN_NAME]).await;
+            crate::logger::log("warn", "watchdog", "re-added split-default routes");
+        }
+    }
+}
+
+/// host-route на server_ip присутствует в таблице?
+async fn route_exists(ip: &str) -> bool {
+    let out = Command::new("/sbin/route").args(["-n", "get", "-host", ip]).output().await;
+    if let Ok(o) = out {
+        let t = String::from_utf8_lossy(&o.stdout);
+        // если gateway резолвится и это не сам utun — маршрут до сервера есть
+        for line in t.lines() {
+            if line.trim().starts_with("interface:") && line.contains(TUN_NAME) {
+                return false; // ушёл в туннель = host-route потерян
+            }
+        }
+        return t.contains("gateway:") || t.contains("interface:");
+    }
+    false
+}
+
+/// оба half-default маршрута указывают на utun225?
+async fn tun_default_routes_ok() -> bool {
+    let out = Command::new("netstat").args(["-rn", "-f", "inet"]).output().await;
+    if let Ok(o) = out {
+        let t = String::from_utf8_lossy(&o.stdout);
+        let has_low = t.lines().any(|l| l.starts_with("0/1") && l.contains(TUN_NAME));
+        let has_high = t.lines().any(|l| l.starts_with("128.0/1") && l.contains(TUN_NAME));
+        return has_low && has_high;
+    }
+    false
 }
 
 pub async fn stop(state: &SharedTunState) -> Result<()> {
     let mut guard = state.lock().await;
+    if let Some(wd) = guard.watchdog.take() {
+        wd.abort();
+    }
     let server_ip = guard.server_ip.clone();
 
     let _ = run_cmd("/sbin/route", &["-n", "delete", "-net", "0.0.0.0/1"]).await;

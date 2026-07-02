@@ -3,18 +3,22 @@ mod ping;
 mod subscription;
 mod tun;
 mod xray_manager;
+mod hysteria_manager;
 
 mod logger;
 use std::sync::Arc;
-use subscription::{build_xray_config, fetch_subscription};
+use subscription::{build_xray_config, ServerInfo};
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
 use tauri::{Manager, RunEvent, WindowEvent};
 use tun::{new_state as new_tun_state, SharedTunState};
 use xray_manager::{new_state as new_xray_state, SharedXrayState};
+use hysteria_manager::{new_state as new_hysteria_state, SharedHysteriaState, HY2_SOCKS_PORT};
+use subscription::{fetch_all_servers, ServerConfig};
 
 struct VpnState {
     xray: SharedXrayState,
+    hysteria: SharedHysteriaState,
     tun: SharedTunState,
 }
 
@@ -68,25 +72,45 @@ async fn vpn_connect(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<VpnState>>,
     sub_url: String,
+    server_index: Option<usize>,
 ) -> Result<ConnectResult, String> {
     let _ = tun::stop(&state.tun).await;
     let _ = xray_manager::stop(&state.xray).await;
+    let _ = hysteria_manager::stop(&state.hysteria).await;
 
-    let cfg = fetch_subscription(&sub_url)
+    let servers = fetch_all_servers(&sub_url)
         .await
         .map_err(|e| format!("subscription: {}", e))?;
+    let idx = server_index.unwrap_or(0).min(servers.len().saturating_sub(1));
+    let server = servers[idx].clone();
 
-    let xray_cfg = build_xray_config(&cfg);
-    let (xray_bin, assets_dir) =
-        xray_manager::xray_paths(&app).map_err(|e| e.to_string())?;
-    xray_manager::start(&state.xray, &xray_bin, &assets_dir, xray_cfg)
-        .await
-        .map_err(|e| format!("xray start: {}", e))?;
+    let host = server.host().to_string();
+    let port = server.port();
+    let remark = server.remark().to_string();
 
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    // Выбор движка по протоколу: VLESS -> xray:10808, Hy2 -> hysteria:10809.
+    let socks_port = match &server {
+        ServerConfig::Vless(cfg) => {
+            let xray_cfg = build_xray_config(cfg);
+            let (xray_bin, assets_dir) =
+                xray_manager::xray_paths(&app).map_err(|e| e.to_string())?;
+            xray_manager::start(&state.xray, &xray_bin, &assets_dir, xray_cfg)
+                .await
+                .map_err(|e| format!("xray start: {}", e))?;
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            tun::SOCKS_PORT
+        }
+        ServerConfig::Hy2(cfg) => {
+            hysteria_manager::start(&state.hysteria, &app, cfg)
+                .await
+                .map_err(|e| format!("hysteria start: {}", e))?;
+            HY2_SOCKS_PORT
+        }
+    };
 
-    if let Err(e) = tun::start(&state.tun, &app, &cfg.host).await {
+    if let Err(e) = tun::start(&state.tun, &app, &host, socks_port).await {
         let _ = xray_manager::stop(&state.xray).await;
+        let _ = hysteria_manager::stop(&state.hysteria).await;
         return Err(format!("tun start: {}", e));
     }
 
@@ -94,21 +118,40 @@ async fn vpn_connect(
         write_pid_file(&ip);
     }
 
-    ping::set_target(cfg.host.clone(), cfg.port);
+    ping::set_target(host.clone(), port);
 
     Ok(ConnectResult {
         ok: true,
-        remark: cfg.remark,
-        host: cfg.host,
-        port: cfg.port,
+        remark,
+        host,
+        port,
     })
+}
+
+#[tauri::command]
+async fn list_servers(sub_url: String) -> Result<Vec<ServerInfo>, String> {
+    let servers = fetch_all_servers(&sub_url)
+        .await
+        .map_err(|e| format!("subscription: {}", e))?;
+    Ok(servers
+        .iter()
+        .enumerate()
+        .map(|(i, c)| ServerInfo {
+            index: i,
+            remark: c.remark().to_string(),
+            host: c.host().to_string(),
+            port: c.port(),
+            proto: c.proto().to_string(),
+        })
+        .collect())
 }
 
 #[tauri::command]
 async fn vpn_disconnect(state: tauri::State<'_, Arc<VpnState>>) -> Result<(), String> {
     ping::clear_target();
     let _ = tun::stop(&state.tun).await;
-    xray_manager::stop(&state.xray).await.map_err(|e| e.to_string())?;
+    let _ = xray_manager::stop(&state.xray).await;
+    let _ = hysteria_manager::stop(&state.hysteria).await;
     remove_pid_file();
     Ok(())
 }
@@ -254,12 +297,14 @@ pub fn run() {
 
     let vpn_state = Arc::new(VpnState {
         xray: new_xray_state(),
+        hysteria: new_hysteria_state(),
         tun: new_tun_state(),
     });
 
     let app = tauri::Builder::default()
         .manage(vpn_state)
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
@@ -277,6 +322,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             vpn_connect,
+            list_servers,
             vpn_disconnect,
             vpn_status,
             vpn_ping,

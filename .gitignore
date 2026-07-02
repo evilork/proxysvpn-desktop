@@ -45,3 +45,4 @@ src-tauri/scripts/bench-configs.sh
 
 # Build/release temp
 scripts/release-templates/
+src-tauri/binaries/hysteria-*
