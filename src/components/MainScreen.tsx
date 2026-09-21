@@ -15,6 +15,7 @@ import { formatAge, daysLeft, type Translate } from "../i18n";
 import type { MetricPayload, StatePayload, SubMeta, VpnStep } from "../types";
 import Shield, { type ShieldState } from "./Shield";
 import { IconGear, IconGlobe, IconStethoscope, useNow, useUi } from "./ui";
+import markUrl from "../assets/logo.svg";
 
 /** Healing whispers up to this point and only then becomes a sentence (М3). */
 const HEAL_LOUD_AT_MS = 45_000;
@@ -162,15 +163,9 @@ export default function MainScreen(props: MainScreenProps) {
     <>
       <div className="topbar">
         <div className="brand">
-          <svg width="18" height="20" viewBox="0 0 120 132" aria-hidden="true">
-            <path
-              d="M60 6 L108 26 V68 C108 98 88 118 60 126 C32 118 12 98 12 68 V26 Z"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="10"
-              strokeLinejoin="round"
-            />
-          </svg>
+          {/* Наша марка, а не абстрактный щит: в шапке то же, что в центре
+                экрана и на сайте. */}
+            <img className="brand-mark" src={markUrl} alt="" draggable={false} />
           <span>{t("app.name")}</span>
         </div>
         <button

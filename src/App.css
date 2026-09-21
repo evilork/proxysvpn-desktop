@@ -221,8 +221,10 @@ button {
   letter-spacing: 0.01em;
 }
 
-.brand svg {
-  color: var(--accent-text);
+.brand-mark {
+  width: 20px;
+  height: auto;
+  display: block;
 }
 
 /* --- Typography ----------------------------------------------------------- */
