@@ -2,278 +2,1017 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --nm-bg: #1a1d24;
-  --nm-surface: #222630;
-  --nm-text: #e4e6eb;
-  --nm-text-secondary: #9ca3af;
-  --nm-accent: #4ade80;
-  --nm-shadow-dark: #14171c;
-  --nm-shadow-light: #2a2f3a;
-}
-
-html, body, #root {
-  margin: 0;
-  padding: 0;
-  height: 100vh;
-  width: 100vw;
-  overflow: hidden;
-  background: var(--nm-bg);
-  color: var(--nm-text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  user-select: none;
-}
-
-.nm-raised {
-  background: var(--nm-surface);
-  border-radius: 16px;
-  box-shadow: 6px 6px 12px var(--nm-shadow-dark), -6px -6px 12px var(--nm-shadow-light);
-}
-.nm-pressed {
-  background: var(--nm-surface);
-  border-radius: 16px;
-  box-shadow: inset 4px 4px 8px var(--nm-shadow-dark), inset -4px -4px 8px var(--nm-shadow-light);
-}
-.nm-pressed-sm {
-  background: var(--nm-surface);
-  border-radius: 10px;
-  box-shadow: inset 2px 2px 4px var(--nm-shadow-dark), inset -2px -2px 4px var(--nm-shadow-light);
-}
-.nm-btn {
-  background: var(--nm-surface);
-  border: none;
-  border-radius: 12px;
-  box-shadow: 4px 4px 8px var(--nm-shadow-dark), -4px -4px 8px var(--nm-shadow-light);
-  transition: all 0.15s ease;
-  color: var(--nm-text);
-}
-.nm-btn:hover { transform: translateY(-1px); }
-.nm-btn:active { box-shadow: inset 2px 2px 4px var(--nm-shadow-dark), inset -2px -2px 4px var(--nm-shadow-light); transform: translateY(0); }
-.nm-btn-accent {
-  background: linear-gradient(145deg, #4ade80, #22c55e);
-  border: none;
-  border-radius: 12px;
-  color: #0d1117;
-  font-weight: 600;
-  box-shadow: 4px 4px 12px rgba(74, 222, 128, 0.3), -2px -2px 8px var(--nm-shadow-light);
-  transition: all 0.15s ease;
-}
-.nm-btn-accent:hover { transform: translateY(-1px); box-shadow: 6px 6px 16px rgba(74, 222, 128, 0.4), -2px -2px 8px var(--nm-shadow-light); }
-.nm-btn-accent:active { transform: translateY(0); box-shadow: inset 2px 2px 4px rgba(0,0,0,0.2); }
-.nm-btn-accent:disabled { opacity: 0.5; cursor: not-allowed; }
-
 /* ==========================================================================
-   ADDITIONS for light theme + LogViewer + ThemeToggle
-   APPEND this to the END of src/App.css (do not replace existing content).
+   ProxysVPN — flat, high-contrast.
+
+   Replaces the neumorphic surface. Soft-UI depends on a pair of low-contrast
+   shadows to say "this is a button", which is exactly what disappears for an
+   older person on a laptop screen in daylight, and what the system setting
+   "Increase contrast" removes on purpose. Here a control is a control because
+   of a fill, a border and a size, never because of a shadow.
+
+   Rules this file keeps:
+   • one accent, #4ade80, and never a second bright colour competing with it;
+   • every tap target is at least 44 pt;
+   • both themes follow the system unless the person chose one in [12];
+   • nothing moves for a person who asked the system for less motion.
    ========================================================================== */
 
-/* --- LIGHT THEME ---------------------------------------------------------- */
-/* Activated by setting `data-theme="light"` on <html>.                       */
-/* Defaults stay in :root (dark theme).                                       */
+:root {
+  /* iOS notch / home-indicator insets; 0 on desktop. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+
+  color-scheme: dark;
+
+  /* Dark is the default: this is a VPN client, it lives in a dark window. */
+  --bg: #0b0e12;
+  --surface: #151a20;
+  --surface-2: #1d232b;
+  --line: #2a323c;
+  --line-strong: #3b4753;
+  --text: #f3f6f9;
+  --text-dim: #9aa6b2;
+  --text-faint: #6b7784;
+
+  --accent: #4ade80;
+  /* Green ON a surface needs more contrast than green AS a surface. */
+  --accent-text: #4ade80;
+  --accent-ink: #062011;
+  --accent-soft: rgba(74, 222, 128, 0.14);
+
+  --danger: #ff6b6b;
+  --danger-soft: rgba(255, 107, 107, 0.14);
+  --warn: #f6c453;
+
+  --radius: 14px;
+  --radius-lg: 20px;
+  --tap: 44px;
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  /* Kept for tailwind.config.js, which maps nm-* utilities onto these. */
+  --nm-bg: var(--bg);
+  --nm-surface: var(--surface);
+  --nm-text: var(--text);
+  --nm-text-secondary: var(--text-dim);
+  --nm-accent: var(--accent);
+}
+
+/* Light theme: taken from the system, or forced from [12]. The two rules are
+   identical on purpose — one for "system says light", one for "person said
+   light" — so neither can drift away from the other. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #ffffff;
+    --surface: #f4f6f8;
+    --surface-2: #eaeef2;
+    --line: #dde3e9;
+    --line-strong: #c3ccd5;
+    --text: #0b0e12;
+    --text-dim: #566472;
+    --text-faint: #7b8794;
+    --accent: #4ade80;
+    /* #4ade80 as TEXT on white is unreadable; the darker green is the same
+       hue at a contrast a person can actually read. */
+    --accent-text: #15803d;
+    --accent-ink: #052e16;
+    --accent-soft: rgba(22, 163, 74, 0.12);
+    --danger: #c92a2a;
+    --danger-soft: rgba(201, 42, 42, 0.1);
+    --warn: #b45309;
+  }
+}
+
 :root[data-theme="light"] {
-  --nm-bg: #e6ebf2;
-  --nm-surface: #edf1f7;
-  --nm-text: #1f2937;
-  --nm-text-secondary: #6b7280;
-  --nm-accent: #16a34a;
-  --nm-shadow-dark: #c5cad4;
-  --nm-shadow-light: #ffffff;
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #f4f6f8;
+  --surface-2: #eaeef2;
+  --line: #dde3e9;
+  --line-strong: #c3ccd5;
+  --text: #0b0e12;
+  --text-dim: #566472;
+  --text-faint: #7b8794;
+  --accent: #4ade80;
+  --accent-text: #15803d;
+  --accent-ink: #052e16;
+  --accent-soft: rgba(22, 163, 74, 0.12);
+  --danger: #c92a2a;
+  --danger-soft: rgba(201, 42, 42, 0.1);
+  --warn: #b45309;
 }
 
-/* Smooth transition on theme switch */
-html, body, .nm-raised, .nm-pressed, .nm-pressed-sm, .nm-btn, .nm-btn-sm {
-  transition: background 0.25s ease, color 0.25s ease, box-shadow 0.25s ease;
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
 }
 
-/* --- COMPACT NEUMORPHIC BUTTON (used by ThemeToggle and LogViewer toggle) - */
-.nm-btn-sm {
-  background: var(--nm-surface);
-  border: none;
-  border-radius: 50%;
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 3px 3px 6px var(--nm-shadow-dark),
-              -3px -3px 6px var(--nm-shadow-light);
-  color: var(--nm-text-secondary);
+body {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+button {
+  font: inherit;
+  color: inherit;
   cursor: pointer;
-  transition: all 0.12s ease;
-}
-.nm-btn-sm:hover {
-  color: var(--nm-text);
-}
-.nm-btn-sm:active {
-  box-shadow: inset 2px 2px 4px var(--nm-shadow-dark),
-              inset -2px -2px 4px var(--nm-shadow-light);
-}
-.nm-btn-sm:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
-/* --- THEME TOGGLE POSITION (top-right) ----------------------------------- */
-.theme-toggle {
-  position: fixed;
-  top: 12px;
-  right: 12px;
-  z-index: 50;
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
 }
 
-/* --- LOG TOGGLE POSITION (bottom-right) ---------------------------------- */
-.log-toggle {
-  position: fixed;
-  bottom: 12px;
-  right: 12px;
-  z-index: 50;
-  opacity: 0.55;
-}
-.log-toggle:hover {
-  opacity: 1;
-}
+/* --- Shell ---------------------------------------------------------------- */
 
-/* --- LOG MODAL ----------------------------------------------------------- */
-.log-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-  animation: fadeIn 0.15s ease;
-}
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
-.log-modal {
+.app {
+  position: relative;
   width: 100%;
-  max-width: 720px;
-  max-height: 90vh;
+  max-width: 480px;
+  min-height: 100dvh;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
-  padding: 16px;
-  user-select: text;
+  padding: calc(var(--safe-top) + 10px) calc(var(--safe-right) + 16px)
+    calc(var(--safe-bottom) + 12px) calc(var(--safe-left) + 16px);
+  background: var(--bg);
+  overflow: hidden;
 }
-.log-modal-header {
+
+.topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  min-height: var(--tap);
+  flex: 0 0 auto;
 }
-.log-modal-title {
-  font-size: 14px;
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
   font-weight: 600;
-  color: var(--nm-text);
+  letter-spacing: 0.01em;
 }
-.log-icon-btn {
-  background: transparent;
-  border: none;
-  color: var(--nm-text-secondary);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 6px;
+
+.brand svg {
+  color: var(--accent-text);
+}
+
+/* --- Typography ----------------------------------------------------------- */
+
+.h1 {
+  font-size: 26px;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.h2 {
+  font-size: 19px;
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.body {
+  font-size: 15px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.dim {
+  color: var(--text-dim);
+}
+
+.faint {
+  color: var(--text-faint);
+}
+
+.small {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.caps {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.accent {
+  color: var(--accent-text);
+}
+
+.danger {
+  color: var(--danger);
+}
+
+.nowrap-num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Buttons -------------------------------------------------------------- */
+
+.btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-}
-.log-icon-btn:hover {
-  color: var(--nm-text);
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 18px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+  text-align: center;
+  transition: transform 0.08s ease, background 0.15s ease, border-color 0.15s ease;
 }
 
-.log-modal-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
+.btn:active:not(:disabled) {
+  transform: scale(0.985);
 }
-.log-action-btn {
-  width: auto !important;
-  height: auto !important;
-  border-radius: 8px !important;
-  padding: 6px 10px;
-  font-size: 11px;
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.btn-outline {
+  background: transparent;
+  border-color: var(--line-strong);
+}
+
+.btn-quiet {
+  background: transparent;
+  color: var(--text-dim);
+  font-weight: 500;
+  font-size: 15px;
+  min-height: var(--tap);
+}
+
+.btn-quiet:hover {
+  color: var(--text);
+}
+
+.btn-danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: transparent;
+}
+
+/* A quiet row that removes something still has to look like it removes
+   something; `.btn-quiet` would otherwise win on source order. */
+.btn-quiet.danger {
+  color: var(--danger);
+}
+
+.btn-row {
+  display: flex;
+  gap: 10px;
+}
+
+/* An icon-only control still has to be a 44 pt target. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap);
+  height: var(--tap);
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.icon-btn:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* --- Main screen ---------------------------------------------------------- */
+
+.stage {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 8px 0 4px;
+  text-align: center;
+  min-height: 0;
+}
+
+.shield-btn {
+  width: 168px;
+  height: 168px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+}
+
+.shield-btn:disabled {
+  cursor: default;
+}
+
+.shield-svg {
+  width: 168px;
+  height: 168px;
+  display: block;
+}
+
+/* The arc is the "we are working on it" shape. Colour alone would be invisible
+   to a person who cannot tell green from grey. */
+.shield-arc {
+  transform-origin: 50% 50%;
+  animation: shield-spin 1.6s linear infinite;
+}
+
+@keyframes shield-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.headline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  max-width: 320px;
+}
+
+/* The whole truth line is one 44 pt target that opens [3]. */
+.truthline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  min-height: var(--tap);
+  padding: 4px 12px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 15px;
+}
+
+/* On a 375 pt phone the line wraps; it must break BETWEEN the three facts,
+   never inside "38 мс" or "проверено только что". */
+.truthline > span {
+  white-space: nowrap;
+}
+
+.truthline:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.truthline .sep {
+  color: var(--text-faint);
+}
+
+.quiet-note {
+  min-height: 20px;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
+/* Thin bar shown while healing is still a whisper (8–45 s). */
+.whisper {
+  width: 168px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.whisper::after {
+  content: "";
+  display: block;
+  width: 40%;
+  height: 100%;
+  background: var(--accent);
+  animation: whisper-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes whisper-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+.footbar {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.footbar button {
+  flex: 1 1 0;
+  min-height: var(--tap);
+  border: none;
+  background: transparent;
+  border-radius: 12px;
+  color: var(--text-dim);
+  font-size: 14px;
+  font-weight: 550;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   gap: 6px;
 }
-.log-action-btn span {
-  font-size: 11px;
-}
-.log-action-danger {
-  color: #ef4444;
+
+.footbar button:hover {
+  background: var(--surface);
+  color: var(--text);
 }
 
-.log-modal-body {
-  flex: 1;
-  overflow-y: auto;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-  font-size: 11px;
-  line-height: 1.4;
-  padding: 10px;
-  min-height: 280px;
-  max-height: 50vh;
-  color: var(--nm-text);
+/* --- Service bar ---------------------------------------------------------- */
+
+.servicebar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-top: 6px;
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: left;
 }
-.log-empty {
+
+.servicebar[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.servicebar button {
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-decoration: underline;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* --- Lists and rows ------------------------------------------------------- */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 12px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 15px;
+}
+
+.row + .row {
+  border-top: 1px solid var(--line);
+}
+
+button.row:hover {
+  background: var(--surface-2);
+}
+
+.row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.row-title {
+  font-weight: 550;
+}
+
+.row-sub {
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.35;
+}
+
+.row-side {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.row-flag {
+  font-size: 22px;
+  line-height: 1;
+  width: 28px;
   text-align: center;
-  color: var(--nm-text-secondary);
-  padding: 40px 0;
-  font-family: -apple-system, sans-serif;
-  font-size: 12px;
-}
-.log-line {
-  white-space: pre-wrap;
-  word-break: break-all;
-  margin-bottom: 1px;
-}
-.log-time {
-  color: var(--nm-text-secondary);
-  opacity: 0.75;
-}
-.log-source {
-  color: #60a5fa;
-}
-:root[data-theme="light"] .log-source {
-  color: #2563eb;
-}
-.log-msg {
-  color: var(--nm-text);
-}
-.log-warn .log-msg {
-  color: #f59e0b;
-}
-.log-error .log-msg {
-  color: #ef4444;
 }
 
-.log-modal-footer {
-  margin-top: 10px;
-  font-size: 10px;
-  color: var(--nm-text-secondary);
-  text-align: center;
-}
-.log-modal-footer code {
-  background: var(--nm-shadow-dark);
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-family: ui-monospace, monospace;
+.row[aria-selected="true"] .row-title,
+.row[data-selected="true"] .row-title {
+  color: var(--accent-text);
 }
 
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 
-/* Floating version label — bottom-left corner, mirrors LogViewer button */
-.version-label {
+.section + .section {
+  margin-top: 18px;
+}
+
+.divider {
+  height: 1px;
+  background: var(--line);
+  border: none;
+  margin: 0;
+}
+
+/* --- Screens (full-window) and sheets ------------------------------------- */
+
+.screen {
   position: fixed;
-  bottom: 14px;
-  left: 14px;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  justify-content: center;
+  background: var(--bg);
+}
+
+.screen-inner {
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  padding: calc(var(--safe-top) + 6px) calc(var(--safe-right) + 16px)
+    calc(var(--safe-bottom) + 14px) calc(var(--safe-left) + 16px);
+  min-height: 0;
+}
+
+.screen-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--tap);
+  margin-bottom: 10px;
+}
+
+.screen-head .h2 {
+  flex: 1 1 auto;
+}
+
+/* Vertical centring for short screens. Auto margins, not
+   `justify-content: center`: with centring, content taller than the box has
+   its FIRST lines clipped and unreachable by scrolling. Auto margins collapse
+   to zero once the content fills the space, so long content still starts at
+   the top and scrolls normally. */
+.screen-body--center > :first-child {
+  margin-top: auto;
+}
+
+.screen-body--center > :last-child {
+  margin-bottom: auto;
+}
+
+.screen-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 12px;
+}
+
+/* A scrolling flex column shrinks its items to nothing when the content
+   overflows, and `.list` has `overflow: hidden`, which lets it collapse all
+   the way to zero height — that silently ate the first row of [5]. Items keep
+   their natural height; the one element that should grow says so inline. */
+.screen-body > *,
+.sheet-body > * {
+  flex: 0 0 auto;
+}
+
+.screen-foot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
   z-index: 50;
-  font-size: 10px;
-  color: var(--nm-text-secondary);
-  opacity: 0.55;
-  user-select: none;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: fade-in 0.16s ease-out;
+}
+
+.sheet {
+  width: 100%;
+  max-width: 480px;
+  max-height: 86dvh;
+  background: var(--surface);
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-lg);
+  padding: 8px 16px calc(var(--safe-bottom) + 16px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: sheet-up 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+  touch-action: none;
+}
+
+.sheet-grip {
+  width: 40px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-strong);
+  margin: 4px auto 2px;
+  flex: 0 0 auto;
+}
+
+.sheet-body {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0.4;
+  }
+}
+
+/* --- Small parts ---------------------------------------------------------- */
+
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  gap: 3px;
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.segmented button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.radio {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: transparent;
+  text-align: left;
+  color: var(--text);
+}
+
+.radio[aria-checked="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.radio-dot {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  display: grid;
+  place-items: center;
+}
+
+.radio[aria-checked="true"] .radio-dot {
+  border-color: var(--accent-text);
+}
+
+.radio[aria-checked="true"] .radio-dot::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent-text);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.qr-card {
+  /* Always white, in both themes: a dark QR code does not scan. */
+  background: #ffffff;
+  border-radius: var(--radius);
+  padding: 12px;
+  width: 244px;
+  height: 244px;
+  display: grid;
+  place-items: center;
+  margin: 0 auto;
+}
+
+.qr-card img {
+  width: 220px;
+  height: 220px;
+  image-rendering: pixelated;
+}
+
+.mono-box {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px;
+  overflow-y: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.check-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  font-size: 14px;
+}
+
+.check-row .mark {
+  flex: 0 0 auto;
+  width: 20px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.check-row[data-state="pass"] .mark {
+  color: var(--accent-text);
+}
+
+.check-row[data-state="fail"] .mark {
+  color: var(--danger);
+}
+
+.check-row[data-state="idle"],
+.check-row[data-state="pending"] {
+  color: var(--text-faint);
+}
+
+.verdict {
+  padding: 14px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border-left: 3px solid var(--accent);
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.verdict[data-bad="true"] {
+  border-left-color: var(--danger);
+}
+
+.heal-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  font-size: 15px;
+  color: var(--text-dim);
+}
+
+.heal-step[data-current="true"] {
+  color: var(--text);
+}
+
+.heal-step .mark {
+  width: 18px;
+  text-align: center;
+  color: var(--accent-text);
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--safe-bottom) + 82px);
+  transform: translateX(-50%);
+  z-index: 60;
+  max-width: 420px;
+  width: max-content;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 14px;
+  text-align: center;
+  animation: fade-in 0.16s ease-out;
   pointer-events: none;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+.spinner {
+  display: inline-block;
+  vertical-align: -3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  animation: shield-spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+
+/* --- Demo strip. Development only: never rendered inside the app. --------- */
+
+.demo {
+  position: fixed;
+  left: 8px;
+  /* Clear of the bottom bar: the chip used to sit on top of "Страна" and eat
+     the tap. Only the chip itself takes pointer events, so the rest of the
+     strip can never block a real control. */
+  bottom: calc(var(--safe-bottom) + 76px);
+  z-index: 70;
+  font-size: 11px;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
+.demo summary,
+.demo-list {
+  pointer-events: auto;
+}
+
+.demo summary {
+  cursor: pointer;
+  padding: 3px 7px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  list-style: none;
+  background: var(--bg);
+  width: max-content;
+  /* Faint on purpose: it is scaffolding over someone else's screen. */
+  opacity: 0.5;
+}
+
+.demo summary:hover,
+.demo[open] summary {
+  opacity: 1;
+}
+
+.demo-list {
+  margin-top: 6px;
+  max-height: 60dvh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.demo-list button {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  text-align: left;
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+
+.demo-list button[aria-pressed="true"] {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+/* --- Motion --------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  /* The arc and the whisper bar carry meaning, so they stay visible — they
+     simply stop moving. */
+  .shield-arc,
+  .spinner {
+    animation: none !important;
+  }
+
+  .whisper::after {
+    animation: none !important;
+    width: 100%;
+  }
 }

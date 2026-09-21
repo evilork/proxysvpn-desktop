@@ -1,189 +1,114 @@
 // src/components/LogViewer.tsx
-import { useEffect, useState, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { AlertCircle, X, Copy, Download, Trash2, RefreshCw } from "lucide-react";
+//
+// The technical log, two taps below [11] and nowhere near the main screen.
+//
+// What changed from the old window: it pulled a THOUSAND lines through IPC
+// every 1.5 seconds, forever, and painted the lot orange because every line
+// of tun2socks stderr was labelled `warn`. Here nothing polls: the log is
+// read once, in pages of 200, and only when the person asks for the next one.
+//
+// Masking is the core's job and happens before a line is written — by the
+// time text reaches this component it must already be free of addresses.
 
-interface LogLine {
-  ts_ms: number;
-  level: "info" | "warn" | "error";
-  source: string;
-  message: string;
-}
+import { useCallback, useEffect, useState } from "react";
 
-const REFRESH_INTERVAL_MS = 1500;
+import { bridge, type LogLine } from "../bridge";
+import { Screen, Spinner, useUi } from "./ui";
 
-function formatTimestamp(ts_ms: number): string {
-  const d = new Date(ts_ms);
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  const ss = String(d.getSeconds()).padStart(2, "0");
-  const ms = String(d.getMilliseconds()).padStart(3, "0");
-  return `${hh}:${mm}:${ss}.${ms}`;
-}
+const PAGE = 200;
 
-export default function LogViewer() {
-  const [open, setOpen] = useState(false);
-  const [logs, setLogs] = useState<LogLine[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [logFilePath, setLogFilePath] = useState<string | null>(null);
+export default function LogViewer({ onClose }: { onClose: () => void }) {
+  const { t, toast } = useUi();
+  const [lines, setLines] = useState<LogLine[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [end, setEnd] = useState(false);
+  const [failed, setFailed] = useState(false);
 
-  const refresh = useCallback(async () => {
+  const loadPage = useCallback(async (offset: number) => {
+    setLoading(true);
     try {
-      const lines = await invoke<LogLine[]>("get_logs", { limit: 1000 });
-      setLogs(lines);
-    } catch (e) {
-      // logger missing or backend not registered yet — silently ignore
-      console.warn("get_logs failed:", e);
+      const page = await bridge.logs(offset, PAGE);
+      setLines((previous) => (offset === 0 ? page : [...previous, ...page]));
+      if (page.length < PAGE) setEnd(true);
+    } catch {
+      setFailed(true);
+    } finally {
+      setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (!open) return;
-    refresh();
-    invoke<string | null>("get_log_file_path")
-      .then((p) => setLogFilePath(p))
-      .catch(() => setLogFilePath(null));
-    const id = window.setInterval(refresh, REFRESH_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [open, refresh]);
+    void loadPage(0);
+  }, [loadPage]);
 
-  const onCopy = async () => {
-    setBusy(true);
+  const copy = useCallback(async () => {
+    const text = lines
+      .map((line) => `${new Date(line.tsMs).toISOString()} ${line.level} ${line.source} ${line.message}`)
+      .join("\n");
     try {
-      const text = await invoke<string>("export_logs", {
-        includeSystemInfo: true,
-      });
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setBusy(false);
+      await bridge.writeClipboard(text);
+      toast(t("common.copied"));
+    } catch {
+      toast(t("tl.techLog.failed"));
     }
-  };
-
-  const onDownload = async () => {
-    setBusy(true);
-    try {
-      const text = await invoke<string>("export_logs", {
-        includeSystemInfo: true,
-      });
-      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      const ts = new Date().toISOString().replace(/[:.]/g, "-").split("T");
-      a.href = url;
-      a.download = `proxysvpn-logs-${ts[0]}.txt`;
-      a.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onClear = async () => {
-    if (!confirm("Очистить логи?")) return;
-    setBusy(true);
-    try {
-      await invoke("clear_logs");
-      await refresh();
-    } finally {
-      setBusy(false);
-    }
-  };
+  }, [lines, t, toast]);
 
   return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="log-toggle nm-btn-sm"
-        title="Логи приложения"
-        aria-label="Открыть логи"
-      >
-        <AlertCircle size={14} strokeWidth={2.2} />
-      </button>
-
-      {open && (
-        <div
-          className="log-overlay"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setOpen(false);
-          }}
-        >
-          <div className="log-modal nm-raised">
-            <div className="log-modal-header">
-              <span className="log-modal-title">Логи</span>
-              <button
-                onClick={() => setOpen(false)}
-                className="log-icon-btn"
-                aria-label="Закрыть"
-              >
-                <X size={16} />
-              </button>
+    <Screen
+      title={t("tl.techLog")}
+      onClose={onClose}
+      closeKind="back"
+      footer={
+        <>
+          {!end && lines.length > 0 ? (
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={() => void loadPage(lines.length)}
+              disabled={loading}
+            >
+              {loading ? <Spinner /> : t("tl.techLog.more")}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="btn btn-quiet"
+            onClick={() => void copy()}
+            disabled={lines.length === 0}
+          >
+            {t("common.copy")}
+          </button>
+        </>
+      }
+    >
+      {failed ? <p className="body danger">{t("tl.techLog.failed")}</p> : null}
+      {!failed && lines.length === 0 && !loading ? (
+        <p className="body dim">{t("tl.techLog.empty")}</p>
+      ) : null}
+      {lines.length > 0 ? (
+        <div className="mono-box" style={{ flex: "1 1 auto", minHeight: 240 }}>
+          {lines.map((line, index) => (
+            <div
+              key={`${line.tsMs}-${index}`}
+              style={{
+                color:
+                  line.level === "error"
+                    ? "var(--danger)"
+                    : line.level === "warn"
+                      ? "var(--warn)"
+                      : undefined,
+              }}
+            >
+              {new Date(line.tsMs).toLocaleTimeString()} {line.source}: {line.message}
             </div>
-
-            <div className="log-modal-actions">
-              <button
-                onClick={onCopy}
-                disabled={busy}
-                className="log-action-btn nm-btn-sm"
-              >
-                <Copy size={12} />
-                <span>{copied ? "Скопировано" : "Копировать"}</span>
-              </button>
-              <button
-                onClick={onDownload}
-                disabled={busy}
-                className="log-action-btn nm-btn-sm"
-              >
-                <Download size={12} />
-                <span>Скачать .txt</span>
-              </button>
-              <button
-                onClick={refresh}
-                disabled={busy}
-                className="log-action-btn nm-btn-sm"
-              >
-                <RefreshCw size={12} />
-                <span>Обновить</span>
-              </button>
-              <button
-                onClick={onClear}
-                disabled={busy}
-                className="log-action-btn nm-btn-sm log-action-danger"
-              >
-                <Trash2 size={12} />
-                <span>Очистить</span>
-              </button>
-            </div>
-
-            <div className="log-modal-body nm-pressed-sm">
-              {logs.length === 0 ? (
-                <div className="log-empty">пусто</div>
-              ) : (
-                logs.map((l, i) => (
-                  <div key={i} className={`log-line log-${l.level}`}>
-                    <span className="log-time">{formatTimestamp(l.ts_ms)}</span>{" "}
-                    <span className="log-source">[{l.source}]</span>{" "}
-                    <span className="log-msg">{l.message}</span>
-                  </div>
-                ))
-              )}
-            </div>
-
-            {logFilePath && (
-              <div className="log-modal-footer">
-                Файл: <code>{logFilePath}</code>
-              </div>
-            )}
-          </div>
+          ))}
         </div>
-      )}
-    </>
+      ) : null}
+      {loading && lines.length === 0 ? (
+        <p className="body dim">
+          <Spinner /> {t("common.loading")}
+        </p>
+      ) : null}
+    </Screen>
   );
 }

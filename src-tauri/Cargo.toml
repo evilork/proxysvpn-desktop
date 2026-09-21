@@ -7,15 +7,17 @@ edition = "2021"
 
 [lib]
 name = "proxysvpn_desktop_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# No "cdylib": iOS links the staticlib into the app, and a cdylib build fails
+# because the pvpn_* FFI symbols only exist in Swift at Xcode link time.
+# Re-add "cdylib" if an Android target ever appears (JNI needs a shared lib).
+crate-type = ["staticlib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
-tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
@@ -27,3 +29,8 @@ anyhow = "1"
 thiserror = "2"
 libc = "0.2"
 tauri-plugin-clipboard-manager = "2.3.2"
+
+# Desktop-only: tray icon and shell live outside the iOS sandbox model.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-shell = "2"
