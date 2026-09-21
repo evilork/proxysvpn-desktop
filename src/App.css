@@ -78,16 +78,26 @@
 
   /* The relief the site is built on: a shadow down-right in the darkest
      surface colour and a highlight up-left in the lightest. It is the
-     signature of this interface, not decoration - the same 5/5/12 sits on
-     every button of proksya.xyz. */
+     signature of this interface, not decoration - the same 5/5 sits on
+     every button of proksya.xyz.
+
+     The negative spread is not cosmetic. Without it the shadow's rounded
+     rect is the card's, merely moved 5px: at the corner it lights, the two
+     arcs sit 5px apart, the blur floods the square OUTSIDE the arc, and the
+     corner fills with a flat patch of shadow (or, up-left, of highlight)
+     with the card's straight edges as its outline. Those are the four
+     "уголки" - the chipped corners visible on every card in [12]. Pulling
+     the shadow in by exactly the offset lands its arc on the card's own, so
+     the light fades ALONG the curve instead of pooling beside it. The blur
+     grows a little to keep the same softness after the pull. */
 
   --nm-dark: #050507;
 
   --nm-light: #18181f;
 
-  --lift: 5px 5px 12px var(--nm-dark), -5px -5px 12px var(--nm-light);
+  --lift: 5px 5px 14px -5px var(--nm-dark), -5px -5px 14px -5px var(--nm-light);
 
-  --lift-sm: 3px 3px 8px var(--nm-dark), -3px -3px 8px var(--nm-light);
+  --lift-sm: 3px 3px 9px -3px var(--nm-dark), -3px -3px 9px -3px var(--nm-light);
 
   /* Pressing sinks the control: the same relief turned inward. */
 
@@ -141,8 +151,8 @@
      ближе к фону, а размытие крупнее - пятну неоткуда взяться. */
   --nm-dark: #e4e7ec;
   --nm-light: #ffffff;
-  --lift: 6px 6px 18px var(--nm-dark), -6px -6px 18px var(--nm-light);
-  --lift-sm: 4px 4px 12px var(--nm-dark), -4px -4px 12px var(--nm-light);
+  --lift: 6px 6px 20px -6px var(--nm-dark), -6px -6px 20px -6px var(--nm-light);
+  --lift-sm: 4px 4px 13px -4px var(--nm-dark), -4px -4px 13px -4px var(--nm-light);
   --press: inset 4px 4px 11px var(--nm-dark), inset -4px -4px 11px var(--nm-light);
   --gloss: inset 0 1px 0 rgba(255, 255, 255, 0.6);
   /* Та же причина: чёрная тень шторки на светлом фоне читается грязью. */
