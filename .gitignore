@@ -4,8 +4,22 @@ dist/
 
 # Rust / Tauri
 src-tauri/target/
-src-tauri/gen/
 src-tauri/Cargo.lock
+
+# The iOS project under src-tauri/gen is almost entirely generated - by
+# `tauri ios init`, by xcodegen out of project.yml, and by the build. Almost:
+# PacketTunnelProvider.swift is 361 lines written by hand, project.yml is what
+# xcodegen generates FROM, and without them `scripts/setup-ios.sh` has nothing
+# to work with on a fresh clone. So the folder is ignored and those are
+# excepted, rather than the whole thing being dropped.
+src-tauri/gen/*
+!src-tauri/gen/apple/
+src-tauri/gen/apple/*
+!src-tauri/gen/apple/project.yml
+!src-tauri/gen/apple/ExportOptions.plist
+!src-tauri/gen/apple/PacketTunnel/
+src-tauri/gen/apple/PacketTunnel/*
+!src-tauri/gen/apple/PacketTunnel/PacketTunnelProvider.swift
 
 # IDE
 .vscode/
