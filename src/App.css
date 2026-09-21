@@ -127,8 +127,18 @@
     --danger: #c92a2a;
     --danger-soft: rgba(201, 42, 42, 0.1);
     --warn: #b45309;
-    --nm-dark: #d3d6dc;
     --nm-light: #ffffff;
+    /* Рельеф на светлом фоне приходится делать мягче, чем на тёмном. Тень и
+       блик стоят по диагонали, и есть углы, которые не накрывает ни та, ни
+       другой: там проступает цвет тени. На тёмном это незаметно, а на светлом
+       читается грязным пятном в углу карточки. Лечится тем, что тень берётся
+       ближе к фону, а размытие крупнее - пятну неоткуда взяться. */
+    --nm-dark: #e4e7ec;
+    --nm-light: #ffffff;
+    --lift: 6px 6px 18px var(--nm-dark), -6px -6px 18px var(--nm-light);
+    --lift-sm: 4px 4px 12px var(--nm-dark), -4px -4px 12px var(--nm-light);
+    --press: inset 4px 4px 11px var(--nm-dark), inset -4px -4px 11px var(--nm-light);
+    --gloss: inset 0 1px 0 rgba(255, 255, 255, 0.6);
   }
 }
 
@@ -502,6 +512,17 @@ button {
 @media (prefers-reduced-motion: reduce) {
   .lock-shackle {
     transition-duration: 1ms;
+    /* Рельеф на светлом фоне приходится делать мягче, чем на тёмном. Тень и
+       блик стоят по диагонали, и есть углы, которые не накрывает ни та, ни
+       другой: там проступает цвет тени. На тёмном это незаметно, а на светлом
+       читается грязным пятном в углу карточки. Лечится тем, что тень берётся
+       ближе к фону, а размытие крупнее - пятну неоткуда взяться. */
+    --nm-dark: #e4e7ec;
+    --nm-light: #ffffff;
+    --lift: 6px 6px 18px var(--nm-dark), -6px -6px 18px var(--nm-light);
+    --lift-sm: 4px 4px 12px var(--nm-dark), -4px -4px 12px var(--nm-light);
+    --press: inset 4px 4px 11px var(--nm-dark), inset -4px -4px 11px var(--nm-light);
+    --gloss: inset 0 1px 0 rgba(255, 255, 255, 0.6);
   }
 }
 
