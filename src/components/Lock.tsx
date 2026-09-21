@@ -18,7 +18,8 @@
 // state said in a shape, which is the one channel that survives colour
 // blindness and "Increase contrast".
 
-const INK = "#202020";
+// Замерено с оригинала: тёмный в марке тёплый, а не нейтральный.
+const INK = "#251f1e";
 const SAGE = "#709080";
 
 /** Shield silhouette shrunk by the width of its dark rim: the body is clipped
