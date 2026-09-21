@@ -76,28 +76,35 @@
 
   --font: "Rubik", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
 
-  /* The relief the site is built on: a shadow down-right in the darkest
-     surface colour and a highlight up-left in the lightest. It is the
-     signature of this interface, not decoration - the same 5/5 sits on
-     every button of proksya.xyz.
+  /* Рельеф, на котором построен сайт: тень вниз-вправо цветом самой тёмной
+     поверхности. Диагональ 5/5 - подпись этого интерфейса, а не украшение,
+     та же стоит на каждой кнопке proksya.xyz.
 
-     The negative spread is not cosmetic. Without it the shadow's rounded
-     rect is the card's, merely moved 5px: at the corner it lights, the two
-     arcs sit 5px apart, the blur floods the square OUTSIDE the arc, and the
-     corner fills with a flat patch of shadow (or, up-left, of highlight)
-     with the card's straight edges as its outline. Those are the four
-     "уголки" - the chipped corners visible on every card in [12]. Pulling
-     the shadow in by exactly the offset lands its arc on the card's own, so
-     the light fades ALONG the curve instead of pooling beside it. The blur
-     grows a little to keep the same softness after the pull. */
+     Блика вверх-слева здесь больше НЕТ, и это осознанно. Форма тени - тот же
+     скруглённый прямоугольник элемента, просто сдвинутый; в углу, к которому
+     она смещена, размытие заливает квадрат СНАРУЖИ дуги, а границы у этого
+     квадрата - прямые края карточки. Получается плоский уголок с прямым
+     контуром, а не свет. У тёмной тени это лечится отрицательным разбросом
+     ровно в величину смещения: дуга тени ложится на дугу карточки и свет
+     гаснет вдоль кривой. У блика не лечится ничем: он белый и светлее фона,
+     так что любой его остаток в углу читается как скол. Белый уголок в левом
+     верхнем углу карточки - это был именно он. Убрать уголок и оставить блик
+     нельзя, это одно и то же пятно.
+
+     Приподнятость теперь несут два слоя одной тени: дальняя мягкая и
+     короткая контактная у самого края. Карточка и так светлее фона в обеих
+     темах - блик ей не нужен.
+
+     Блик как таковой жив - в --press и --gloss, где он ВНУТРИ элемента и
+     обрезан его же рамкой, так что вытечь наружу не может. */
 
   --nm-dark: #050507;
 
   --nm-light: #18181f;
 
-  --lift: 5px 5px 14px -5px var(--nm-dark), -5px -5px 14px -5px var(--nm-light);
+  --lift: 5px 5px 14px -5px var(--nm-dark), 1px 2px 4px -2px var(--nm-dark);
 
-  --lift-sm: 3px 3px 9px -3px var(--nm-dark), -3px -3px 9px -3px var(--nm-light);
+  --lift-sm: 3px 3px 9px -3px var(--nm-dark), 1px 1px 3px -2px var(--nm-dark);
 
   /* Pressing sinks the control: the same relief turned inward. */
 
@@ -151,8 +158,8 @@
      ближе к фону, а размытие крупнее - пятну неоткуда взяться. */
   --nm-dark: #e4e7ec;
   --nm-light: #ffffff;
-  --lift: 6px 6px 20px -6px var(--nm-dark), -6px -6px 20px -6px var(--nm-light);
-  --lift-sm: 4px 4px 13px -4px var(--nm-dark), -4px -4px 13px -4px var(--nm-light);
+  --lift: 6px 6px 20px -6px var(--nm-dark), 1px 2px 5px -2px var(--nm-dark);
+  --lift-sm: 4px 4px 13px -4px var(--nm-dark), 1px 1px 3px -2px var(--nm-dark);
   --press: inset 4px 4px 11px var(--nm-dark), inset -4px -4px 11px var(--nm-light);
   --gloss: inset 0 1px 0 rgba(255, 255, 255, 0.6);
   /* Та же причина: чёрная тень шторки на светлом фоне читается грязью. */
