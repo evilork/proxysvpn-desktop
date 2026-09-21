@@ -78,7 +78,10 @@ export default function Shield({
   disabled?: boolean;
 }) {
   const ring = ringFor(state);
-  const gaze = useGaze();
+  // Глаз следит, пока защита не встала, и закрывается ровно тогда же, когда
+  // защёлкивается замок: одно состояние - один жест в двух местах марки.
+  const shut = state === "on";
+  const gaze = useGaze(!shut);
 
   // Касание эмблемы - единственный жест, который человек тут точно делает, и
   // единственный момент, когда iOS разрешит спросить про датчики. Запрос
@@ -123,7 +126,7 @@ export default function Shield({
           <img className="emblem-mark" src={emblemUrl} alt="" draggable={false} />
           {/* Глаз рисуется поверх марки целиком, поэтому исходный остаётся
               запасным вариантом, если этот слой не отрисуется. */}
-          <Eye gaze={gaze} />
+          <Eye gaze={gaze} closed={shut} />
           <Lock open={state !== "on"} />
         </span>
       </span>
