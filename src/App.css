@@ -94,6 +94,8 @@
   --press: inset 3px 3px 7px var(--nm-dark), inset -3px -3px 7px var(--nm-light);
 
   --gloss: inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  /* Шторка лежит поверх экрана, поэтому её тень своя, не рельефная. */
+  --sheet-shadow: 0 -12px 40px rgba(5, 5, 7, 0.65);
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 
   /* Kept for tailwind.config.js, which maps nm-* utilities onto these. */
@@ -104,44 +106,14 @@
   --nm-accent: var(--accent);
 }
 
-/* Light theme: taken from the system, or forced from [12]. The two rules are
-   identical on purpose — one for "system says light", one for "person said
-   light" — so neither can drift away from the other. */
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    color-scheme: light;
-    --bg: #f2f3f5;
-    --surface: #f7f8fa;
-    --surface-2: #eceef1;
-    --line: #e0e3e8;
-    --line-strong: #c8ccd3;
-    --text: #0a0a0c;
-    --text-dim: #5f6470;
-    --text-faint: #868c98;
-    --accent: #5b8a82;
-    /* #4ade80 as TEXT on white is unreadable; the darker green is the same
-       hue at a contrast a person can actually read. */
-    --accent-text: #3d6c64;
-    --accent-ink: #ffffff;
-    --accent-soft: rgba(91, 138, 130, 0.16);
-    --danger: #c92a2a;
-    --danger-soft: rgba(201, 42, 42, 0.1);
-    --warn: #b45309;
-    --nm-light: #ffffff;
-    /* Рельеф на светлом фоне приходится делать мягче, чем на тёмном. Тень и
-       блик стоят по диагонали, и есть углы, которые не накрывает ни та, ни
-       другой: там проступает цвет тени. На тёмном это незаметно, а на светлом
-       читается грязным пятном в углу карточки. Лечится тем, что тень берётся
-       ближе к фону, а размытие крупнее - пятну неоткуда взяться. */
-    --nm-dark: #e4e7ec;
-    --nm-light: #ffffff;
-    --lift: 6px 6px 18px var(--nm-dark), -6px -6px 18px var(--nm-light);
-    --lift-sm: 4px 4px 12px var(--nm-dark), -4px -4px 12px var(--nm-light);
-    --press: inset 4px 4px 11px var(--nm-dark), inset -4px -4px 11px var(--nm-light);
-    --gloss: inset 0 1px 0 rgba(255, 255, 255, 0.6);
-  }
-}
-
+/* Светлая тема. ОДНО правило, а не два: `data-theme` теперь всегда проставлен
+   — prefs.ts сам разрешает «как в системе» в light или dark. Раньше эта
+   палитра существовала дважды: копия под `@media (prefers-color-scheme:
+   light)` и копия под `[data-theme="light"]`. Они разъехались — принудительной
+   светлой теме не достался смягчённый рельеф, и она брала его от тёмной: тень
+   #050507 и «блик» #18181f на почти белом фоне. Это и была чёрная рамка вокруг
+   каждой карточки в [12]. Палитра, которая существует в одном месте,
+   разъехаться не может. */
 :root[data-theme="light"] {
   color-scheme: light;
   --bg: #f2f3f5;
@@ -153,12 +125,28 @@
   --text-dim: #5f6470;
   --text-faint: #868c98;
   --accent: #5b8a82;
+  /* #4ade80 as TEXT on white is unreadable; the darker green is the same
+     hue at a contrast a person can actually read. */
   --accent-text: #3d6c64;
   --accent-ink: #ffffff;
   --accent-soft: rgba(91, 138, 130, 0.16);
   --danger: #c92a2a;
   --danger-soft: rgba(201, 42, 42, 0.1);
   --warn: #b45309;
+
+  /* Рельеф на светлом фоне приходится делать мягче, чем на тёмном. Тень и
+     блик стоят по диагонали, и есть углы, которые не накрывает ни та, ни
+     другой: там проступает цвет тени. На тёмном это незаметно, а на светлом
+     читается грязным пятном в углу карточки. Лечится тем, что тень берётся
+     ближе к фону, а размытие крупнее - пятну неоткуда взяться. */
+  --nm-dark: #e4e7ec;
+  --nm-light: #ffffff;
+  --lift: 6px 6px 18px var(--nm-dark), -6px -6px 18px var(--nm-light);
+  --lift-sm: 4px 4px 12px var(--nm-dark), -4px -4px 12px var(--nm-light);
+  --press: inset 4px 4px 11px var(--nm-dark), inset -4px -4px 11px var(--nm-light);
+  --gloss: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  /* Та же причина: чёрная тень шторки на светлом фоне читается грязью. */
+  --sheet-shadow: 0 -14px 34px rgba(60, 68, 82, 0.16);
 }
 
 html,
@@ -513,17 +501,6 @@ button {
 @media (prefers-reduced-motion: reduce) {
   .lock-shackle {
     transition-duration: 1ms;
-    /* Рельеф на светлом фоне приходится делать мягче, чем на тёмном. Тень и
-       блик стоят по диагонали, и есть углы, которые не накрывает ни та, ни
-       другой: там проступает цвет тени. На тёмном это незаметно, а на светлом
-       читается грязным пятном в углу карточки. Лечится тем, что тень берётся
-       ближе к фону, а размытие крупнее - пятну неоткуда взяться. */
-    --nm-dark: #e4e7ec;
-    --nm-light: #ffffff;
-    --lift: 6px 6px 18px var(--nm-dark), -6px -6px 18px var(--nm-light);
-    --lift-sm: 4px 4px 12px var(--nm-dark), -4px -4px 12px var(--nm-light);
-    --press: inset 4px 4px 11px var(--nm-dark), inset -4px -4px 11px var(--nm-light);
-    --gloss: inset 0 1px 0 rgba(255, 255, 255, 0.6);
   }
 }
 
@@ -884,7 +861,7 @@ button.row:hover {
   max-width: 480px;
   max-height: 86dvh;
   background: var(--surface);
-  box-shadow: 0 -12px 40px rgba(5, 5, 7, 0.65);
+  box-shadow: var(--sheet-shadow);
   border-top-left-radius: var(--radius-lg);
   border-top-right-radius: var(--radius-lg);
   padding: 8px 16px calc(var(--safe-bottom) + 16px);

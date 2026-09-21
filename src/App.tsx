@@ -25,6 +25,15 @@ import {
   type SubState,
 } from "./bridge";
 import { makeT, type Lang } from "./i18n";
+import {
+  LANG_KEY,
+  THEME_KEY,
+  applyTheme,
+  readStored,
+  readThemePref,
+  watchSystemTheme,
+  writeStored,
+} from "./prefs";
 import type {
   AppError,
   ErrorAction,
@@ -63,29 +72,9 @@ type Route =
   | "report"
   | "where";
 
-const LANG_KEY = "proxysvpn_lang";
-const THEME_KEY = "proxysvpn_theme";
 const TOAST_MS = 4000;
 /** Recovery is silent below this; past it the sheet may be opened. */
 const HEAL_SHEET_AT_MS = 8000;
-
-function readStored(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    // Private windows and locked-down WebViews throw instead of returning
-    // null; a preference is never worth breaking the app for.
-    return null;
-  }
-}
-
-function writeStored(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // Same reason: losing a stored preference is survivable.
-  }
-}
 
 function initialLang(): Lang {
   const stored = readStored(LANG_KEY);
@@ -93,14 +82,9 @@ function initialLang(): Lang {
   return typeof navigator !== "undefined" && navigator.language.startsWith("en") ? "en" : "ru";
 }
 
-function initialTheme(): ThemePref {
-  const stored = readStored(THEME_KEY);
-  return stored === "light" || stored === "dark" ? stored : "system";
-}
-
 export default function App() {
   const [lang, setLang] = useState<Lang>(initialLang);
-  const [theme, setTheme] = useState<ThemePref>(initialTheme);
+  const [theme, setTheme] = useState<ThemePref>(readThemePref);
 
   const [state, setState] = useState<StatePayload>({ phase: "off" });
   const [step, setStep] = useState<VpnStep | undefined>(undefined);
@@ -129,10 +113,12 @@ export default function App() {
 
   useEffect(() => {
     writeStored(THEME_KEY, theme);
-    // No attribute at all means "follow the system", which is what the CSS
-    // expects: the media query only applies while nothing is forced.
-    if (theme === "system") document.documentElement.removeAttribute("data-theme");
-    else document.documentElement.setAttribute("data-theme", theme);
+    applyTheme(theme);
+    // "Как в системе" is a standing subscription, not a one-off read: the
+    // person can flip macOS to light while the window is open, and before
+    // this the window kept whatever it had resolved at startup.
+    if (theme !== "system") return undefined;
+    return watchSystemTheme(() => applyTheme("system"));
   }, [theme]);
 
   // ── toast ────────────────────────────────────────────────────────────────
