@@ -19,40 +19,37 @@ const CODES = Object.keys(ERROR_ACTION) as ErrorCode[];
 /**
  * Что живой взгляд видит на самом деле.
  *
- * Стоит здесь, а не в консоли, потому что смотреть на это приходится с
- * телефона, где консоли нет. Без него «не следит» - это гадание: разрешения
- * не спросили, в доступе отказали, включено «уменьшить движение» или
- * соединение не защищено. Четыре разные причины с одним симптомом.
+ * Приговор вынесен в заголовок полосы, а не спрятан внутрь: смотреть на него
+ * приходится с телефона, где консоли нет, и раскрывать что-то ради одной
+ * строки - лишний шаг. Без него «не следит» - это гадание: не спросили,
+ * отказали, включено «уменьшить движение», соединение не защищено или глаз
+ * просто закрыт, потому что защита стоит. Пять причин с одним симптомом.
  */
-function GazeReadout() {
+function useGazeReport(): GazeReport {
   const [report, setReport] = useState<GazeReport>(() => gazeSource.report());
-
   useEffect(() => {
     const id = window.setInterval(() => setReport(gazeSource.report()), 500);
     return () => window.clearInterval(id);
   }, []);
+  return report;
+}
 
+function verdictOf(r: GazeReport): string {
+  if (!r.secure) return "нет https, датчик не выдадут";
+  if (r.reducedMotion) return "выключен: «уменьшить движение»";
+  if (r.listeners === 0) return "глаз закрыт, защита включена";
+  if (r.tiltEvents > 0) return `наклоны идут (${r.tiltEvents})`;
+  if (r.asked && r.granted === false) return "в доступе отказано";
+  if (r.asked) return "спросили, наклонов нет";
+  return "коснитесь экрана, чтобы спросить";
+}
+
+function GazeDetails({ report }: { report: GazeReport }) {
   const tilt = report.lastTilt
     ? `${report.lastTilt.beta.toFixed(0)}/${report.lastTilt.gamma.toFixed(0)}`
     : "—";
-
-  // Самое частое и самое неочевидное впереди остальных: Safari отдаёт датчик
-  // только в защищённом контексте.
-  const verdict = !report.secure
-    ? "соединение не защищено, датчик не выдадут"
-    : report.reducedMotion
-      ? "включено «уменьшить движение»"
-      : report.tiltEvents > 0
-        ? "датчик работает"
-        : report.asked && report.granted === false
-          ? "в доступе отказано"
-          : report.asked
-            ? "спросили, событий пока нет"
-            : "ещё не спрашивали, коснитесь экрана";
-
   return (
     <div className="demo-gaze">
-      <b>Взгляд: {verdict}</b>
       <span>
         secure {String(report.secure)} · запрос нужен {String(report.needsPermission)} ·
         спросили {String(report.asked)} · дали {String(report.granted)} ·
@@ -69,10 +66,13 @@ function GazeReadout() {
 export default function DemoStrip() {
   const { t } = useUi();
   const all: MockScenario[] = [...MOCK_SCENARIOS, ...CODES];
+  const report = useGazeReport();
 
   return (
     <details className="demo">
-      <summary>{t("demo.title")}: {MOCK_SCENARIO}</summary>
+      <summary>
+        {t("demo.title")}: {MOCK_SCENARIO} · взгляд: {verdictOf(report)}
+      </summary>
       <div className="demo-list">
         <span style={{ maxWidth: 220 }}>{t("demo.hint")}</span>
         {all.map((scenario) => (
@@ -86,7 +86,7 @@ export default function DemoStrip() {
           </button>
         ))}
       </div>
-      <GazeReadout />
+      <GazeDetails report={report} />
     </details>
   );
 }
