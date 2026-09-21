@@ -30,6 +30,8 @@
 
 import type { VpnPhase } from "../types";
 import emblemUrl from "../assets/emblem-base.svg";
+import { primeGaze } from "../gaze";
+import Eye, { useGaze } from "./Eye";
 import Lock from "./Lock";
 
 /** `nolink` is not a phase of the tunnel — there is nothing to turn on yet. */
@@ -76,13 +78,24 @@ export default function Shield({
   disabled?: boolean;
 }) {
   const ring = ringFor(state);
+  const gaze = useGaze();
+
+  // Касание эмблемы - единственный жест, который человек тут точно делает, и
+  // единственный момент, когда iOS разрешит спросить про датчики. Запрос
+  // ничего не ждёт: включение не должно зависеть от украшения.
+  const press = onClick
+    ? () => {
+        primeGaze();
+        onClick();
+      }
+    : undefined;
 
   return (
     <button
       type="button"
       className="emblem-btn"
       data-state={state}
-      onClick={onClick}
+      onClick={press}
       disabled={disabled || !onClick}
       aria-label={label}
     >
@@ -108,6 +121,9 @@ export default function Shield({
           {/* The mark with the old lock painted out; the live one goes on top
               so its shackle can move. */}
           <img className="emblem-mark" src={emblemUrl} alt="" draggable={false} />
+          {/* Глаз рисуется поверх марки целиком, поэтому исходный остаётся
+              запасным вариантом, если этот слой не отрисуется. */}
+          <Eye gaze={gaze} />
           <Lock open={state !== "on"} />
         </span>
       </span>

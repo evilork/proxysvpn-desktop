@@ -511,7 +511,8 @@ button {
   width: 100%;
 }
 
-.lock-svg {
+.lock-svg,
+.eye-svg {
   position: absolute;
   inset: 0;
   width: 100%;
