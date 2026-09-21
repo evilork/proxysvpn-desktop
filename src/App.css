@@ -1,3 +1,26 @@
+/* Rubik, the face the site uses (SIL OFL 1.1). Bundled, not fetched: the app
+   must look the same on a first run with no network, and a VPN client that
+   pulls a font from a third party on every launch is a beacon we do not need.
+   Variable 400-700 in two subsets - 51 KB for both. */
+@font-face {
+  font-family: "Rubik";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("./assets/fonts/rubik-cyrillic.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+@font-face {
+  font-family: "Rubik";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("./assets/fonts/rubik-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+2000-206F,
+    U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -28,20 +51,20 @@
   color-scheme: dark;
 
   /* Dark is the default: this is a VPN client, it lives in a dark window. */
-  --bg: #0b0e12;
-  --surface: #151a20;
-  --surface-2: #1d232b;
-  --line: #2a323c;
-  --line-strong: #3b4753;
-  --text: #f3f6f9;
-  --text-dim: #9aa6b2;
-  --text-faint: #6b7784;
+  --bg: #0a0a0c;
+  --surface: #101014;
+  --surface-2: #18181f;
+  --line: #1d1d26;
+  --line-strong: #2b2b38;
+  --text: #e4e4f0;
+  --text-dim: #7a7a88;
+  --text-faint: #5c5c68;
 
-  --accent: #4ade80;
+  --accent: #7ba8a0;
   /* Green ON a surface needs more contrast than green AS a surface. */
-  --accent-text: #4ade80;
-  --accent-ink: #062011;
-  --accent-soft: rgba(74, 222, 128, 0.14);
+  --accent-text: #8fbeb5;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(123, 168, 160, 0.14);
 
   --danger: #ff6b6b;
   --danger-soft: rgba(255, 107, 107, 0.14);
@@ -51,7 +74,26 @@
   --radius-lg: 20px;
   --tap: 44px;
 
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font: "Rubik", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+
+  /* The relief the site is built on: a shadow down-right in the darkest
+     surface colour and a highlight up-left in the lightest. It is the
+     signature of this interface, not decoration - the same 5/5/12 sits on
+     every button of proksya.xyz. */
+
+  --nm-dark: #050507;
+
+  --nm-light: #18181f;
+
+  --lift: 5px 5px 12px var(--nm-dark), -5px -5px 12px var(--nm-light);
+
+  --lift-sm: 3px 3px 8px var(--nm-dark), -3px -3px 8px var(--nm-light);
+
+  /* Pressing sinks the control: the same relief turned inward. */
+
+  --press: inset 3px 3px 7px var(--nm-dark), inset -3px -3px 7px var(--nm-light);
+
+  --gloss: inset 0 1px 0 rgba(255, 255, 255, 0.15);
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 
   /* Kept for tailwind.config.js, which maps nm-* utilities onto these. */
@@ -68,40 +110,42 @@
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
     color-scheme: light;
-    --bg: #ffffff;
-    --surface: #f4f6f8;
-    --surface-2: #eaeef2;
-    --line: #dde3e9;
-    --line-strong: #c3ccd5;
-    --text: #0b0e12;
-    --text-dim: #566472;
-    --text-faint: #7b8794;
-    --accent: #4ade80;
+    --bg: #f2f3f5;
+    --surface: #f7f8fa;
+    --surface-2: #eceef1;
+    --line: #e0e3e8;
+    --line-strong: #c8ccd3;
+    --text: #0a0a0c;
+    --text-dim: #5f6470;
+    --text-faint: #868c98;
+    --accent: #5b8a82;
     /* #4ade80 as TEXT on white is unreadable; the darker green is the same
        hue at a contrast a person can actually read. */
-    --accent-text: #15803d;
-    --accent-ink: #052e16;
-    --accent-soft: rgba(22, 163, 74, 0.12);
+    --accent-text: #3d6c64;
+    --accent-ink: #ffffff;
+    --accent-soft: rgba(91, 138, 130, 0.16);
     --danger: #c92a2a;
     --danger-soft: rgba(201, 42, 42, 0.1);
     --warn: #b45309;
+    --nm-dark: #d3d6dc;
+    --nm-light: #ffffff;
   }
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #ffffff;
-  --surface: #f4f6f8;
-  --surface-2: #eaeef2;
-  --line: #dde3e9;
-  --line-strong: #c3ccd5;
-  --text: #0b0e12;
-  --text-dim: #566472;
-  --text-faint: #7b8794;
-  --accent: #4ade80;
-  --accent-text: #15803d;
-  --accent-ink: #052e16;
-  --accent-soft: rgba(22, 163, 74, 0.12);
+  --bg: #f2f3f5;
+  --surface: #f7f8fa;
+  --surface-2: #eceef1;
+  --line: #e0e3e8;
+  --line-strong: #c8ccd3;
+  --text: #0a0a0c;
+  --text-dim: #5f6470;
+  --text-faint: #868c98;
+  --accent: #5b8a82;
+  --accent-text: #3d6c64;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(91, 138, 130, 0.16);
   --danger: #c92a2a;
   --danger-soft: rgba(201, 42, 42, 0.1);
   --warn: #b45309;
@@ -247,34 +291,45 @@ button {
   gap: 8px;
   width: 100%;
   min-height: 48px;
-  padding: 12px 18px;
-  border: 1px solid transparent;
+  padding: 14px 24px;
+  border: 0;
   border-radius: var(--radius);
-  background: var(--surface-2);
+  background: var(--surface);
   color: var(--text);
+  font-family: var(--font);
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 500;
   text-align: center;
-  transition: transform 0.08s ease, background 0.15s ease, border-color 0.15s ease;
+  box-shadow: var(--lift);
+  transition: box-shadow 0.16s ease, background 0.15s ease, color 0.15s ease;
 }
 
 .btn:active:not(:disabled) {
-  transform: scale(0.985);
+  /* Sinks instead of scaling: on a relief a shadow swap reads better than a
+     size change, and it does not nudge the neighbours. */
+  box-shadow: var(--press);
 }
 
 .btn:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
+  box-shadow: none;
   cursor: default;
 }
 
 .btn-primary {
   background: var(--accent);
   color: var(--accent-ink);
+  font-weight: 600;
+  box-shadow: var(--lift), var(--gloss);
+}
+
+.btn-primary:active:not(:disabled) {
+  box-shadow: var(--press);
 }
 
 .btn-outline {
-  background: transparent;
-  border-color: var(--line-strong);
+  background: var(--surface);
+  color: var(--text);
 }
 
 .btn-quiet {
@@ -283,6 +338,12 @@ button {
   font-weight: 500;
   font-size: 15px;
   min-height: var(--tap);
+  box-shadow: none;
+}
+
+.btn-quiet:active:not(:disabled) {
+  box-shadow: none;
+  color: var(--text);
 }
 
 .btn-quiet:hover {
@@ -292,7 +353,7 @@ button {
 .btn-danger {
   background: transparent;
   color: var(--danger);
-  border-color: transparent;
+  box-shadow: none;
 }
 
 /* A quiet row that removes something still has to look like it removes
@@ -338,37 +399,121 @@ button {
   min-height: 0;
 }
 
-.shield-btn {
-  width: 168px;
-  height: 168px;
-  padding: 0;
-  border: none;
-  background: transparent;
+/* ── Эмблема: главный и единственный орган управления ──────────────────── */
+
+.emblem-btn {
+  position: relative;
   display: grid;
   place-items: center;
-  border-radius: 50%;
+  width: 200px;
+  height: 200px;
+  padding: 0;
+  border: 0;
+  background: none;
 }
 
-.shield-btn:disabled {
+.emblem-btn:disabled {
   cursor: default;
 }
 
-.shield-svg {
-  width: 168px;
-  height: 168px;
-  display: block;
+/* Подставка под маркой. Выключено - вдавлена, включено - поднята: тот же
+   рельеф, что на кнопках сайта, применённый к самому крупному элементу. */
+.emblem-plate {
+  display: grid;
+  place-items: center;
+  width: 154px;
+  height: 154px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--press);
+  transition: box-shadow 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* The arc is the "we are working on it" shape. Colour alone would be invisible
-   to a person who cannot tell green from grey. */
-.shield-arc {
+.emblem-btn[data-state="on"] .emblem-plate,
+.emblem-btn[data-state="unconfirmed"] .emblem-plate {
+  box-shadow: var(--lift);
+}
+
+.emblem-btn:active:not(:disabled) .emblem-plate {
+  transform: scale(0.97);
+}
+
+/* Марка. Серая, пока туннель не поднят, и в полном цвете, как только через
+   него прошёл байт, - тот же факт, что несёт кольцо, во втором канале. */
+.emblem-mark {
+  width: 104px;
+  height: auto;
+  filter: grayscale(1) brightness(0.72);
+  opacity: 0.7;
+  transition: filter 520ms ease, opacity 520ms ease, transform 520ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.emblem-btn[data-state="on"] .emblem-mark,
+.emblem-btn[data-state="unconfirmed"] .emblem-mark {
+  filter: none;
+  opacity: 1;
+}
+
+/* Короткий подъём в момент включения: движение заканчивается раньше, чем
+   человек успеет его разглядеть, и служит подтверждением, а не украшением. */
+.emblem-btn[data-state="on"] .emblem-mark {
+  animation: emblem-settle 560ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes emblem-settle {
+  0% { transform: scale(0.9); }
+  55% { transform: scale(1.045); }
+  100% { transform: scale(1); }
+}
+
+.emblem-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.ring-arc {
   transform-origin: 50% 50%;
-  animation: shield-spin 1.6s linear infinite;
 }
 
-@keyframes shield-spin {
-  to {
-    transform: rotate(360deg);
+/* Сплошное кольцо обводит марку один раз, когда защита встала. */
+.emblem-btn[data-state="on"] .ring-arc {
+  stroke-dasharray: 100;
+  animation: ring-draw 640ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes ring-draw {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
+
+.ring-arc.spinning {
+  animation: ring-spin 1.7s linear infinite;
+}
+
+@keyframes ring-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Ничего из этого не является смыслом - только его подтверждением, поэтому
+   при выключенной анимации всё сводится к смене состояния без движения. */
+@media (prefers-reduced-motion: reduce) {
+  .emblem-plate,
+  .emblem-mark {
+    transition-duration: 1ms;
+  }
+
+  .emblem-btn[data-state="on"] .emblem-mark,
+  .emblem-btn[data-state="on"] .ring-arc,
+  .ring-arc.spinning {
+    animation: none;
+  }
+
+  .ring-arc.spinning {
+    stroke-dasharray: 46 54;
   }
 }
 
@@ -505,10 +650,9 @@ button {
 /* --- Lists and rows ------------------------------------------------------- */
 
 .list {
-  display: flex;
-  flex-direction: column;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--surface);
+  box-shadow: var(--lift);
   overflow: hidden;
 }
 
@@ -527,7 +671,7 @@ button {
 }
 
 .row + .row {
-  border-top: 1px solid var(--line);
+  box-shadow: inset 0 1px 0 var(--line);
 }
 
 button.row:hover {
@@ -680,6 +824,7 @@ button.row:hover {
   max-width: 480px;
   max-height: 86dvh;
   background: var(--surface);
+  box-shadow: 0 -12px 40px rgba(5, 5, 7, 0.65);
   border-top-left-radius: var(--radius-lg);
   border-top-right-radius: var(--radius-lg);
   padding: 8px 16px calc(var(--safe-bottom) + 16px);
@@ -834,15 +979,23 @@ button.row:hover {
 .check-grid {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--lift);
+  overflow: hidden;
 }
 
 .check-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 34px;
+  min-height: 44px;
+  padding: 8px 14px;
   font-size: 14px;
+}
+
+.check-row + .check-row {
+  box-shadow: inset 0 1px 0 var(--line);
 }
 
 .check-row .mark {
