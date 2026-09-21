@@ -20,15 +20,17 @@
 //   dashed ring            — up, but unproven («подтвердить не удалось»)
 //   ring with one gap      — not getting through
 //
-// The emblem says the same thing in a second channel, without words: grey
-// while the tunnel is down, full colour once a byte has crossed.
+// The emblem says the same thing in two more channels, without words: the
+// padlock in the mark is OPEN while the tunnel is down and SHUT once a byte
+// has crossed, and the whole mark is grey until then and in full colour after.
 //
 // The art is a vector traced from the original mark (src/assets/logo.svg), so
 // it is sharp at any size — the 430 px PNG the site ships went soft the moment
 // it was drawn at 160 pt on a Retina panel.
 
 import type { VpnPhase } from "../types";
-import logoUrl from "../assets/logo.svg";
+import emblemUrl from "../assets/emblem-base.svg";
+import Lock from "./Lock";
 
 /** `nolink` is not a phase of the tunnel — there is nothing to turn on yet. */
 export type ShieldState = VpnPhase | "nolink";
@@ -102,7 +104,12 @@ export default function Shield({
       </svg>
 
       <span className="emblem-plate">
-        <img className="emblem-mark" src={logoUrl} alt="" draggable={false} />
+        <span className="emblem-art">
+          {/* The mark with the old lock painted out; the live one goes on top
+              so its shackle can move. */}
+          <img className="emblem-mark" src={emblemUrl} alt="" draggable={false} />
+          <Lock open={state !== "on"} />
+        </span>
       </span>
     </button>
   );

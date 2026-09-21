@@ -441,23 +441,21 @@ button {
 
 /* Марка. Серая, пока туннель не поднят, и в полном цвете, как только через
    него прошёл байт, - тот же факт, что несёт кольцо, во втором канале. */
-.emblem-mark {
-  width: 104px;
-  height: auto;
+.emblem-art {
   filter: grayscale(1) brightness(0.72);
   opacity: 0.7;
   transition: filter 520ms ease, opacity 520ms ease, transform 520ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.emblem-btn[data-state="on"] .emblem-mark,
-.emblem-btn[data-state="unconfirmed"] .emblem-mark {
+.emblem-btn[data-state="on"] .emblem-art,
+.emblem-btn[data-state="unconfirmed"] .emblem-art {
   filter: none;
   opacity: 1;
 }
 
 /* Короткий подъём в момент включения: движение заканчивается раньше, чем
    человек успеет его разглядеть, и служит подтверждением, а не украшением. */
-.emblem-btn[data-state="on"] .emblem-mark {
+.emblem-btn[data-state="on"] .emblem-art {
   animation: emblem-settle 560ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -465,6 +463,44 @@ button {
   0% { transform: scale(0.9); }
   55% { transform: scale(1.045); }
   100% { transform: scale(1); }
+}
+
+/* Марка и замок лежат друг на друге: база - картинка, замок - живой SVG. */
+.emblem-art {
+  position: relative;
+  display: block;
+  width: 104px;
+}
+
+
+.emblem-art .emblem-mark {
+  display: block;
+  width: 100%;
+}
+
+.lock-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Дужка поворачивается вокруг основания левой ножки - той, что остаётся в
+   корпусе. Координаты в единицах холста эмблемы (1720x1804). */
+.lock-shackle {
+  transform-origin: 692px 1260px;
+  transition: transform 560ms cubic-bezier(0.34, 1.32, 0.52, 1);
+}
+
+.lock-shackle[data-open="true"] {
+  transform: rotate(-26deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lock-shackle {
+    transition-duration: 1ms;
+  }
 }
 
 .emblem-ring {
@@ -502,11 +538,11 @@ button {
    при выключенной анимации всё сводится к смене состояния без движения. */
 @media (prefers-reduced-motion: reduce) {
   .emblem-plate,
-  .emblem-mark {
+  .emblem-art {
     transition-duration: 1ms;
   }
 
-  .emblem-btn[data-state="on"] .emblem-mark,
+  .emblem-btn[data-state="on"] .emblem-art,
   .emblem-btn[data-state="on"] .ring-arc,
   .ring-arc.spinning {
     animation: none;
