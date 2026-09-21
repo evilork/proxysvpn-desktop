@@ -21,6 +21,9 @@ src-tauri/gen/apple/*
 src-tauri/gen/apple/PacketTunnel/*
 !src-tauri/gen/apple/PacketTunnel/PacketTunnelProvider.swift
 
+# Local dev certificate for testing on a phone (scripts/dev-cert.sh)
+.certs/
+
 # IDE
 .vscode/
 .idea/

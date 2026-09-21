@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:phone": "PROXYS_DEV_HTTPS=1 vite --host --port 1425",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",

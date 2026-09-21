@@ -42,6 +42,20 @@ export interface Gaze {
 
 export const CENTRED: Gaze = { x: 0, y: 0 };
 
+/** Снимок состояния источника - чтобы на телефоне не гадать, а видеть. */
+export interface GazeReport {
+  secure: boolean;
+  needsPermission: boolean;
+  asked: boolean;
+  granted: boolean | null;
+  reducedMotion: boolean;
+  tiltEvents: number;
+  pointerEvents: number;
+  lastTilt: { beta: number; gamma: number } | null;
+  listeners: number;
+  source: "sensor" | "pointer" | "none";
+}
+
 /**
  * Safari на iOS требует разрешения на датчики и выдаёт его только в ответ на
  * действие человека. В типах DOM этого метода нет, поэтому сужаем сами - без
@@ -83,19 +97,37 @@ export async function requestMotionAccess(): Promise<boolean> {
 }
 
 let asked = false;
+let granted: boolean | null = null;
 
 /**
- * Разбудить датчик при первом касании.
+ * Разбудить датчик при первом жесте.
  *
- * Спрашивать разрешение можно только из жеста, а единственный жест, который
- * человек тут точно делает, - касание эмблемы. Вызов однократный, ничего не
- * ждёт и ничего не ломает: отказ означает лишь, что на телефоне взгляд
- * останется неподвижным.
+ * Спрашивать разрешение можно только изнутри жеста. Раньше это висело на
+ * касании эмблемы - и зря: человек может начать с кнопки «Включить», с
+ * шестерёнки, с чего угодно, и тогда вопрос не задавался вовсе, а глаз молча
+ * не работал. Теперь на ЛЮБОЙ первый жест.
+ *
+ * Вызов однократный, ничего не ждёт и ничего не ломает: отказ означает лишь,
+ * что взгляд останется неподвижным.
  */
 export function primeGaze(): void {
   if (asked || !motionNeedsPermission()) return;
   asked = true;
-  void requestMotionAccess();
+  void requestMotionAccess().then((ok) => {
+    granted = ok;
+  });
+}
+
+/**
+ * Защищённое соединение - обязательное условие, а не пожелание.
+ *
+ * Safari отдаёт наклон и ускорение только в secure context. На
+ * `http://192.168.x.x:1425` датчика не будет никогда, сколько ни разрешай:
+ * запрос либо бросит, либо ответит отказом, и ни одного события не придёт.
+ * Работает localhost и работает https - больше ничего.
+ */
+export function motionNeedsSecureContext(): boolean {
+  return typeof window !== "undefined" && !window.isSecureContext;
 }
 
 function clamp1(v: number): number {
@@ -159,6 +191,25 @@ class GazeSource {
   private frame = 0;
   private fromSensor = false;
   private bound = false;
+  private tiltEvents = 0;
+  private pointerEvents = 0;
+  private lastTilt: { beta: number; gamma: number } | null = null;
+
+  /** Что источник видит на самом деле. Для отладки на чужом устройстве. */
+  report(): GazeReport {
+    return {
+      secure: typeof window !== "undefined" && window.isSecureContext,
+      needsPermission: motionNeedsPermission(),
+      asked,
+      granted,
+      reducedMotion: motionIsUnwelcome(),
+      tiltEvents: this.tiltEvents,
+      pointerEvents: this.pointerEvents,
+      lastTilt: this.lastTilt,
+      listeners: this.listeners.size,
+      source: this.fromSensor ? "sensor" : this.pointerEvents > 0 ? "pointer" : "none",
+    };
+  }
 
   subscribe(fn: (g: Gaze) => void): () => void {
     this.listeners.add(fn);
@@ -176,6 +227,9 @@ class GazeSource {
     window.addEventListener("deviceorientation", this.onTilt);
     window.addEventListener("pointermove", this.onPointer, { passive: true });
     document.addEventListener("visibilitychange", this.onVisibility);
+    // Первый жест где угодно - и сразу спрашиваем про датчик.
+    window.addEventListener("pointerdown", primeGaze, { once: true, capture: true });
+    window.addEventListener("touchend", primeGaze, { once: true, capture: true });
   }
 
   private unbind(): void {
@@ -184,6 +238,8 @@ class GazeSource {
     window.removeEventListener("deviceorientation", this.onTilt);
     window.removeEventListener("pointermove", this.onPointer);
     document.removeEventListener("visibilitychange", this.onVisibility);
+    window.removeEventListener("pointerdown", primeGaze, { capture: true });
+    window.removeEventListener("touchend", primeGaze, { capture: true });
     if (this.frame) cancelAnimationFrame(this.frame);
     this.frame = 0;
     this.target = { x: 0, y: 0 };
@@ -205,6 +261,8 @@ class GazeSource {
   private onTilt = (e: DeviceOrientationEvent): void => {
     const { beta, gamma } = e;
     if (beta === null || gamma === null) return;
+    this.tiltEvents += 1;
+    this.lastTilt = { beta, gamma };
     this.fromSensor = true;
 
     if (!this.base) {
@@ -225,6 +283,7 @@ class GazeSource {
   };
 
   private onPointer = (e: PointerEvent): void => {
+    this.pointerEvents += 1;
     // Датчик главнее: если он заговорил, мышь больше не вмешивается.
     if (this.fromSensor) return;
     const w = window.innerWidth || 1;
