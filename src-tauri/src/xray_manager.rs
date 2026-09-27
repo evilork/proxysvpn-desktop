@@ -200,25 +200,50 @@ pub const RACE_SOCKS_PORT: u16 = 10809;
 /// Tag of the partner's outbound.
 pub const RACE_TAG: &str = "race-b";
 
+/// Fresh random username/password for one race's SOCKS inbound.
+///
+/// The inbound forwards straight to another country for as long as the race
+/// lasts, on a fixed loopback port any local process can reach — `noauth`
+/// there would let anything on the machine ride it. Read straight off
+/// `/dev/urandom`, the same source `netmem::salt` uses, rather than pulling in
+/// a `rand` dependency for two short-lived tokens.
+pub fn race_credentials() -> Result<(String, String), AppError> {
+    Ok((random_hex_token(8)?, random_hex_token(16)?))
+}
+
+fn random_hex_token(bytes: usize) -> Result<String, AppError> {
+    use std::io::Read;
+    let mut buf = vec![0u8; bytes];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut buf))
+        .map_err(|_| config_bug("could not read randomness for the race inbound's password"))?;
+    Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
+}
+
 /// The runtime config for `server` with `partner` added as a second outbound,
 /// reachable only through `RACE_SOCKS_PORT`. The tunnel's traffic still goes
 /// to `server`: the partner carries nothing but the warm-up until it wins.
+///
+/// `creds` (user, pass) are required, not optional: a race inbound with no
+/// password is exactly the defect this signature exists to make impossible to
+/// build by accident.
 pub fn build_race_config(
     server: &ServerConfig,
     partner: &VlessConfig,
     physical_iface: &str,
+    creds: (&str, &str),
 ) -> Result<Value, AppError> {
     if !matches!(server, ServerConfig::Vless(_)) {
         return Err(config_bug("a race needs a VLESS node to ride the tunnel"));
     }
     let mut config = unbound_config(server)?;
-    add_race_partner(&mut config, partner)?;
+    add_race_partner(&mut config, partner, creds)?;
     bind_outbounds_to_interface(&mut config, physical_iface)?;
     check_front_port(&config)?;
     Ok(config)
 }
 
-fn add_race_partner(config: &mut Value, partner: &VlessConfig) -> Result<(), AppError> {
+fn add_race_partner(config: &mut Value, partner: &VlessConfig, creds: (&str, &str)) -> Result<(), AppError> {
     let theirs = build_xray_config(partner);
     let mut outbound = theirs
         .get("outbounds")
@@ -228,6 +253,7 @@ fn add_race_partner(config: &mut Value, partner: &VlessConfig) -> Result<(), App
         .ok_or_else(|| config_bug("the partner config has no proxy outbound"))?;
     outbound["tag"] = json!(RACE_TAG);
 
+    let (user, pass) = creds;
     config
         .get_mut("outbounds")
         .and_then(Value::as_array_mut)
@@ -242,7 +268,14 @@ fn add_race_partner(config: &mut Value, partner: &VlessConfig) -> Result<(), App
             "listen": "127.0.0.1",
             "port": RACE_SOCKS_PORT,
             "protocol": "socks",
-            "settings": { "udp": false, "auth": "noauth" }
+            // A fixed loopback port with no password is reachable by any
+            // other process on the machine, and this one forwards straight
+            // to another country for as long as the race lasts.
+            "settings": {
+                "udp": false,
+                "auth": "password",
+                "accounts": [{ "user": user, "pass": pass }]
+            }
         }));
     // First rule: nothing else may catch the race inbound's traffic.
     config
@@ -535,7 +568,7 @@ mod tests {
     fn live_race_config() {
         let a = crate::subscription::parse_vless_url(&std::env::var("WATAFAST_LIVE_LINK").unwrap()).unwrap();
         let b = crate::subscription::parse_vless_url(&std::env::var("WATAFAST_LIVE_LINK2").unwrap()).unwrap();
-        let cfg = build_race_config(&ServerConfig::Vless(a), &b, "en0").unwrap();
+        let cfg = build_race_config(&ServerConfig::Vless(a), &b, "en0", ("racer", "s3cr3t")).unwrap();
         std::fs::write(std::env::var("WATAFAST_LIVE_OUT").unwrap(), serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
     }
 
@@ -550,13 +583,19 @@ mod tests {
             host: None,
         };
         partner.flow = String::new();
-        let config = build_race_config(&main, &partner, "en0").expect("race config");
+        let config = build_race_config(&main, &partner, "en0", ("racer", "s3cr3t")).expect("race config");
 
         // The tunnel's port is still first and still goes to the chosen node.
         assert_eq!(config["inbounds"][0]["port"], u64::from(FRONT_SOCKS_PORT));
         let race_in = config["inbounds"].as_array().unwrap().iter().find(|i| i["tag"] == "race-in").expect("race inbound");
         assert_eq!(race_in["port"], u64::from(RACE_SOCKS_PORT));
         assert_eq!(race_in["listen"], "127.0.0.1", "never on a public address");
+        // Defence in depth: a fixed loopback port with no password is
+        // reachable by any other process on the machine, and this one
+        // forwards straight to another country for as long as the race lasts.
+        assert_eq!(race_in["settings"]["auth"], "password", "must never be noauth");
+        assert_eq!(race_in["settings"]["accounts"][0]["user"], "racer");
+        assert_eq!(race_in["settings"]["accounts"][0]["pass"], "s3cr3t");
         assert_eq!(config["routing"]["rules"][0]["inboundTag"][0], "race-in");
         assert_eq!(config["routing"]["rules"][0]["outboundTag"], RACE_TAG);
 
@@ -578,7 +617,22 @@ mod tests {
             insecure: true,
             remark: "NL".into(),
         });
-        assert!(build_race_config(&hy2, &placeholder_vless(), "en0").is_err());
+        assert!(build_race_config(&hy2, &placeholder_vless(), "en0", ("u", "p")).is_err());
+    }
+
+    /// The password comes from `/dev/urandom`: different every call, and
+    /// hex-only so it always survives a JSON string and a SOCKS5 sub-negotiation.
+    #[test]
+    fn race_credentials_are_random_hex_and_differ_every_time() {
+        let (user_a, pass_a) = race_credentials().expect("randomness available in CI too");
+        let (user_b, pass_b) = race_credentials().expect("second draw");
+
+        assert_eq!(user_a.len(), 16, "8 bytes of hex");
+        assert_eq!(pass_a.len(), 32, "16 bytes of hex");
+        assert!(user_a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(pass_a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(user_a, user_b, "two draws must not collide in a test run");
+        assert_ne!(pass_a, pass_b);
     }
     use super::*;
     use crate::subscription::Hy2Config;

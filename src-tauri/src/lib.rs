@@ -415,6 +415,28 @@ struct Pinned {
     at: Instant,
 }
 
+/// A race computed for exactly one `start_on` call (Watafast).
+///
+/// `generation` and `for_index` pin it to that call: only a `start_on` whose
+/// own `(generation, index)` match is allowed to consume it. Without that, a
+/// stale repair-ladder `start_on` from an older generation — or one raising a
+/// different index, such as the repair ladder's own next candidate — could
+/// steal a partner meant for a start it has nothing to do with, and race a
+/// node the person never asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingRace {
+    generation: u64,
+    for_index: usize,
+    partner_index: usize,
+}
+
+/// Random per-session credentials for the race SOCKS inbound (Watafast).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RaceCredentials {
+    user: String,
+    pass: String,
+}
+
 struct Session {
     phase: VpnPhase,
     step: Option<VpnStep>,
@@ -442,13 +464,26 @@ struct Session {
     /// Германию именно поэтому - она возглавляла список недавних, хотя ни разу
     /// не подтвердилась.
     last_good: Option<String>,
-    /// The network we are on (netmem.rs), read at connect before the tunnel.
+    /// The network we are on (netmem.rs), read at connect before the tunnel
+    /// and refreshed by `mend_routes` whenever a route repair reports the
+    /// network itself changed — otherwise a probe's `Passed` verdict after a
+    /// silent network change would remember the winning node under the OLD
+    /// network id, and `demote` would later forget the wrong one's winner.
     network: Option<String>,
     /// Which location last worked on which network.
     net_memory: netmem::NetworkMemory,
     /// A node on another transport to race against the chosen one at the next
-    /// engine start (Watafast). Taken by `start_on`, so it lives one start.
-    pending_race: Option<usize>,
+    /// engine start (Watafast), scoped to the exact `(generation, index)` of
+    /// the `start_on` call it was computed for. A stale repair-ladder
+    /// `start_on` from an older generation, or one for a different index,
+    /// must not be able to steal it — see `take_race_partner`.
+    pending_race: Option<PendingRace>,
+    /// Random per-session credentials for the race SOCKS inbound, generated
+    /// alongside `pending_race` and cleared with it. The inbound forwards
+    /// straight to another country for as long as the race lasts, so it
+    /// requires a password rather than trusting "127.0.0.1 only" — any other
+    /// local process reaches that loopback port too.
+    race_credentials: Option<RaceCredentials>,
 
     sub_fetched_at: Option<u64>,
     sub_used_fallback: bool,
@@ -514,6 +549,7 @@ impl Session {
             // must not decide a test.
             net_memory: if cfg!(test) { netmem::NetworkMemory::default() } else { netmem::load() },
             pending_race: None,
+            race_credentials: None,
             sub_fetched_at: None,
             sub_used_fallback: false,
             sub_source_host: None,
@@ -698,9 +734,17 @@ impl Core {
     }
 
     /// Start a new generation and return it. Anything older stops writing.
+    ///
+    /// Called at the top of both `connect` and `disconnect` — the only two
+    /// places that do — so this is also where a pending race is retired: a
+    /// partner scoped to the old generation has no `start_on` left that could
+    /// legitimately claim it, and a fresh connect computes its own if one
+    /// applies.
     async fn bump_generation(&self) -> u64 {
         let mut s = self.session.lock().await;
         s.generation = s.generation.wrapping_add(1);
+        s.pending_race = None;
+        s.race_credentials = None;
         s.generation
     }
 
@@ -972,6 +1016,28 @@ impl Session {
         self.locations().get(index).map(|entry| entry.id.clone())
     }
 
+    /// Whether `network`'s remembered winner is one we would actually start
+    /// on right now: present, fresh (`net_memory.winner` already drops stale
+    /// entries), still in the current list, and not demoted.
+    ///
+    /// This is the ONE place that decides "is this network's winner usable",
+    /// used both by `choose_server`'s own network-winner step below and by
+    /// the "known network" gate at connect (lib.rs, races only unknown
+    /// networks). Before this they could disagree: the gate asked only
+    /// whether the memory had an entry, `choose_server` also asked whether it
+    /// was demoted, and a demoted winner made the gate say "known" — no race
+    /// — while `choose_server` quietly started on someone else.
+    fn network_winner_usable(&self, network: &str) -> Option<usize> {
+        let id = self.net_memory.winner(network, now_ms())?;
+        let index = self.index_of(id)?;
+        let now = Instant::now();
+        let healthy = self
+            .id_of(index)
+            .map(|id| self.demoted.get(&id).is_none_or(|until| *until <= now))
+            .unwrap_or(true);
+        healthy.then_some(index)
+    }
+
     /// Which node to try, and why.
     ///
     /// Order: a manual pin that is still young, then the last one that worked,
@@ -1000,12 +1066,8 @@ impl Session {
         // Дома проходит одно, в офисе и на мобильном - другое; общий
         // «последний удачный» начинал бы каждую сеть с чужого победителя.
         if let Some(network) = &self.network {
-            if let Some(id) = self.net_memory.winner(network, now_ms()) {
-                if let Some(index) = self.index_of(id) {
-                    if healthy(index) {
-                        return Some(index);
-                    }
-                }
+            if let Some(index) = self.network_winner_usable(network) {
+                return Some(index);
             }
         }
         // Тот, что ПОДТВЕРДИЛСЯ последним. Факт сильнее любой оценки.
@@ -1126,6 +1188,25 @@ impl Session {
                 (place != a_place, rtt, i)
             })
     }
+
+    /// Consume `pending_race`, but only for the exact `start_on` call it was
+    /// computed for.
+    ///
+    /// A plain `.take()` handed the race to WHICHEVER `start_on` ran next,
+    /// generation and index be damned: a stale repair-ladder `start_on` from
+    /// an older generation could steal it, and so could a `start_on` raising
+    /// a different index than the one the race was computed against. Neither
+    /// of those should ever build a race config for a partner meant for a
+    /// different start.
+    fn take_race_partner(&mut self, generation: u64, index: usize) -> Option<usize> {
+        match self.pending_race {
+            Some(p) if p.generation == generation && p.for_index == index => {
+                self.pending_race = None;
+                Some(p.partner_index)
+            }
+            _ => None,
+        }
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1141,12 +1222,22 @@ impl Core {
         &self,
         server: &ServerConfig,
         partner: Option<&ServerConfig>,
+        race_creds: Option<&RaceCredentials>,
     ) -> Result<(), AppError> {
         let physical = tun::physical_default().await?;
-        let config = match partner {
-            Some(ServerConfig::Vless(other)) if matches!(server, ServerConfig::Vless(_)) => {
-                xray_manager::build_race_config(server, other, &physical.interface)?
+        let config = match (partner, race_creds) {
+            (Some(ServerConfig::Vless(other)), Some(creds))
+                if matches!(server, ServerConfig::Vless(_)) =>
+            {
+                xray_manager::build_race_config(
+                    server,
+                    other,
+                    &physical.interface,
+                    (&creds.user, &creds.pass),
+                )?
             }
+            // A partner without credentials never races: better a plain
+            // config than a race inbound with no password on it.
             _ => xray_manager::build_runtime_config(server, &physical.interface)?,
         };
 
@@ -1219,6 +1310,7 @@ impl Core {
         &self,
         server: &ServerConfig,
         _partner: Option<&ServerConfig>,
+        _race_creds: Option<&RaceCredentials>,
     ) -> Result<(), AppError> {
         ios_vpn::connect(server).await.map_err(|e| {
             logger::log("error", "ios-vpn", &format!("connect failed: {e}"));
@@ -1351,10 +1443,14 @@ impl Core {
         let index = {
             let mut s = self.session.lock().await;
             s.network = network;
+            // Same predicate `choose_server` uses for its own network-winner
+            // step (`network_winner_usable`): a "known" network must be one
+            // whose winner `choose_server` would actually pick, or the two
+            // disagree and the app skips a race it still needed.
             let known = s
                 .network
                 .as_deref()
-                .and_then(|n| s.net_memory.winner(n, now_ms()))
+                .and_then(|n| s.network_winner_usable(n))
                 .is_some();
             logger::log(
                 "info",
@@ -1374,25 +1470,67 @@ impl Core {
                 .pinned
                 .as_ref()
                 .is_some_and(|p| p.at + PIN_LIFETIME > Instant::now());
-            s.pending_race = if cfg!(target_os = "macos") && !pinned && !known {
+            // `xray_manager` (and the race it can build) only exists on
+            // macOS — on iOS `partner` is always `None` below, so this whole
+            // decision is gated the same way rather than referencing that
+            // module where it does not exist.
+            #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+            let partner = if cfg!(target_os = "macos") && !pinned && !known {
                 s.race_partner(index)
             } else {
                 None
             };
-            if let Some(partner) = s.pending_race {
+            s.pending_race = None;
+            s.race_credentials = None;
+            #[cfg(target_os = "macos")]
+            if let Some(partner_index) = partner {
+                // The race inbound needs its own password (defence in
+                // depth): it forwards straight to another country for as
+                // long as the race lasts. Failing to mint one — /dev/urandom
+                // unreadable — cancels the race rather than running it
+                // unauthenticated.
+                match xray_manager::race_credentials() {
+                    Ok((user, pass)) => {
+                        s.pending_race = Some(PendingRace {
+                            generation,
+                            for_index: index,
+                            partner_index,
+                        });
+                        s.race_credentials = Some(RaceCredentials { user, pass });
+                    }
+                    Err(err) => {
+                        logger::log(
+                            "warn",
+                            "vpn",
+                            &format!("гонка протоколов: пароль не выдан, гонки не будет: {err}"),
+                        );
+                    }
+                }
+            }
+            if let Some(p) = s.pending_race {
                 logger::log(
                     "info",
                     "vpn",
                     &format!(
                         "гонка протоколов: {} против {}",
                         s.servers[index].protocol_label(),
-                        s.servers[partner].protocol_label()
+                        s.servers[p.partner_index].protocol_label()
                     ),
                 );
             }
             index
         };
-        let race_partner = self.session.lock().await.pending_race;
+        // `race_credentials` only matters on macOS, where a race can actually
+        // be pending; on iOS `pending_race` is never set (see above), so it
+        // stays `None` and would otherwise be an unused-variable warning.
+        #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+        let (race_partner, race_credentials) = {
+            let s = self.session.lock().await;
+            (
+                s.pending_race.map(|p| p.partner_index),
+                s.race_credentials.clone(),
+            )
+        };
 
         // Снять адреса ступеней ПОКА РЕЗОЛВЕР СПОКОЕН.
         //
@@ -1451,26 +1589,36 @@ impl Core {
         });
         #[cfg(target_os = "macos")]
         racers.spawn(async move {
-            ("движок", probe::warm_through_socks(tun::SOCKS_PORT, warm_host, warm_ip, warm_port, WARM_BUDGET).await)
+            ("движок", probe::warm_through_socks(tun::SOCKS_PORT, warm_host, warm_ip, warm_port, WARM_BUDGET, None).await)
         });
         // The other transport, through its own port (Watafast): when it
-        // answers first, the session moves to it below.
+        // answers first, the session moves to it below. Authenticated: this
+        // inbound forwards straight to another country while the race lasts,
+        // so the warm-up has to prove it is us before xray forwards anything.
         #[cfg(target_os = "macos")]
-        if race_partner.is_some() {
-            racers.spawn(async move {
-                (
-                    RACE_WINNER_PARTNER,
-                    probe::warm_through_socks(
-                        xray_manager::RACE_SOCKS_PORT,
-                        warm_host,
-                        warm_ip,
-                        warm_port,
-                        WARM_BUDGET,
+        let racing = race_partner.is_some() && race_credentials.is_some();
+        #[cfg(target_os = "macos")]
+        if let Some(creds) = &race_credentials {
+            if race_partner.is_some() {
+                let auth = Some((creds.user.clone(), creds.pass.clone()));
+                racers.spawn(async move {
+                    (
+                        RACE_WINNER_PARTNER,
+                        probe::warm_through_socks(
+                            xray_manager::RACE_SOCKS_PORT,
+                            warm_host,
+                            warm_ip,
+                            warm_port,
+                            WARM_BUDGET,
+                            auth,
+                        )
+                        .await,
                     )
-                    .await,
-                )
-            });
+                });
+            }
         }
+        #[cfg(not(target_os = "macos"))]
+        let racing = false;
         let mut winner: Option<&'static str> = None;
         while let Some(done) = racers.join_next().await {
             if let Ok((name, true)) = done {
@@ -1485,9 +1633,26 @@ impl Core {
         if let (Some(RACE_WINNER_PARTNER), Some(partner)) = (winner, race_partner) {
             // The other transport got through first: move the session to it,
             // tunnel kept (only the engine restarts, ~0.7 s). The chosen one
-            // is not demoted: losing a race is not failing.
+            // is not demoted: losing a race is not failing. `start_on` builds
+            // a plain config for `partner` alone — `pending_race` was already
+            // consumed by the FIRST `start_on` above, so no partner is passed
+            // and the race inbound is gone with this restart.
             logger::log("info", "vpn", "гонку выиграл другой протокол, переходим на него");
             self.start_on(partner, generation, true).await?;
+            if !self.is_current(generation).await {
+                return Ok(());
+            }
+        } else if racing {
+            // The race ran and the CHOSEN node won it (or nothing answered
+            // inside the warm-up budget): either way, the config xray is
+            // still running has the race inbound in it — an unauthenticated
+            // forward would be bad enough, and even a password-protected one
+            // has no reason to keep listening for the rest of the session.
+            // Rebuild the same node's engine: `pending_race` is already
+            // consumed, so this config-builds without a partner and the
+            // inbound disappears with the restart, same as the branch above.
+            logger::log("info", "vpn", "гонку выиграл выбранный узел, закрываем гоночный вход");
+            self.start_on(index, generation, true).await?;
             if !self.is_current(generation).await {
                 return Ok(());
             }
@@ -1505,6 +1670,7 @@ impl Core {
                     None,
                     warm_port,
                     WARM_BUDGET,
+                    None,
                 )
                 .await;
                 logger::log(
@@ -1712,11 +1878,21 @@ impl Core {
         );
 
         self.set_step(VpnStep::StartingEngine).await;
-        let partner = {
+        // `take_race_partner` only yields something when THIS call's own
+        // `(generation, index)` is the exact one the race was computed for
+        // (connect_inner, right before its own first `start_on`). Every other
+        // caller — the repair ladder, a network-change rebuild, the "close
+        // the race" restart below — gets `None` and builds a plain config,
+        // which is what actually removes the race inbound once the race is
+        // decided.
+        let (partner, race_creds) = {
             let mut s = self.session.lock().await;
-            s.pending_race.take().and_then(|i| s.servers.get(i).cloned())
+            let partner_index = s.take_race_partner(generation, index);
+            let partner = partner_index.and_then(|i| s.servers.get(i).cloned());
+            let creds = if partner.is_some() { s.race_credentials.clone() } else { None };
+            (partner, creds)
         };
-        self.engine_start(&server, partner.as_ref()).await?;
+        self.engine_start(&server, partner.as_ref(), race_creds.as_ref()).await?;
         if !self.is_current(generation).await {
             return Ok(());
         }
@@ -2175,6 +2351,19 @@ impl Core {
         }
         if repair.network_changed {
             self.note(TimelineCode::NetworkChanged, None).await;
+            // `s.network` was fingerprinted for the OLD network at connect and
+            // never touched since. Left alone, a probe's next `Passed`
+            // verdict would remember the winning node under that stale id,
+            // and `demote` would later forget the wrong network's winner.
+            // Recompute it here, off the clean-repair hot path — this branch
+            // only runs when the network itself actually changed — and store
+            // `None` when it cannot be read, so neither remember nor forget
+            // touches the memory until a real network is known again.
+            let fresh_network = netmem::current_network().await;
+            {
+                let mut s = self.session.lock().await;
+                s.network = fresh_network;
+            }
             // The engine's sockets are pinned to the interface that existed a
             // moment ago. On a new one they would fail every connection, so
             // the config is rebuilt — TUN and routes are untouched.
@@ -3903,6 +4092,92 @@ mod tests {
         s.demote(1);
         assert_eq!(s.net_memory.winner("office", now_ms()), None, "a demoted winner is forgotten");
         assert_eq!(s.choose_server(), Some(0));
+    }
+
+    /// The "known network" gate at connect and `choose_server`'s own
+    /// network-winner step must never disagree about the same winner.
+    ///
+    /// Before `network_winner_usable` unified them, the gate asked only
+    /// whether `net_memory` had an entry — ignoring demotion — while
+    /// `choose_server` also checked `demoted`. A winner demoted through some
+    /// path other than `demote()` itself (for instance surviving a spell with
+    /// `network: None`, see the test below) left the gate saying "known,
+    /// no race" while `choose_server` quietly started on someone else.
+    #[test]
+    fn known_network_gate_agrees_with_choose_server_about_demotion() {
+        let mut s = Session::new();
+        s.servers = vec![vless("🇩🇪 Германия"), vless("🇬🇧 Британия")];
+        let ids: Vec<String> = (0..2).map(|i| s.id_of(i).expect("id")).collect();
+        s.network = Some("office".into());
+        s.net_memory.remember("office", &ids[0], now_ms());
+
+        // Fresh, not demoted: both the predicate and choose_server agree.
+        assert_eq!(s.network_winner_usable("office"), Some(0));
+        assert_eq!(s.choose_server(), Some(0));
+
+        // The remembered winner is demoted directly, bypassing `demote()`.
+        s.demoted.insert(ids[0].clone(), Instant::now() + Duration::from_secs(60));
+        assert_eq!(
+            s.network_winner_usable("office"),
+            None,
+            "a demoted winner must not read as usable"
+        );
+        assert_ne!(
+            s.choose_server(),
+            Some(0),
+            "choose_server must actually skip it too, in agreement with the predicate"
+        );
+
+        // An id the current subscription no longer has must also be "not
+        // usable" — present in memory, but nothing to point `choose_server`
+        // at any more.
+        s.net_memory.remember("office", "gone-from-the-list", now_ms());
+        assert_eq!(s.network_winner_usable("office"), None);
+    }
+
+    /// A network we could not fingerprint must not touch ANOTHER network's
+    /// memory. This is the invariant `mend_routes` relies on after a route
+    /// repair: when the fresh fingerprint comes back `None`, `s.network` is
+    /// set to `None`, and neither `remember` nor `forget` may run against
+    /// whatever network id happens to still be sitting in `net_memory` from
+    /// before.
+    #[test]
+    fn demote_does_not_touch_the_memory_when_the_network_is_unknown() {
+        let mut s = Session::new();
+        s.servers = vec![vless("🇩🇪 Германия")];
+        let id = s.id_of(0).unwrap();
+        s.net_memory.remember("stale-network", &id, now_ms());
+        // As if a route repair just ran and the new network could not be
+        // fingerprinted (no gateway hardware address, no reply at all).
+        s.network = None;
+
+        s.demote(0);
+
+        assert_eq!(
+            s.net_memory.winner("stale-network", now_ms()),
+            Some(id.as_str()),
+            "an unresolved network must not forget another network's entry"
+        );
+        assert!(s.demoted.contains_key(&id), "the node itself is still demoted, network or not");
+    }
+
+    /// `pending_race` must only ever be consumed by the exact `start_on` call
+    /// it was computed for.
+    ///
+    /// A plain `.take()` handed a race to whichever `start_on` ran next —
+    /// generation and index be damned. A stale repair-ladder `start_on` from
+    /// an older generation, or one raising a different index, must come away
+    /// empty-handed and leave the pending race for its rightful caller.
+    #[test]
+    fn pending_race_is_scoped_to_its_own_generation_and_index() {
+        let mut s = Session::new();
+        s.pending_race = Some(PendingRace { generation: 5, for_index: 2, partner_index: 7 });
+
+        assert_eq!(s.take_race_partner(4, 2), None, "an older generation must not steal it");
+        assert_eq!(s.take_race_partner(5, 0), None, "a start_on for a different index must not either");
+        // Both misses above must have left it untouched for its real caller.
+        assert_eq!(s.take_race_partner(5, 2), Some(7), "the matching start_on gets it");
+        assert_eq!(s.take_race_partner(5, 2), None, "and only once — nobody gets it twice");
     }
 
     /// Автовыбор обязан брать САМЫЙ БЫСТРЫЙ из замеренных, а не первый в списке.

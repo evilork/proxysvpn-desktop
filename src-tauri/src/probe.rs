@@ -744,12 +744,18 @@ pub fn warm_target() -> (&'static str, u16) {
 ///
 /// Возвращает true, если соединение удалось. False - не приговор: проба
 /// разберётся сама, просто ей придётся платить за прогрев самой.
+///
+/// `auth`: `Some((user, pass))` for the race inbound (Watafast), which
+/// requires a password (defence in depth — it forwards to another country for
+/// as long as the race lasts); `None` for the tunnel's own front port, which
+/// stays `noauth` since only tun2socks and this warm-up ever dial it.
 pub async fn warm_through_socks(
     socks_port: u16,
     host: &str,
     ip: Option<IpAddr>,
     port: u16,
     budget: Duration,
+    auth: Option<(String, String)>,
 ) -> bool {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -759,17 +765,41 @@ pub async fn warm_through_socks(
     if host.is_empty() || host.len() > 255 {
         return false;
     }
+    if let Some((user, pass)) = &auth {
+        if user.is_empty() || user.len() > 255 || pass.len() > 255 {
+            return false;
+        }
+    }
 
     let work = async {
         let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", socks_port))
             .await
             .ok()?;
-        // Приветствие: версия 5, один метод, без авторизации.
-        sock.write_all(&[0x05, 0x01, 0x00]).await.ok()?;
+        // Приветствие: версия 5, один метод — без авторизации для обычного
+        // порта, логин-пароль (0x02) для гоночного, где иначе кто угодно на
+        // машине мог бы прокатиться на счёт этой сессии.
+        let method = if auth.is_some() { 0x02 } else { 0x00 };
+        sock.write_all(&[0x05, 0x01, method]).await.ok()?;
         let mut hello = [0u8; 2];
         sock.read_exact(&mut hello).await.ok()?;
-        if hello != [0x05, 0x00] {
+        if hello[0] != 0x05 || hello[1] != method {
             return None;
+        }
+        if let Some((user, pass)) = &auth {
+            // RFC 1929: версия 1, длина и байты логина, длина и байты пароля.
+            let mut neg = Vec::with_capacity(3 + user.len() + pass.len());
+            neg.push(0x01);
+            neg.push(user.len() as u8);
+            neg.extend_from_slice(user.as_bytes());
+            neg.push(pass.len() as u8);
+            neg.extend_from_slice(pass.as_bytes());
+            sock.write_all(&neg).await.ok()?;
+            let mut auth_reply = [0u8; 2];
+            sock.read_exact(&mut auth_reply).await.ok()?;
+            if auth_reply[1] != 0x00 {
+                // Неверный пароль — вход отказал, дальше говорить не о чем.
+                return None;
+            }
         }
         // CONNECT по адресу (0x01), если он снят заранее: тогда xray ведёт
         // соединение по IP, не спрашивая DoH. По ИМЕНИ (0x03) - только когда
@@ -1869,5 +1899,141 @@ mod tests {
             spent < budget * 2,
             "гонка заняла {spent:?} при бюджете {budget:?} на адрес - это похоже на обход по очереди"
         );
+    }
+
+    /// A tiny in-process SOCKS5 server for exercising the handshake side of
+    /// `warm_through_socks` without a real xray. Reads exactly what a real
+    /// server would for the negotiation this test cares about, then answers
+    /// CONNECT with a bare success and one byte, which is all the function
+    /// under test ever waits for.
+    async fn fake_socks_server(
+        want_auth: Option<(&'static str, &'static str)>,
+    ) -> (u16, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind loopback");
+        let port = listener.local_addr().expect("local addr").port();
+
+        let handle = tokio::spawn(async move {
+            let (mut sock, _) = match listener.accept().await {
+                Ok(pair) => pair,
+                Err(_) => return,
+            };
+            let mut hello = [0u8; 3];
+            if sock.read_exact(&mut hello).await.is_err() {
+                return;
+            }
+            let expected_method = if want_auth.is_some() { 0x02 } else { 0x00 };
+            assert_eq!(
+                hello,
+                [0x05, 0x01, expected_method],
+                "client must offer exactly the method this test expects"
+            );
+            if sock.write_all(&[0x05, expected_method]).await.is_err() {
+                return;
+            }
+            if let Some((user, pass)) = want_auth {
+                let mut head = [0u8; 2];
+                if sock.read_exact(&mut head).await.is_err() {
+                    return;
+                }
+                let mut got_user = vec![0u8; head[1] as usize];
+                if sock.read_exact(&mut got_user).await.is_err() {
+                    return;
+                }
+                let mut plen = [0u8; 1];
+                if sock.read_exact(&mut plen).await.is_err() {
+                    return;
+                }
+                let mut got_pass = vec![0u8; plen[0] as usize];
+                if sock.read_exact(&mut got_pass).await.is_err() {
+                    return;
+                }
+                let ok = got_user == user.as_bytes() && got_pass == pass.as_bytes();
+                let _ = sock.write_all(&[0x01, if ok { 0x00 } else { 0x01 }]).await;
+                if !ok {
+                    return;
+                }
+            }
+            // CONNECT: version, cmd, rsv, atyp — then the address, whatever
+            // its shape, and finally the port.
+            let mut req_head = [0u8; 4];
+            if sock.read_exact(&mut req_head).await.is_err() {
+                return;
+            }
+            match req_head[3] {
+                0x01 => {
+                    let mut rest = [0u8; 6];
+                    let _ = sock.read_exact(&mut rest).await;
+                }
+                0x03 => {
+                    let mut len = [0u8; 1];
+                    if sock.read_exact(&mut len).await.is_err() {
+                        return;
+                    }
+                    let mut rest = vec![0u8; usize::from(len[0]) + 2];
+                    let _ = sock.read_exact(&mut rest).await;
+                }
+                _ => return,
+            }
+            // Success reply with a bare IPv4 address, then the one byte the
+            // warm-up is actually waiting for.
+            let _ = sock.write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await;
+            let _ = sock.write_all(b"x").await;
+        });
+
+        (port, handle)
+    }
+
+    /// The race inbound requires a password now (defect 2's defence in
+    /// depth): the warm-up must negotiate it, not fall back to `noauth`.
+    #[tokio::test]
+    async fn warm_through_socks_negotiates_the_password_method_when_given_credentials() {
+        let (port, server) = fake_socks_server(Some(("racer", "s3cr3t"))).await;
+
+        let ok = warm_through_socks(
+            port,
+            "example.com",
+            None,
+            80,
+            Duration::from_millis(500),
+            Some(("racer".to_string(), "s3cr3t".to_string())),
+        )
+        .await;
+
+        assert!(ok, "a correctly negotiated password must still count as a warm-up success");
+        server.await.expect("server task must not panic");
+    }
+
+    /// The tunnel's own front port stays `noauth`: only tun2socks and this
+    /// warm-up ever dial it, and it must not start demanding a password too.
+    #[tokio::test]
+    async fn warm_through_socks_stays_unauthenticated_without_credentials() {
+        let (port, server) = fake_socks_server(None).await;
+
+        let ok = warm_through_socks(port, "example.com", None, 80, Duration::from_millis(500), None).await;
+
+        assert!(ok, "the plain no-auth path must keep working");
+        server.await.expect("server task must not panic");
+    }
+
+    /// A rejected password must fail closed, not fall through to CONNECT.
+    #[tokio::test]
+    async fn warm_through_socks_fails_closed_on_a_rejected_password() {
+        let (port, server) = fake_socks_server(Some(("racer", "the-real-password"))).await;
+
+        let ok = warm_through_socks(
+            port,
+            "example.com",
+            None,
+            80,
+            Duration::from_millis(500),
+            Some(("racer".to_string(), "wrong".to_string())),
+        )
+        .await;
+
+        assert!(!ok, "a rejected password must never read as a successful warm-up");
+        server.await.expect("server task must not panic");
     }
 }
