@@ -438,13 +438,50 @@ pub struct RawCounters {
 /// three orders of magnitude.
 ///
 /// A new tunnel means a new device and counters that start at zero again, so
-/// the session boundary is explicit: call `reset` on connect. Inside a session
-/// a decrease can then only mean a wrap.
+/// the session boundary is explicit: call `reset` on connect. Inside a
+/// session a decrease is still possible without a new session ever being
+/// declared — an engine restart (`tun::restart_engine`, the repair ladder)
+/// recreates the device mid-session, and a probe folds samples through its
+/// OWN copy of the meter (`Core::probe`) on whatever schedule the probe
+/// itself runs on, not the 2-second guarantee above. `counter_delta` is what
+/// tells that reset apart from a real wrap.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TunnelMeter {
     last: Option<RawCounters>,
     rx_total: u64,
     tx_total: u64,
+}
+
+/// A real 32-bit wrap never travels further than this between two samples:
+/// no interface on this app moves 64 MiB in the couple of seconds between
+/// one counter read and the next. So a decrease is only ever read as a wrap
+/// when `prev` was already within this many bytes of the ceiling — anywhere
+/// else, a smaller `sample` cannot be the counter continuing past
+/// `u32::MAX`, only the interface itself starting over.
+const WRAP_MARGIN: u32 = 64 * 1024 * 1024;
+
+/// One counter's contribution to the running total for one `observe` call.
+///
+/// `sample < prev` is ambiguous by itself: it is what BOTH a genuine 32-bit
+/// wrap and the interface being recreated (a fresh device, counting from
+/// zero again) look like from a single pair of readings. They are told
+/// apart by where `prev` sat: near the ceiling, "backwards" can only be the
+/// same wrap continuing, and the distance travelled — `sample.wrapping_sub
+/// (prev)` — is small by construction. Anywhere else, going backwards has
+/// nothing left to be but a reset, and folding the "distance" in as
+/// `wrapping_sub` would is how a probe logged "Unconfirmed: отдано
+/// 4294906880 Б" (27.09.2026) for a session that had carried a few
+/// kilobytes: a reset contributes nothing to the total rather than a
+/// borrowed ~4 GiB, and the new low value becomes the baseline going
+/// forward.
+fn counter_delta(prev: u32, sample: u32) -> u64 {
+    if sample >= prev {
+        u64::from(sample - prev)
+    } else if prev >= u32::MAX - WRAP_MARGIN {
+        u64::from(sample.wrapping_sub(prev))
+    } else {
+        0
+    }
 }
 
 impl TunnelMeter {
@@ -461,8 +498,8 @@ impl TunnelMeter {
                 self.last = Some(sample);
             }
             Some(prev) => {
-                self.rx_total += u64::from(sample.rx_bytes.wrapping_sub(prev.rx_bytes));
-                self.tx_total += u64::from(sample.tx_bytes.wrapping_sub(prev.tx_bytes));
+                self.rx_total += counter_delta(prev.rx_bytes, sample.rx_bytes);
+                self.tx_total += counter_delta(prev.tx_bytes, sample.tx_bytes);
                 self.last = Some(sample);
             }
         }
@@ -1518,6 +1555,56 @@ mod tests {
             tx_bytes: 0,
         });
         assert_eq!(rx, 150);
+    }
+
+    #[test]
+    fn a_reset_mid_session_is_not_read_as_four_gigabytes() {
+        // Found live 27.09.2026: a probe logged "Unconfirmed: отдано
+        // 4294906880 Б" — ~2^32 minus a few bytes — for a session that had
+        // carried almost nothing. `prev` here sits nowhere near the ceiling,
+        // so a smaller `sample` can only be the interface starting over, not
+        // the counter wrapping past it.
+        let mut m = TunnelMeter::new();
+        m.observe(RawCounters { rx_bytes: 500_000, tx_bytes: 300_000 }); // baseline
+        let (rx, tx) = m.observe(RawCounters { rx_bytes: 1_200, tx_bytes: 900 }); // device recreated
+        assert_eq!(
+            (rx, tx),
+            (0, 0),
+            "a reset must contribute nothing, never a borrowed ~4 GiB"
+        );
+    }
+
+    #[test]
+    fn traffic_after_a_reset_is_tracked_from_the_new_baseline() {
+        let mut m = TunnelMeter::new();
+        m.observe(RawCounters { rx_bytes: 900_000, tx_bytes: 900_000 });
+        m.observe(RawCounters { rx_bytes: 1_200, tx_bytes: 900 }); // device recreated
+        let (rx, tx) = m.observe(RawCounters { rx_bytes: 1_700, tx_bytes: 1_400 });
+        assert_eq!((rx, tx), (500, 500), "growth from the reset's own baseline still counts");
+    }
+
+    #[test]
+    fn a_decrease_just_inside_the_wrap_margin_still_reads_as_a_wrap() {
+        let mut m = TunnelMeter::new();
+        m.observe(RawCounters {
+            rx_bytes: u32::MAX - WRAP_MARGIN + 1,
+            tx_bytes: 0,
+        });
+        let (rx, _) = m.observe(RawCounters { rx_bytes: 10, tx_bytes: 0 });
+        // Distance travelled: back up to the ceiling (WRAP_MARGIN - 1), then
+        // 11 more past it.
+        assert_eq!(rx, u64::from(WRAP_MARGIN) - 1 + 11);
+    }
+
+    #[test]
+    fn a_decrease_just_outside_the_wrap_margin_reads_as_a_reset() {
+        let mut m = TunnelMeter::new();
+        m.observe(RawCounters {
+            rx_bytes: u32::MAX - WRAP_MARGIN - 1,
+            tx_bytes: 0,
+        });
+        let (rx, _) = m.observe(RawCounters { rx_bytes: 10, tx_bytes: 0 });
+        assert_eq!(rx, 0, "one byte past the margin, this is a reset, not a wrap");
     }
 
     #[test]

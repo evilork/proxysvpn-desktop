@@ -632,7 +632,17 @@ pub async fn stop(state: &SharedTunState) -> Result<(), AppError> {
     if let Some(ref ip) = server_ip {
         delete_host_route(ip).await;
     }
-    let _ = run_cmd("/sbin/ifconfig", &[TUN_NAME, "down"]).await;
+    // Only when it is actually there. This runs before every connect
+    // (`Core::engine_down`, not only on a real disconnect), and on a fresh
+    // process — nothing raised yet — utun225 does not exist, so asking
+    // `ifconfig` to bring a nonexistent device down always answers "exit
+    // status: 1". `run_cmd` logs that as a real failure, which meant one
+    // `[error]` line on every single connect, existent device or not (found
+    // live 27.09.2026). A device that truly fails to go down is still an
+    // error below, same as before.
+    if device_exists().await {
+        let _ = run_cmd("/sbin/ifconfig", &[TUN_NAME, "down"]).await;
+    }
 
     if let Some(mut child) = guard.child.take() {
         let _ = child.kill().await;
