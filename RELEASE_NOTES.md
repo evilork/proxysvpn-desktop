@@ -1,3 +1,27 @@
+# ProxysVPN Desktop v0.2.0-beta
+
+🇷🇺 Быстрее подключается, работает на всех локациях, включая «Британия · XHTTP».
+
+🇬🇧 Connects faster and works on every location, «Britain · XHTTP» included.
+
+## 🇷🇺 Что нового
+
+- **XHTTP.** Локации на новом транспорте XHTTP («Британия · XHTTP») подключаются. Прежняя версия собирала для них обычное TCP-соединение, и они не работали.
+- **Протокол в списке стран.** Под каждой локацией видно, на чём она работает: «VLESS · Vision», «VLESS · XHTTP», «Hysteria2». Имя локации показывается целиком, как его пишет сервис.
+- **Подключение за 2–4 секунды** вместо 7–30: сохранённая подписка, прогрев по адресу и гонка попыток.
+- **Сайты открываются сразу после подключения.** Исправлено «подключено, но ничего не грузится» на Mac с DNS 8.8.8.8 / 1.1.1.1: на время сеанса приложение ведёт системный DNS через туннель и возвращает его при отключении, в том числе если приложение закроется аварийно.
+- Журнал пишет, какая локация и протокол выбраны и сколько занял каждый шаг подключения (без адресов).
+
+## 🇬🇧 What's new
+
+- **XHTTP.** Locations on the XHTTP transport («Britain · XHTTP») now connect; the previous build set them up as plain TCP and they never worked.
+- **Protocol in the list of countries**: «VLESS · Vision», «VLESS · XHTTP», «Hysteria2» under every location, with the full name the service gives it.
+- **Connects in 2-4 seconds** instead of 7-30: a fresh stored subscription, an address-based warm-up and racing attempts.
+- **Sites load right after connecting.** Fixed "connected but nothing loads" on Macs with DNS 8.8.8.8 / 1.1.1.1: for the session the system resolver goes through the tunnel, and is handed back on disconnect — or on a crash.
+- The log names the chosen location and protocol and times every connect step (no addresses).
+
+---
+
 # ProxysVPN Desktop v0.1.0-beta
 
 🇷🇺 Первый публичный релиз. Бета-версия для Apple Silicon Mac.

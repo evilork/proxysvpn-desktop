@@ -101,7 +101,7 @@ MIT — see [LICENSE](LICENSE).
 
 This project bundles several open-source components, each under its own license:
 - [xray-core](https://github.com/XTLS/Xray-core) — MPL-2.0
-- [tun2socks](https://github.com/xjasonlyu/tun2socks) — GPL-3.0
+- [tun2socks](https://github.com/xjasonlyu/tun2socks) — MIT
 - [Tauri](https://github.com/tauri-apps/tauri) — MIT/Apache-2.0
 
 ## Links
