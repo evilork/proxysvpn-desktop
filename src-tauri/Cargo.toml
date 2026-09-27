@@ -28,6 +28,8 @@ url = "2"
 anyhow = "1"
 thiserror = "2"
 libc = "0.2"
+# Salted network fingerprints for the per-network memory (src/netmem.rs).
+sha2 = "0.10"
 tauri-plugin-clipboard-manager = "2.3.2"
 
 # Desktop-only: tray icon and shell live outside the iOS sandbox model.

@@ -31,6 +31,7 @@ mod events;
 mod logger;
 mod ping;
 mod probe;
+mod netmem;
 mod subscription;
 mod tunnel_prefs;
 
@@ -438,6 +439,10 @@ struct Session {
     /// Германию именно поэтому - она возглавляла список недавних, хотя ни разу
     /// не подтвердилась.
     last_good: Option<String>,
+    /// The network we are on (netmem.rs), read at connect before the tunnel.
+    network: Option<String>,
+    /// Which location last worked on which network.
+    net_memory: netmem::NetworkMemory,
 
     sub_fetched_at: Option<u64>,
     sub_used_fallback: bool,
@@ -498,6 +503,10 @@ impl Session {
             quality: HashMap::new(),
             rtt: HashMap::new(),
             last_good: None,
+            network: None,
+            // Tests start from nothing: the real file on the developer's disk
+            // must not decide a test.
+            net_memory: if cfg!(test) { netmem::NetworkMemory::default() } else { netmem::load() },
             sub_fetched_at: None,
             sub_used_fallback: false,
             sub_source_host: None,
@@ -979,6 +988,18 @@ impl Session {
                 .map(|id| self.demoted.get(&id).is_none_or(|until| *until <= now))
                 .unwrap_or(true)
         };
+        // Тот, что подтвердился последним В ЭТОЙ СЕТИ (Watafast, 27.09.2026).
+        // Дома проходит одно, в офисе и на мобильном - другое; общий
+        // «последний удачный» начинал бы каждую сеть с чужого победителя.
+        if let Some(network) = &self.network {
+            if let Some(id) = self.net_memory.winner(network, now_ms()) {
+                if let Some(index) = self.index_of(id) {
+                    if healthy(index) {
+                        return Some(index);
+                    }
+                }
+            }
+        }
         // Тот, что ПОДТВЕРДИЛСЯ последним. Факт сильнее любой оценки.
         if let Some(id) = &self.last_good {
             if let Some(index) = self.index_of(id) {
@@ -1051,6 +1072,15 @@ impl Session {
 
     fn demote(&mut self, index: usize) {
         if let Some(id) = self.id_of(index) {
+            // It stopped getting through here: this network forgets it as its
+            // winner, or the next connect would start on it again.
+            if let Some(network) = self.network.clone() {
+                if self.net_memory.winner(&network, now_ms()) == Some(id.as_str()) {
+                    self.net_memory.forget(&network);
+                    let snapshot = self.net_memory.clone();
+                    std::thread::spawn(move || netmem::store(&snapshot));
+                }
+            }
             self.demoted.insert(id, Instant::now() + DEMOTION);
         }
     }
@@ -1258,8 +1288,28 @@ impl Core {
         }
 
         self.set_step(VpnStep::PickingServer).await;
+        // Сеть узнаём ДО подъёма туннеля, по роутеру (netmem.rs).
+        #[cfg(target_os = "macos")]
+        let network = netmem::current_network().await;
+        #[cfg(not(target_os = "macos"))]
+        let network: Option<String> = None;
         let index = {
-            let s = self.session.lock().await;
+            let mut s = self.session.lock().await;
+            s.network = network;
+            let known = s
+                .network
+                .as_deref()
+                .and_then(|n| s.net_memory.winner(n, now_ms()))
+                .is_some();
+            logger::log(
+                "info",
+                "vpn",
+                match (&s.network, known) {
+                    (None, _) => "сеть: не распознана",
+                    (Some(_), true) => "сеть: знакомая, начинаем с её победителя",
+                    (Some(_), false) => "сеть: новая для приложения",
+                },
+            );
             s.choose_server()
                 .ok_or_else(|| AppError::new(ErrorCode::SubEmpty))?
         };
@@ -1698,9 +1748,17 @@ impl Core {
             s.absorb_metric(metric);
             if verdict == ProbeVerdict::Passed {
                 s.rx_stalled_since = None;
-                // Вот теперь узел действительно рабочий, и его стоит помнить.
+                // Вот теперь узел действительно рабочий, и его стоит помнить -
+                // и вообще, и для этой сети.
                 if let Some(index) = s.current {
                     s.last_good = s.id_of(index);
+                    if let (Some(network), Some(id)) = (s.network.clone(), s.id_of(index)) {
+                        if s.net_memory.winner(&network, now_ms()) != Some(id.as_str()) {
+                            s.net_memory.remember(&network, &id, now_ms());
+                            let snapshot = s.net_memory.clone();
+                            std::thread::spawn(move || netmem::store(&snapshot));
+                        }
+                    }
                 }
                 if let Some(index) = s.current {
                     if let (Some(id), Some(rtt)) = (s.id_of(index), shown_rtt) {
@@ -3667,6 +3725,31 @@ mod tests {
             remark: remark.into(),
             transport: crate::subscription::VlessTransport::Tcp,
         })
+    }
+
+    /// A known network starts on its own winner; an unknown one as before.
+    #[test]
+    fn each_network_starts_on_the_location_that_last_worked_there() {
+        let mut s = Session::new();
+        s.servers = vec![vless("🇩🇪 Германия"), vless("🇬🇧 Британия · XHTTP"), vless("🇫🇷 Франция")];
+        let ids: Vec<String> = (0..3).map(|i| s.id_of(i).expect("id")).collect();
+        s.last_good = Some(ids[0].clone());
+        s.net_memory.remember("office", &ids[1], now_ms());
+
+        s.network = Some("office".into());
+        assert_eq!(s.choose_server(), Some(1), "the office's own winner beats the global last good");
+
+        s.network = Some("cafe".into());
+        assert_eq!(s.choose_server(), Some(0), "an unknown network falls back to the global last good");
+
+        s.network = None;
+        assert_eq!(s.choose_server(), Some(0), "no network id: exactly the old behaviour");
+
+        // The office winner stops getting through: demoted and forgotten there.
+        s.network = Some("office".into());
+        s.demote(1);
+        assert_eq!(s.net_memory.winner("office", now_ms()), None, "a demoted winner is forgotten");
+        assert_eq!(s.choose_server(), Some(0));
     }
 
     /// Автовыбор обязан брать САМЫЙ БЫСТРЫЙ из замеренных, а не первый в списке.
