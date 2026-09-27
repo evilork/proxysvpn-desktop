@@ -126,6 +126,16 @@ const COLD_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 /// долго молчит сеть.
 const SETTLING_WINDOW: Duration = Duration::from_secs(45);
 
+/// How old a subscription may be and still be used for a connect without
+/// asking the network first.
+///
+/// The owner's target is 3-5 seconds from the button to the shield (27.09.2026);
+/// fetching the list cost 1.2 s of the 6.7. Node addresses change seldom, and
+/// when a stored one is stale the connect fails into the ladder, whose step C4
+/// re-reads the subscription anyway — so reuse costs a slower recovery in a
+/// rare case, not a wrong connection.
+const SUB_REUSE_MS: u64 = 15 * 60 * 1000;
+
 /// Outgoing bytes with nothing coming back for this long is the passive half
 /// of "suspicion" (M1). It never decides anything on its own — it only buys a
 /// probe, which does.
@@ -434,6 +444,10 @@ struct Session {
     /// До какого момента переспрашивать холодный туннель чаще обычного.
     /// Ставится на подключении, истекает сам.
     settling_until: Option<Instant>,
+    /// Щит зелёный по прогреву, а проба ещё ни разу не ответила. Пока так,
+    /// надзиратель переспрашивает с шагом прогрева, а не раз в пять минут:
+    /// иначе зелёный без пробы значил бы «не проверено до следующей пятиминутки».
+    green_unprobed: bool,
     /// Bumped by every connect and every disconnect. A task whose generation
     /// is stale finishes quietly instead of writing over a newer session.
     generation: u64,
@@ -443,6 +457,20 @@ struct Session {
 
     routing_in_russia: bool,
     timeline: VecDeque<TimelineEntry>,
+}
+
+/// Whether the supervisor should ask again at the warm-up's pace (4 s)
+/// rather than its idle one (5 min): the shield is up but no probe has stood
+/// behind it yet — "Unconfirmed", or green granted by the warm-up alone — and
+/// the settling window opened at connect has not run out.
+fn settling_applies(
+    phase: VpnPhase,
+    green_unprobed: bool,
+    settling_until: Option<Instant>,
+    now: Instant,
+) -> bool {
+    (phase == VpnPhase::Unconfirmed || (phase == VpnPhase::On && green_unprobed))
+        && settling_until.is_some_and(|until| now < until)
 }
 
 impl Session {
@@ -470,6 +498,7 @@ impl Session {
             meter: TunnelMeter::new(),
             gate: ProbeGate::new(),
             settling_until: None,
+            green_unprobed: false,
             generation: 0,
             heal_rounds: 0,
             heal_blocked_until: None,
@@ -1148,6 +1177,7 @@ impl Core {
         self.engine_down().await;
         {
             let mut s = self.session.lock().await;
+            s.green_unprobed = false;
             s.meter.reset();
             s.gate.reset();
             s.metric = MetricPayload::default();
@@ -1188,17 +1218,35 @@ impl Core {
     async fn connect_inner(self: &Arc<Self>, generation: u64) -> Result<(), AppError> {
         let started = Instant::now();
         self.set_step(VpnStep::FetchingSub).await;
-        let fetched = self.refresh_subscription().await;
-        logger::log(
-            if fetched.is_ok() { "info" } else { "warn" },
-            "vpn",
-            &format!(
-                "подписка: {} за {} мс",
-                if fetched.is_ok() { "получена" } else { "НЕ получена" },
-                started.elapsed().as_millis()
-            ),
-        );
-        fetched?;
+        let reusable_age = {
+            let s = self.session.lock().await;
+            if s.servers.is_empty() {
+                None
+            } else {
+                s.sub_fetched_at
+                    .map(|at| now_ms().saturating_sub(at))
+                    .filter(|age| *age < SUB_REUSE_MS)
+            }
+        };
+        if let Some(age) = reusable_age {
+            logger::log(
+                "info",
+                "vpn",
+                &format!("подписка: сохранённая, {} с назад, сеть не ждём", age / 1000),
+            );
+        } else {
+            let fetched = self.refresh_subscription().await;
+            logger::log(
+                if fetched.is_ok() { "info" } else { "warn" },
+                "vpn",
+                &format!(
+                    "подписка: {} за {} мс",
+                    if fetched.is_ok() { "получена" } else { "НЕ получена" },
+                    started.elapsed().as_millis()
+                ),
+            );
+            fetched?;
+        }
         if !self.is_current(generation).await {
             return Ok(());
         }
@@ -1275,11 +1323,38 @@ impl Core {
                 }
             ),
         );
-        if !warmed {
-            // Прогрев не вышел - не беда: даём прежнюю фиксированную паузу,
-            // чтобы не броситься проверять совсем уж мгновенно.
-            tokio::time::sleep(FIRST_PROBE_DELAY).await;
+        if warmed {
+            // Прогрев через туннель - это уже настоящий обмен байтами с той
+            // стороной через узел: TCP, запрос, ответ. Ждать ещё и пробу -
+            // это две секунды сверху (замер 27.09.2026: 6,7 с до щита при
+            // цели владельца 3-5). Щит зеленеет сразу, с пометкой
+            // `green_unprobed`: пока она стоит и открыто окно SETTLING_WINDOW,
+            // надзиратель переспрашивает с шагом прогрева (4 с), и если проба
+            // не пройдёт, дальше работает обычная лестница.
+            if !self.is_current(generation).await {
+                return Ok(());
+            }
+            logger::log(
+                "info",
+                "vpn",
+                &format!(
+                    "защищено по прогреву; от начала подключения {} мс",
+                    started.elapsed().as_millis()
+                ),
+            );
+            let label = {
+                let mut s = self.session.lock().await;
+                s.green_unprobed = true;
+                s.location.clone()
+            };
+            self.note(TimelineCode::Connected, label).await;
+            self.set_phase(VpnPhase::On, None).await;
+            self.spawn_supervisor(generation);
+            return Ok(());
         }
+        // Прогрев не вышел - не беда: даём прежнюю фиксированную паузу,
+        // чтобы не броситься проверять совсем уж мгновенно.
+        tokio::time::sleep(FIRST_PROBE_DELAY).await;
         // `AfterConnect` has no floor, so this always asks: it is the probe
         // that decides whether the shield turns green at all.
         let verdict = self
@@ -1473,6 +1548,7 @@ impl Core {
         {
             let mut s = self.session.lock().await;
             s.current = None;
+            s.green_unprobed = false;
             s.metric = MetricPayload::default();
             s.meter.reset();
             s.gate.reset();
@@ -1762,6 +1838,9 @@ impl Core {
                 if !self.is_current(generation).await {
                     return;
                 }
+                // Any answer ends "green by the warm-up alone": from here the
+                // shield stands on a probe, whatever it said.
+                self.session.lock().await.green_unprobed = false;
                 match verdict {
                     ProbeVerdict::Passed => self.settle(VpnPhase::On).await,
                     ProbeVerdict::Unconfirmed => self.settle(VpnPhase::Unconfirmed).await,
@@ -1840,8 +1919,7 @@ impl Core {
         // минут поверх работающей защиты.
         let settling = {
             let s = self.session.lock().await;
-            s.phase == VpnPhase::Unconfirmed
-                && s.settling_until.is_some_and(|until| Instant::now() < until)
+            settling_applies(s.phase, s.green_unprobed, s.settling_until, Instant::now())
         };
         let reason = if woke {
             ProbeReason::Woke
@@ -3507,6 +3585,24 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn green_by_warm_up_is_checked_at_the_warm_up_pace_until_a_probe_answers() {
+        let now = Instant::now();
+        let open = Some(now + Duration::from_secs(30));
+        let closed = Some(now - Duration::from_secs(1));
+        // Green by the warm-up alone: asked again within seconds.
+        assert!(settling_applies(VpnPhase::On, true, open, now));
+        // Green that a probe stood behind: idle pace.
+        assert!(!settling_applies(VpnPhase::On, false, open, now));
+        // Unconfirmed: as before, within the window.
+        assert!(settling_applies(VpnPhase::Unconfirmed, false, open, now));
+        // The window is shut: nobody gets the fast pace.
+        assert!(!settling_applies(VpnPhase::On, true, closed, now));
+        assert!(!settling_applies(VpnPhase::Unconfirmed, false, None, now));
+        // Off never settles.
+        assert!(!settling_applies(VpnPhase::Off, true, open, now));
+    }
     use super::*;
     use subscription::{Hy2Config, VlessConfig};
 
