@@ -1774,7 +1774,33 @@ fn build_outbounds(
         json!({ "tag": "direct", "protocol": "freedom" }),
         json!({ "tag": "block",  "protocol": "blackhole" }),
         // Отвечает на запросы имён сам, по разделу `dns` выше.
-        json!({ "tag": "dns-out", "protocol": "dns" }),
+        //
+        // Только на запросы адресов (A, AAAA). Остальные типы xray 26.3 по
+        // умолчанию отбивает ответом REFUSED, и это стоило туннелю DNS целиком
+        // (27.09.2026, запись пакетов на utun225): macOS шлёт рядом с каждым
+        // именем запрос HTTPS (тип 65), получает REFUSED от обоих серверов,
+        // считает их сломанными и перестаёт спрашивать вовсе. Новые имена
+        // висели по 30 секунд - «подключилось, но Claude не думает» - а
+        // прогрев при подключении ждал 16 секунд и не дожидался.
+        //
+        // `skip` отдаёт такие запросы настоящему серверу: 1.1.1.1 по TCP и
+        // ЧЕРЕЗ УЗЕЛ (`proxySettings`). Без цепочки запрос ушёл бы в маршрут
+        // по умолчанию, то есть обратно в туннель, к этому же правилу; а с
+        // привязкой к физическому интерфейсу имена сайтов уходили бы мимо
+        // туннеля. Замер на том же xray: 16 из 16 верных ответов, в среднем
+        // 0,7 с, повтор из кеша - 74 мс; через `sockopt.dialerProxy` тот же
+        // приём давал потери и ложный NXDOMAIN.
+        json!({
+            "tag": "dns-out",
+            "protocol": "dns",
+            "settings": {
+                "nonIPQuery": "skip",
+                "network": "tcp",
+                "address": "1.1.1.1",
+                "port": 53
+            },
+            "proxySettings": { "tag": "proxy" }
+        }),
     ];
 
     if prefs.fragment {
@@ -2570,6 +2596,27 @@ mod tests {
         let out = std::env::var("WATAFAST_LIVE_OUT").expect("WATAFAST_LIVE_OUT");
         let cfg = build_xray_config_with_routing(&parse_vless_url(&link).expect("link parses"), None);
         std::fs::write(&out, serde_json::to_string_pretty(&cfg).expect("serializes")).expect("written");
+    }
+
+    #[test]
+    fn non_address_queries_go_to_a_real_server_through_the_node() {
+        for cfg in [vless_fixture(), xhttp_fixture()] {
+            let built = build_xray_config_with_routing(&cfg, None);
+            let dns_out = built["outbounds"]
+                .as_array()
+                .expect("outbounds")
+                .iter()
+                .find(|o| o["tag"] == "dns-out")
+                .expect("dns-out exists");
+            // REFUSED on type 65 is what took the whole of DNS down on macOS.
+            assert_eq!(dns_out["settings"]["nonIPQuery"], "skip");
+            assert_eq!(dns_out["settings"]["network"], "tcp");
+            assert_eq!(dns_out["settings"]["address"], "1.1.1.1");
+            assert_eq!(dns_out["settings"]["port"], 53);
+            // Through the node: not back into the tunnel, not past it.
+            assert_eq!(dns_out["proxySettings"]["tag"], "proxy");
+            assert!(dns_out.get("streamSettings").is_none(), "dialerProxy lost answers in the measurement");
+        }
     }
 
     #[test]
