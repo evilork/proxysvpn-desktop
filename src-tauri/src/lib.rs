@@ -1261,6 +1261,11 @@ impl Core {
             .probe(ProbeReason::AfterConnect)
             .await
             .unwrap_or(ProbeVerdict::Unconfirmed);
+        logger::log(
+            if matches!(verdict, ProbeVerdict::Passed) { "info" } else { "warn" },
+            "vpn",
+            &format!("проверка после подключения: {verdict:?}"),
+        );
         if !self.is_current(generation).await {
             return Ok(());
         }
@@ -1378,12 +1383,25 @@ impl Core {
                 .ok_or_else(|| AppError::new(ErrorCode::SubEmpty))?
         };
 
-        let (_, parsed_label, _) = split_label(server.remark());
+        let (_, parsed_label, note) = split_label(server.remark());
         let label = if parsed_label.is_empty() {
             fallback_label(index)
         } else {
             parsed_label
         };
+        // Which location and protocol, never the address. Without this line
+        // the log of 27.09.2026 could not say which of two «Британия» rows the
+        // person was on when "Claude stopped thinking".
+        logger::log(
+            "info",
+            "vpn",
+            &format!(
+                "узел: {label}{} · {}{}",
+                note.as_deref().map(|n| format!(" · {n}")).unwrap_or_default(),
+                server.protocol_label(),
+                if keep_tunnel { " (туннель не трогаем)" } else { "" }
+            ),
+        );
 
         self.set_step(VpnStep::StartingEngine).await;
         self.engine_start(&server).await?;
@@ -1414,6 +1432,7 @@ impl Core {
     }
 
     async fn disconnect(self: &Arc<Self>) {
+        logger::log("info", "vpn", "отключение по кнопке");
         // Снятые адреса живут ровно столько, сколько соединение: держать их
         // дольше - значит однажды пойти по устаревшему.
         probe::forget_pinned_addresses();
