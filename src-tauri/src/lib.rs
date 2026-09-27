@@ -1134,7 +1134,15 @@ impl Core {
 
 impl Core {
     async fn connect(self: &Arc<Self>) -> Result<(), AppError> {
+        // Хронометраж подключения по шагам: 27.09.2026 человек видел 20-30
+        // секунд, а журнал сумел показать только последние семь.
+        let pressed = Instant::now();
+        logger::log("info", "vpn", "подключение: нажата кнопка");
         let _op = self.operation.lock().await;
+        let waited = pressed.elapsed().as_millis();
+        if waited > 300 {
+            logger::log("warn", "vpn", &format!("подключение ждало другую операцию {waited} мс"));
+        }
         let generation = self.bump_generation().await;
 
         self.engine_down().await;
@@ -1178,8 +1186,19 @@ impl Core {
     }
 
     async fn connect_inner(self: &Arc<Self>, generation: u64) -> Result<(), AppError> {
+        let started = Instant::now();
         self.set_step(VpnStep::FetchingSub).await;
-        self.refresh_subscription().await?;
+        let fetched = self.refresh_subscription().await;
+        logger::log(
+            if fetched.is_ok() { "info" } else { "warn" },
+            "vpn",
+            &format!(
+                "подписка: {} за {} мс",
+                if fetched.is_ok() { "получена" } else { "НЕ получена" },
+                started.elapsed().as_millis()
+            ),
+        );
+        fetched?;
         if !self.is_current(generation).await {
             return Ok(());
         }
@@ -1199,7 +1218,13 @@ impl Core {
         // это десятки миллисекунд.
         probe::pin_ladder_addresses().await;
 
+        let raising = Instant::now();
         self.start_on(index, generation, false).await?;
+        logger::log(
+            "info",
+            "vpn",
+            &format!("движок и туннель подняты за {} мс", raising.elapsed().as_millis()),
+        );
         if !self.is_current(generation).await {
             return Ok(());
         }
@@ -1264,7 +1289,10 @@ impl Core {
         logger::log(
             if matches!(verdict, ProbeVerdict::Passed) { "info" } else { "warn" },
             "vpn",
-            &format!("проверка после подключения: {verdict:?}"),
+            &format!(
+                "проверка после подключения: {verdict:?}; от начала подключения {} мс",
+                started.elapsed().as_millis()
+            ),
         );
         if !self.is_current(generation).await {
             return Ok(());
