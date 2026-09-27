@@ -1,3 +1,27 @@
+# ProxysVPN Desktop v0.3.1-beta
+
+🇷🇺 Новые настройки: способ подключения, подключение при запуске, свои правила для сайтов и уведомления. Плюс исправления по итогам проверки 0.3.0.
+
+🇬🇧 New settings: how to connect, connect on launch, your own site rules and notifications. Plus fixes from testing 0.3.0.
+
+## 🇷🇺 Что нового
+
+- **Способ подключения.** Авто, только XHTTP или только Vision. Если у локации нет выбранного способа, она подключится тем, что есть, и напишет об этом в списке.
+- **Подключаться при запуске.** Выключено по умолчанию.
+- **Свои правила.** Два списка сайтов: «всегда напрямую» и «всегда через VPN». Они сильнее правил из подписки.
+- **Уведомления.** macOS сообщит, если защита пропала, и когда она вернулась.
+- Исправлено: двойное «Watafast» в названии локации; сообщение об ошибке ifconfig при каждом подключении; мелькание «не удалось» сразу после подключения; огромные числа в журнале после перезапуска туннеля; долгие ответы DNS в начале сеанса.
+
+## 🇬🇧 What's new
+
+- **How to connect.** Auto, XHTTP only or Vision only. A location without the chosen way still connects with what it has and says so in the list.
+- **Connect on launch.** Off by default.
+- **Your own rules.** Two site lists, «always direct» and «always through the VPN». They take priority over the subscription's rules.
+- **Notifications.** macOS tells you when protection drops and when it is back.
+- Fixed: «Watafast» shown twice in a location name; an ifconfig error logged on every connect; a brief «failed» flash right after connecting; huge byte counts in the log after a tunnel restart; slow DNS answers at the start of a session.
+
+---
+
 # ProxysVPN Desktop v0.3.0-beta
 
 🇷🇺 Watafast: приложение само выбирает способ подключения, помнит, что работает в вашей сети, и подключается, даже когда сайты сервиса не открываются.
