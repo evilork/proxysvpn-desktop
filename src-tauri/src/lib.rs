@@ -32,6 +32,7 @@ mod logger;
 mod ping;
 mod probe;
 mod netmem;
+mod manifest;
 mod subscription;
 mod tunnel_prefs;
 

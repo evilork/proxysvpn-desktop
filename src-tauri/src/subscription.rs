@@ -42,6 +42,7 @@ use url::Url;
 
 use crate::errors::{AppError, ErrorCode};
 use crate::events::SubMeta;
+use crate::manifest;
 
 // `lib.rs` is not ours to edit, and a module file nobody declares is a file
 // nobody compiles. Declaring it here keeps the change inside its own two files;
@@ -54,7 +55,7 @@ pub mod device_id;
 // Wire types
 // ───────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VlessConfig {
     pub uuid: String,
     pub host: String,
@@ -126,7 +127,10 @@ impl XhttpMode {
 /// The request path the service may send: "/" plus RFC 3986 unreserved
 /// characters and "/", at most 128 in all — the rule of the service's own
 /// validator (`isXhttpSettings`), so anything it would refuse is refused here.
-fn valid_xhttp_path(path: &str) -> bool {
+///
+/// `pub(crate)`: the Watafast manifest (manifest.rs) validates its own XHTTP
+/// candidates with this exact rule rather than a second copy of it.
+pub(crate) fn valid_xhttp_path(path: &str) -> bool {
     path.len() <= 128
         && path.starts_with('/')
         && path
@@ -136,7 +140,11 @@ fn valid_xhttp_path(path: &str) -> bool {
 
 /// A DNS name for the XHTTP `host`: labels of letters, digits and inner
 /// hyphens, dot-separated, 253 characters at most.
-fn valid_xhttp_host(host: &str) -> bool {
+///
+/// `pub(crate)`: also used to validate an XHTTP candidate's `host` in the
+/// Watafast manifest, and the manifest's own `hosts` ladder entries (which
+/// additionally reject an IP literal before calling this — see manifest.rs).
+pub(crate) fn valid_xhttp_host(host: &str) -> bool {
     host.len() <= 253
         && host.split('.').all(|label| {
             !label.is_empty()
@@ -147,7 +155,7 @@ fn valid_xhttp_host(host: &str) -> bool {
         })
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Hy2Config {
     pub password: String,
     pub host: String,
@@ -170,7 +178,7 @@ pub struct ServerInfo {
 }
 
 /// One subscription entry, whichever protocol it speaks.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ServerConfig {
     Vless(VlessConfig),
     Hy2(Hy2Config),
@@ -242,7 +250,10 @@ pub fn display_note(server: &ServerConfig, note: Option<String>) -> Option<Strin
 /// transport — `transport/` of SagerNet/sing-box has none as of 27.09.2026.
 /// Built there, an XHTTP entry would go out as plain TCP and fail every time
 /// while looking like a dead node, so that build does not list it at all.
-fn engine_supports_on(server: &ServerConfig, sing_box: bool) -> bool {
+///
+/// `pub(crate)`: the Watafast manifest applies the exact same rule when it
+/// picks which candidate of a location this build can actually run.
+pub(crate) fn engine_supports_on(server: &ServerConfig, sing_box: bool) -> bool {
     match server {
         ServerConfig::Vless(c) => !(sing_box && matches!(c.transport, VlessTransport::Xhttp { .. })),
         ServerConfig::Hy2(_) => true,
@@ -382,6 +393,27 @@ fn build_client() -> Option<reqwest::Client> {
         .ok()
 }
 
+/// Host order shared by the subscription ladder and the Watafast manifest
+/// ladder (manifest.rs): the link's own host first, then the built-in
+/// reserves not already in the list, then `extra` (the last good manifest's
+/// own signed `hosts`, MANIFEST-v1.md rule 4) not already in the list.
+/// Case-insensitive de-duplication; order otherwise preserved. `extra` is
+/// empty for the subscription fetch, which is exactly today's list.
+fn ladder_hosts(primary_host: &str, extra: &[String]) -> Vec<String> {
+    let mut hosts = vec![primary_host.to_string()];
+    for host in RESERVE_HOSTS {
+        if !hosts.iter().any(|h| h.eq_ignore_ascii_case(host)) {
+            hosts.push((*host).to_string());
+        }
+    }
+    for host in extra {
+        if !hosts.iter().any(|h| h.eq_ignore_ascii_case(host)) {
+            hosts.push(host.clone());
+        }
+    }
+    hosts
+}
+
 /// Every address to try, in order, with the query we need.
 ///
 /// Two query parameters are forced onto the link, and both are the service's
@@ -414,20 +446,75 @@ fn candidate_urls(sub_url: &str) -> Result<Vec<String>, AppError> {
     let primary_host = primary.host_str().unwrap_or_default().to_ascii_lowercase();
     let mut urls = vec![primary.to_string()];
 
-    for host in RESERVE_HOSTS {
-        if *host == primary_host {
-            continue;
-        }
+    for host in ladder_hosts(&primary_host, &[]).into_iter().skip(1) {
         let mut alt = primary.clone();
         // A reserve is reached on the default port; carrying a port from the
         // original link would point at nothing.
-        if alt.set_host(Some(host)).is_err() || alt.set_port(None).is_err() {
+        if alt.set_host(Some(&host)).is_err() || alt.set_port(None).is_err() {
             continue;
         }
         urls.push(alt.to_string());
     }
 
     Ok(urls)
+}
+
+/// The Watafast manifest ladder for this link: `ladder_hosts` widened by the
+/// last good manifest's own hosts, `/api/watafast/v1/<token>` in place of the
+/// subscription path and query (MANIFEST-v1.md "Endpoint").
+fn manifest_urls(sub_url: &str, extra_hosts: &[String]) -> Result<Vec<String>, AppError> {
+    let trimmed = sub_url.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::new(ErrorCode::NoSubscription));
+    }
+    let primary = Url::parse(trimmed).map_err(|_| AppError::new(ErrorCode::SubMalformed))?;
+    if !matches!(primary.scheme(), "http" | "https") {
+        return Err(AppError::new(ErrorCode::SubMalformed));
+    }
+    let primary_host = primary
+        .host_str()
+        .ok_or_else(|| AppError::new(ErrorCode::SubMalformed))?
+        .to_ascii_lowercase();
+    let token = subscription_token_from(&primary).ok_or_else(|| AppError::new(ErrorCode::SubMalformed))?;
+
+    let mut urls = Vec::new();
+    for host in ladder_hosts(&primary_host, extra_hosts) {
+        let mut u = primary.clone();
+        if u.set_host(Some(&host)).is_err() || u.set_port(None).is_err() {
+            continue;
+        }
+        u.set_query(None);
+        u.set_path(&format!("/api/watafast/v1/{token}"));
+        urls.push(u.to_string());
+    }
+    if urls.is_empty() {
+        return Err(AppError::new(ErrorCode::SubMalformed));
+    }
+    Ok(urls)
+}
+
+/// The token of the person's subscription link: the last path segment of
+/// `/api/sub/<token>` — the same link the manifest endpoint reuses
+/// (MANIFEST-v1.md "Endpoint": "the token of the person's subscription
+/// link... the same device").
+///
+/// Must agree with `lib.rs::validate_link`, which accepts a trailing slash
+/// (it only checks that `url.path().trim_matches('/')` is non-empty). A link
+/// like `.../api/sub/<token>/` makes `path_segments()` yield a trailing empty
+/// segment, so a naive `next_back()` returns `""` instead of the token —
+/// `manifest_urls` then fails silently and the whole Watafast manifest fetch
+/// goes permanently and invisibly inert for that install. Skipping empty
+/// segments from the end keeps this in step with what `validate_link` already
+/// calls a valid link.
+fn subscription_token_from(url: &Url) -> Option<String> {
+    url.path_segments()?
+        .rev()
+        .find(|segment| !segment.is_empty())
+        .map(str::to_string)
+}
+
+fn subscription_token(sub_url: &str) -> Option<String> {
+    subscription_token_from(&Url::parse(sub_url.trim()).ok()?)
 }
 
 /// Set the two parameters we depend on, keeping everything else the link had.
@@ -508,6 +595,19 @@ impl HostAnswer {
         &self.url
     }
 
+    /// Which ladder address answered — a site name, never a node address.
+    fn host(&self) -> &str {
+        &self.host
+    }
+
+    fn status(&self) -> u16 {
+        self.status
+    }
+
+    fn body(&self) -> &str {
+        &self.body
+    }
+
     /// Whether this answer settles the question.
     ///
     /// A 200 with a body is the answer, stub or not. A 404 and a plain 403 are
@@ -528,8 +628,28 @@ impl HostAnswer {
 
 type Headers = HashMap<String, String>;
 
-/// Fetch the subscription, understood, over the ladder of addresses.
+/// Fetch the subscription, understood, over the ladder of addresses — and,
+/// when the Watafast manifest key table is non-empty, the manifest over its
+/// own ladder AT THE SAME TIME (MANIFEST-v1.md "fetch the manifest
+/// concurrently... inside the existing ladder budget"). `manifest::merge`
+/// then decides whose servers win; see it for the four outcomes.
+///
+/// With an empty key table (today, in every shipped build) this is exactly
+/// `fetch_subscription_only` and nothing else runs — no extra request, no
+/// disk read, byte for byte the behaviour from before this existed.
 pub async fn fetch_subscription(sub_url: &str) -> Result<Subscription, AppError> {
+    if !manifest::manifest_enabled() {
+        return fetch_subscription_only(sub_url).await;
+    }
+    let (sub_result, manifest_result) =
+        tokio::join!(fetch_subscription_only(sub_url), fetch_manifest_servers(sub_url));
+    manifest::merge(sub_result, manifest_result)
+}
+
+/// Today's fetch, unchanged — pulled out of `fetch_subscription` so the
+/// manifest branch above can run it CONCURRENTLY with
+/// `fetch_manifest_servers` instead of after it.
+async fn fetch_subscription_only(sub_url: &str) -> Result<Subscription, AppError> {
     let urls = candidate_urls(sub_url)?;
     let answer = race_hosts(&urls).await?;
 
@@ -601,6 +721,108 @@ fn retry_without_inline(err: &AppError) -> bool {
 /// Compatibility entry point for `lib.rs`, which asks only for the list.
 pub async fn fetch_all_servers(sub_url: &str) -> Result<Vec<ServerConfig>, AppError> {
     Ok(fetch_subscription(sub_url).await?.servers)
+}
+
+/// Fetch, verify and fall back for the Watafast manifest — MANIFEST-v1.md in
+/// full, called only from `fetch_subscription` once it has already checked
+/// `manifest::manifest_enabled()`.
+///
+/// `None` whenever the manifest contributes nothing this round: the link
+/// carries no readable token, every ladder address failed or refused, or what
+/// came back did not verify AND nothing usable was cached either. Every one
+/// of those leaves `fetch_subscription`'s result exactly what
+/// `fetch_subscription_only` produced — see `manifest::merge`.
+async fn fetch_manifest_servers(sub_url: &str) -> Option<(Vec<ServerConfig>, String)> {
+    let token = subscription_token(sub_url)?;
+    let token_hash = manifest::token_hash_hex(&token);
+    let now_ms = now_millis();
+
+    // The cached envelope is re-verified fresh on every call — never trusted
+    // for its bytes alone. A token change, a key rotation, or the clock
+    // crossing the skew window must all be able to retire it, and this is
+    // the one check that does that without a separate migration step.
+    let cached = manifest::cached_envelope().and_then(|(envelope, host)| {
+        manifest::verify_envelope(envelope.as_bytes(), manifest::MANIFEST_KEYS, &token, None, now_ms)
+            .ok()
+            .map(|verified| (verified, host))
+    });
+    let extra_hosts = cached
+        .as_ref()
+        .map(|(verified, _)| manifest::sanitize_extra_hosts(&verified.hosts))
+        .unwrap_or_default();
+    let highest = manifest::highest_known_version(&token_hash);
+
+    let fresh = fetch_fresh_manifest(sub_url, &extra_hosts, &token, &token_hash, highest, now_ms).await;
+
+    let (verified, host) = fresh.or(cached)?;
+    if !verified.account_active {
+        // MANIFEST-v1.md: `account.status != active` sends `locations: []`
+        // server-side; this is the belt this app wears in addition to that
+        // suspenders — the subscription's own stub/error path is what must
+        // speak for a non-active account, never a manifest.
+        return None;
+    }
+    // iOS runs sing-box, which has no XHTTP transport — the exact split
+    // `engine_supports_on` already draws for the subscription list.
+    let servers = manifest::build_servers(&verified, cfg!(target_os = "ios"));
+    if servers.is_empty() {
+        return None;
+    }
+    Some((servers, host))
+}
+
+/// The live half of `fetch_manifest_servers`: race the manifest's own ladder
+/// and verify what a 200 brings back. `None` on anything short of a fresh,
+/// valid manifest — the caller falls back to the cache in that case.
+async fn fetch_fresh_manifest(
+    sub_url: &str,
+    extra_hosts: &[String],
+    token: &str,
+    token_hash: &str,
+    highest_known_version: Option<u64>,
+    now_ms: u64,
+) -> Option<(manifest::Verified, String)> {
+    let urls = manifest_urls(sub_url, extra_hosts).ok()?;
+    let answer = race_hosts(&urls).await.ok()?;
+    if answer.status() != 200 || answer.body().trim().is_empty() {
+        // 404 (unknown token) and 403 (second device) are final and correct
+        // to stop on; 429/5xx already exhausted the whole ladder inside
+        // `race_hosts` before landing here. Either way: no fresh manifest.
+        return None;
+    }
+    match manifest::verify_envelope(
+        answer.body().as_bytes(),
+        manifest::MANIFEST_KEYS,
+        token,
+        highest_known_version,
+        now_ms,
+    ) {
+        Ok(verified) => {
+            manifest::record_verified(
+                token_hash,
+                verified.manifest_version,
+                answer.body().to_string(),
+                answer.host().to_string(),
+            );
+            Some((verified, answer.host().to_string()))
+        }
+        Err(reason) => {
+            // Reason only, never the bytes that produced it.
+            crate::logger::log(
+                "warn",
+                "watafast-manifest",
+                &format!("манифест отклонён: {reason:?}"),
+            );
+            None
+        }
+    }
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Run the ladder: start the first address now, let each next one join 1.2 s
@@ -1218,7 +1440,10 @@ fn url_fragment(url: &Url) -> String {
 ///
 /// A backend bug has been known to wrap the SNI that way, and an SNI with
 /// brackets in it makes the handshake fail on every connection.
-fn clean_sni(raw: &str) -> String {
+///
+/// `pub(crate)`: the Watafast manifest applies the same cleanup to a
+/// candidate's `sni` before it ever reaches the engine.
+pub(crate) fn clean_sni(raw: &str) -> String {
     let s = raw.trim();
     let candidate = if let Some(start) = s.find('[') {
         if let Some(end) = s[start + 1..].find(']') {
@@ -2420,6 +2645,61 @@ mod tests {
         assert_eq!(err.code, ErrorCode::SubUnreachable);
         // Never the URL: it carries the subscription token.
         assert!(err.detail.is_none(), "{:?}", err.detail);
+    }
+
+    // ── Watafast manifest: token extraction and URL building ────────────────
+
+    #[test]
+    fn the_token_is_the_last_path_segment() {
+        let url = Url::parse("https://proxysvpn.com/api/sub/abcdef0123456789").unwrap();
+        assert_eq!(subscription_token_from(&url).as_deref(), Some("abcdef0123456789"));
+    }
+
+    #[test]
+    fn a_trailing_slash_does_not_lose_the_token() {
+        // `validate_link` (lib.rs) explicitly accepts this exact shape.
+        let url = Url::parse("https://proxysvpn.com/api/sub/abcdef0123456789/").unwrap();
+        assert_eq!(subscription_token_from(&url).as_deref(), Some("abcdef0123456789"));
+    }
+
+    #[test]
+    fn several_trailing_slashes_still_find_the_token() {
+        let url = Url::parse("https://proxysvpn.com/api/sub/abcdef0123456789///").unwrap();
+        assert_eq!(subscription_token_from(&url).as_deref(), Some("abcdef0123456789"));
+    }
+
+    #[test]
+    fn a_bare_root_path_has_no_token() {
+        let url = Url::parse("https://proxysvpn.com/").unwrap();
+        assert_eq!(subscription_token_from(&url), None);
+        let url = Url::parse("https://proxysvpn.com").unwrap();
+        assert_eq!(subscription_token_from(&url), None);
+    }
+
+    #[test]
+    fn subscription_token_agrees_with_subscription_token_from() {
+        assert_eq!(
+            subscription_token("https://proxysvpn.com/api/sub/tok12345/"),
+            Some("tok12345".to_string())
+        );
+        assert_eq!(subscription_token("not a url"), None);
+    }
+
+    #[test]
+    fn manifest_urls_use_the_watafast_path_and_the_extracted_token_even_with_a_trailing_slash() {
+        let urls = manifest_urls("https://proxysvpn.com/api/sub/tok12345/", &[]).unwrap();
+        assert!(!urls.is_empty());
+        for url in &urls {
+            assert!(
+                url.contains("/api/watafast/v1/tok12345"),
+                "trailing slash on the subscription link must not break the manifest path: {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_urls_fail_closed_when_the_link_carries_no_token() {
+        assert!(manifest_urls("https://proxysvpn.com/", &[]).is_err());
     }
 
     // ── Routing ────────────────────────────────────────────────────────────
