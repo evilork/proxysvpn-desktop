@@ -104,6 +104,9 @@ const WARM_BUDGET: Duration = Duration::from_secs(12);
 /// When the second warm-up racer starts: late enough not to double every
 /// handshake on a healthy path, early enough to cut a lost-SYN tail.
 const WARM_SECOND_RACER_AFTER: Duration = Duration::from_millis(700);
+
+/// The name the race partner answers under in the warm-up race.
+const RACE_WINNER_PARTNER: &str = "другой протокол";
 const PROBE_TIMEOUT: Duration = Duration::from_millis(2500);
 
 /// Терпение для пробы по ХОЛОДНОМУ туннелю.
@@ -443,6 +446,9 @@ struct Session {
     network: Option<String>,
     /// Which location last worked on which network.
     net_memory: netmem::NetworkMemory,
+    /// A node on another transport to race against the chosen one at the next
+    /// engine start (Watafast). Taken by `start_on`, so it lives one start.
+    pending_race: Option<usize>,
 
     sub_fetched_at: Option<u64>,
     sub_used_fallback: bool,
@@ -507,6 +513,7 @@ impl Session {
             // Tests start from nothing: the real file on the developer's disk
             // must not decide a test.
             net_memory: if cfg!(test) { netmem::NetworkMemory::default() } else { netmem::load() },
+            pending_race: None,
             sub_fetched_at: None,
             sub_used_fallback: false,
             sub_source_host: None,
@@ -1084,6 +1091,40 @@ impl Session {
             self.demoted.insert(id, Instant::now() + DEMOTION);
         }
     }
+
+    /// A node on ANOTHER transport to race against `chosen` (Watafast).
+    ///
+    /// Only VLESS against VLESS: both ride one xray. Same exit first (the
+    /// same country, «Британия» and «Британия · XHTTP»): then only the
+    /// transport differs, and the race asks exactly "which way gets through
+    /// here". Then the fastest measured, then list order. `None` when every
+    /// other node speaks the chosen transport or is demoted.
+    fn race_partner(&self, chosen: usize) -> Option<usize> {
+        let a = self.servers.get(chosen)?;
+        if !matches!(a, ServerConfig::Vless(_)) {
+            return None;
+        }
+        let a_proto = a.protocol_label();
+        let a_place = split_label(a.remark()).1.to_lowercase();
+        let now = Instant::now();
+        (0..self.servers.len())
+            .filter(|&i| i != chosen)
+            .filter(|&i| matches!(self.servers[i], ServerConfig::Vless(_)))
+            .filter(|&i| self.servers[i].protocol_label() != a_proto)
+            .filter(|&i| {
+                self.id_of(i)
+                    .map(|id| self.demoted.get(&id).is_none_or(|until| *until <= now))
+                    .unwrap_or(true)
+            })
+            .min_by_key(|&i| {
+                let place = split_label(self.servers[i].remark()).1.to_lowercase();
+                let rtt = self
+                    .id_of(i)
+                    .and_then(|id| self.rtt.get(&id).copied())
+                    .unwrap_or(u32::MAX);
+                (place != a_place, rtt, i)
+            })
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1095,9 +1136,18 @@ impl Core {
     /// Bring up the chain for `server`, leaving tun2socks alone if it already
     /// runs. That last part is the soft location change: the device, its
     /// address and both halves of the default route are never touched.
-    async fn engine_start(&self, server: &ServerConfig) -> Result<(), AppError> {
+    async fn engine_start(
+        &self,
+        server: &ServerConfig,
+        partner: Option<&ServerConfig>,
+    ) -> Result<(), AppError> {
         let physical = tun::physical_default().await?;
-        let config = xray_manager::build_runtime_config(server, &physical.interface)?;
+        let config = match partner {
+            Some(ServerConfig::Vless(other)) if matches!(server, ServerConfig::Vless(_)) => {
+                xray_manager::build_race_config(server, other, &physical.interface)?
+            }
+            _ => xray_manager::build_runtime_config(server, &physical.interface)?,
+        };
 
         // Hysteria first: xray's outbound points at its SOCKS port, and an
         // xray that starts against a port nobody listens on spends its first
@@ -1164,7 +1214,11 @@ impl Core {
 impl Core {
     /// There is no second half on iOS: the extension owns the device, the
     /// routes and the engine, and starts all three from one config.
-    async fn engine_start(&self, server: &ServerConfig) -> Result<(), AppError> {
+    async fn engine_start(
+        &self,
+        server: &ServerConfig,
+        _partner: Option<&ServerConfig>,
+    ) -> Result<(), AppError> {
         ios_vpn::connect(server).await.map_err(|e| {
             logger::log("error", "ios-vpn", &format!("connect failed: {e}"));
             AppError::new(ErrorCode::EngineStartFailed)
@@ -1310,9 +1364,34 @@ impl Core {
                     (Some(_), false) => "сеть: новая для приложения",
                 },
             );
-            s.choose_server()
-                .ok_or_else(|| AppError::new(ErrorCode::SubEmpty))?
+            let index = s
+                .choose_server()
+                .ok_or_else(|| AppError::new(ErrorCode::SubEmpty))?;
+            // Race only where we know nothing: no pin by hand, no winner on
+            // this network. A known network starts on its winner alone.
+            let pinned = s
+                .pinned
+                .as_ref()
+                .is_some_and(|p| p.at + PIN_LIFETIME > Instant::now());
+            s.pending_race = if cfg!(target_os = "macos") && !pinned && !known {
+                s.race_partner(index)
+            } else {
+                None
+            };
+            if let Some(partner) = s.pending_race {
+                logger::log(
+                    "info",
+                    "vpn",
+                    &format!(
+                        "гонка протоколов: {} против {}",
+                        s.servers[index].protocol_label(),
+                        s.servers[partner].protocol_label()
+                    ),
+                );
+            }
+            index
         };
+        let race_partner = self.session.lock().await.pending_race;
 
         // Снять адреса ступеней ПОКА РЕЗОЛВЕР СПОКОЕН.
         //
@@ -1373,6 +1452,24 @@ impl Core {
         racers.spawn(async move {
             ("движок", probe::warm_through_socks(tun::SOCKS_PORT, warm_host, warm_ip, warm_port, WARM_BUDGET).await)
         });
+        // The other transport, through its own port (Watafast): when it
+        // answers first, the session moves to it below.
+        #[cfg(target_os = "macos")]
+        if race_partner.is_some() {
+            racers.spawn(async move {
+                (
+                    RACE_WINNER_PARTNER,
+                    probe::warm_through_socks(
+                        xray_manager::RACE_SOCKS_PORT,
+                        warm_host,
+                        warm_ip,
+                        warm_port,
+                        WARM_BUDGET,
+                    )
+                    .await,
+                )
+            });
+        }
         let mut winner: Option<&'static str> = None;
         while let Some(done) = racers.join_next().await {
             if let Ok((name, true)) = done {
@@ -1384,6 +1481,16 @@ impl Core {
         racers.abort_all();
         let warm_ms = warm_started.elapsed().as_millis();
         let warmed = winner.is_some();
+        if let (Some(RACE_WINNER_PARTNER), Some(partner)) = (winner, race_partner) {
+            // The other transport got through first: move the session to it,
+            // tunnel kept (only the engine restarts, ~0.7 s). The chosen one
+            // is not demoted: losing a race is not failing.
+            logger::log("info", "vpn", "гонку выиграл другой протокол, переходим на него");
+            self.start_on(partner, generation, true).await?;
+            if !self.is_current(generation).await {
+                return Ok(());
+            }
+        }
 
         // Резолвер через узел - в фоне: первое имя, которое спросит человек,
         // не должно платить за холодный DoH, но и щит этого ждать не должен.
@@ -1603,7 +1710,11 @@ impl Core {
         );
 
         self.set_step(VpnStep::StartingEngine).await;
-        self.engine_start(&server).await?;
+        let partner = {
+            let mut s = self.session.lock().await;
+            s.pending_race.take().and_then(|i| s.servers.get(i).cloned())
+        };
+        self.engine_start(&server, partner.as_ref()).await?;
         if !self.is_current(generation).await {
             return Ok(());
         }
@@ -3725,6 +3836,46 @@ mod tests {
             remark: remark.into(),
             transport: crate::subscription::VlessTransport::Tcp,
         })
+    }
+
+    /// The race partner speaks another transport, same country first.
+    #[test]
+    fn the_race_partner_is_another_transport_and_the_same_exit_first() {
+        let mut s = Session::new();
+        let mut xhttp = match vless("🇬🇧 Британия · XHTTP") {
+            ServerConfig::Vless(c) => c,
+            _ => unreachable!(),
+        };
+        xhttp.transport = crate::subscription::VlessTransport::Xhttp {
+            path: "/p".into(),
+            mode: crate::subscription::XhttpMode::StreamOne,
+            host: None,
+        };
+        let mut vision_uk = match vless("🇬🇧 Британия") {
+            ServerConfig::Vless(c) => c,
+            _ => unreachable!(),
+        };
+        vision_uk.flow = "xtls-rprx-vision".into();
+        let mut vision_de = match vless("🇩🇪 Германия") {
+            ServerConfig::Vless(c) => c,
+            _ => unreachable!(),
+        };
+        vision_de.flow = "xtls-rprx-vision".into();
+        s.servers = vec![
+            ServerConfig::Vless(vision_de),
+            ServerConfig::Vless(vision_uk),
+            ServerConfig::Vless(xhttp),
+        ];
+        // Chosen: Britain on Vision; partner: Britain on XHTTP (same exit).
+        assert_eq!(s.race_partner(1), Some(2));
+        // Chosen: Germany on Vision; the only other transport is XHTTP.
+        assert_eq!(s.race_partner(0), Some(2));
+        // Chosen: XHTTP; partner: Vision in the same country, not Germany.
+        assert_eq!(s.race_partner(2), Some(1));
+        // A demoted partner is not raced.
+        let id = s.id_of(2).unwrap();
+        s.demoted.insert(id, Instant::now() + Duration::from_secs(60));
+        assert_eq!(s.race_partner(0), None, "no other transport left to race");
     }
 
     /// A known network starts on its own winner; an unknown one as before.

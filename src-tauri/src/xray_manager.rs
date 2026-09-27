@@ -187,7 +187,78 @@ pub fn build_runtime_config(
     server: &ServerConfig,
     physical_iface: &str,
 ) -> Result<Value, AppError> {
-    let mut config = match server {
+    let mut config = unbound_config(server)?;
+    bind_outbounds_to_interface(&mut config, physical_iface)?;
+    check_front_port(&config)?;
+    Ok(config)
+}
+
+/// Local SOCKS port of the race partner (Watafast): while the tunnel rides the
+/// chosen node, the warm-up dials a node on ANOTHER transport through here,
+/// and whichever answers first carries the session.
+pub const RACE_SOCKS_PORT: u16 = 10809;
+/// Tag of the partner's outbound.
+pub const RACE_TAG: &str = "race-b";
+
+/// The runtime config for `server` with `partner` added as a second outbound,
+/// reachable only through `RACE_SOCKS_PORT`. The tunnel's traffic still goes
+/// to `server`: the partner carries nothing but the warm-up until it wins.
+pub fn build_race_config(
+    server: &ServerConfig,
+    partner: &VlessConfig,
+    physical_iface: &str,
+) -> Result<Value, AppError> {
+    if !matches!(server, ServerConfig::Vless(_)) {
+        return Err(config_bug("a race needs a VLESS node to ride the tunnel"));
+    }
+    let mut config = unbound_config(server)?;
+    add_race_partner(&mut config, partner)?;
+    bind_outbounds_to_interface(&mut config, physical_iface)?;
+    check_front_port(&config)?;
+    Ok(config)
+}
+
+fn add_race_partner(config: &mut Value, partner: &VlessConfig) -> Result<(), AppError> {
+    let theirs = build_xray_config(partner);
+    let mut outbound = theirs
+        .get("outbounds")
+        .and_then(Value::as_array)
+        .and_then(|list| list.iter().find(|o| o.get("tag").and_then(Value::as_str) == Some("proxy")))
+        .cloned()
+        .ok_or_else(|| config_bug("the partner config has no proxy outbound"))?;
+    outbound["tag"] = json!(RACE_TAG);
+
+    config
+        .get_mut("outbounds")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| config_bug("config has no outbounds array"))?
+        .push(outbound);
+    config
+        .get_mut("inbounds")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| config_bug("config has no inbounds array"))?
+        .push(json!({
+            "tag": "race-in",
+            "listen": "127.0.0.1",
+            "port": RACE_SOCKS_PORT,
+            "protocol": "socks",
+            "settings": { "udp": false, "auth": "noauth" }
+        }));
+    // First rule: nothing else may catch the race inbound's traffic.
+    config
+        .pointer_mut("/routing/rules")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| config_bug("config has no routing rules"))?
+        .insert(
+            0,
+            json!({ "type": "field", "inboundTag": ["race-in"], "outboundTag": RACE_TAG }),
+        );
+    Ok(())
+}
+
+/// The config before it is bound to the physical interface.
+fn unbound_config(server: &ServerConfig) -> Result<Value, AppError> {
+    let config = match server {
         ServerConfig::Vless(cfg) => build_xray_config(cfg),
         ServerConfig::Hy2(_) => {
             let mut base = build_xray_config(&placeholder_vless());
@@ -195,9 +266,6 @@ pub fn build_runtime_config(
             base
         }
     };
-
-    bind_outbounds_to_interface(&mut config, physical_iface)?;
-    check_front_port(&config)?;
     Ok(config)
 }
 
@@ -459,6 +527,59 @@ pub async fn port_in_use(port: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// Live check, off by default: the race config for two real links,
+    /// written out for the bundled xray. Links come from the environment.
+    #[test]
+    #[ignore]
+    fn live_race_config() {
+        let a = crate::subscription::parse_vless_url(&std::env::var("WATAFAST_LIVE_LINK").unwrap()).unwrap();
+        let b = crate::subscription::parse_vless_url(&std::env::var("WATAFAST_LIVE_LINK2").unwrap()).unwrap();
+        let cfg = build_race_config(&ServerConfig::Vless(a), &b, "en0").unwrap();
+        std::fs::write(std::env::var("WATAFAST_LIVE_OUT").unwrap(), serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_race_adds_the_partner_behind_its_own_port_and_leaves_the_tunnel_alone() {
+        let main = ServerConfig::Vless(placeholder_vless());
+        let mut partner = placeholder_vless();
+        partner.host = "203.0.113.9".into();
+        partner.transport = crate::subscription::VlessTransport::Xhttp {
+            path: "/p".into(),
+            mode: crate::subscription::XhttpMode::StreamOne,
+            host: None,
+        };
+        partner.flow = String::new();
+        let config = build_race_config(&main, &partner, "en0").expect("race config");
+
+        // The tunnel's port is still first and still goes to the chosen node.
+        assert_eq!(config["inbounds"][0]["port"], u64::from(FRONT_SOCKS_PORT));
+        let race_in = config["inbounds"].as_array().unwrap().iter().find(|i| i["tag"] == "race-in").expect("race inbound");
+        assert_eq!(race_in["port"], u64::from(RACE_SOCKS_PORT));
+        assert_eq!(race_in["listen"], "127.0.0.1", "never on a public address");
+        assert_eq!(config["routing"]["rules"][0]["inboundTag"][0], "race-in");
+        assert_eq!(config["routing"]["rules"][0]["outboundTag"], RACE_TAG);
+
+        let race = outbound(&config, RACE_TAG);
+        assert_eq!(race["streamSettings"]["network"], "xhttp");
+        assert_eq!(race["settings"]["vnext"][0]["address"], "203.0.113.9");
+        assert_eq!(race["streamSettings"]["sockopt"]["interface"], "en0", "the partner leaves by the real network too");
+        assert_eq!(outbound(&config, "proxy")["settings"]["vnext"][0]["address"], main.host());
+    }
+
+    #[test]
+    fn hysteria_does_not_race() {
+        let hy2 = ServerConfig::Hy2(crate::subscription::Hy2Config {
+            password: "p".into(),
+            host: "203.0.113.7".into(),
+            port: 443,
+            sni: "www.bing.com".into(),
+            pin_sha256: String::new(),
+            insecure: true,
+            remark: "NL".into(),
+        });
+        assert!(build_race_config(&hy2, &placeholder_vless(), "en0").is_err());
+    }
     use super::*;
     use crate::subscription::Hy2Config;
 
