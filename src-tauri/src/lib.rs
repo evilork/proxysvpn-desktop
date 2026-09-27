@@ -221,6 +221,9 @@ struct LocationEntry {
     /// A badge the SERVER wrote ("12,4 из 50 ГБ"), never assembled here.
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<String>,
+    /// «VLESS · Vision», «VLESS · XHTTP», «Hysteria2»: a technology name,
+    /// never an address or a port (ServerConfig::protocol_label).
+    protocol: &'static str,
     recent: bool,
     selected: bool,
 }
@@ -903,6 +906,7 @@ impl Session {
                 flag,
                 quality,
                 note,
+                protocol: server.protocol_label(),
             });
         }
         out

@@ -201,6 +201,21 @@ impl ServerConfig {
             ServerConfig::Hy2(_) => "Hysteria2",
         }
     }
+
+    /// What the list of countries shows under a location: the protocol and,
+    /// for VLESS, what runs inside REALITY. Names of technologies, the same in
+    /// every language. Without it two «Британия» rows — Vision and XHTTP —
+    /// looked identical (owner, 27.09.2026).
+    pub fn protocol_label(&self) -> &'static str {
+        match self {
+            ServerConfig::Vless(c) => match c.transport {
+                VlessTransport::Xhttp { .. } => "VLESS · XHTTP",
+                VlessTransport::Tcp if c.flow.starts_with("xtls-rprx-vision") => "VLESS · Vision",
+                VlessTransport::Tcp => "VLESS · TCP",
+            },
+            ServerConfig::Hy2(_) => "Hysteria2",
+        }
+    }
 }
 
 /// `sing_box`: the iOS build runs sing-box (`singbox.rs`), which has no XHTTP
@@ -2555,6 +2570,17 @@ mod tests {
         let out = std::env::var("WATAFAST_LIVE_OUT").expect("WATAFAST_LIVE_OUT");
         let cfg = build_xray_config_with_routing(&parse_vless_url(&link).expect("link parses"), None);
         std::fs::write(&out, serde_json::to_string_pretty(&cfg).expect("serializes")).expect("written");
+    }
+
+    #[test]
+    fn every_kind_of_entry_names_its_protocol() {
+        assert_eq!(ServerConfig::Vless(vless_fixture()).protocol_label(), "VLESS · Vision");
+        assert_eq!(ServerConfig::Vless(xhttp_fixture()).protocol_label(), "VLESS · XHTTP");
+        let plain = parse_vless_url(&VLESS_LINE.replace("&flow=xtls-rprx-vision", "")).expect("parses");
+        assert_eq!(ServerConfig::Vless(plain).protocol_label(), "VLESS · TCP");
+        let hy2 = parse_hy2_url("hysteria2://secret@nl.example.net:443?sni=www.bing.com&insecure=1#NL")
+            .expect("hy2 parses");
+        assert_eq!(ServerConfig::Hy2(hy2).protocol_label(), "Hysteria2");
     }
 
     #[test]

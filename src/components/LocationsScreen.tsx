@@ -15,9 +15,14 @@
 // числа НЕТ, и на их месте по-прежнему слово. Ноль, прочерк и «ошибка» там
 // недопустимы - именно так когда-то и родился вечный спиннер.
 //
-// Nothing here carries an address, a port or a protocol — not in the row, not
-// in `aria-label`, not in a tooltip. An unnamed entry becomes "Сервер №3",
-// never its host name.
+// Nothing here carries an address or a port — not in the row, not in
+// `aria-label`, not in a tooltip. An unnamed entry becomes "Сервер №3", never
+// its host name.
+//
+// The protocol IS shown, since 27.09.2026 (owner): «Британия» on Vision and
+// «Британия · XHTTP» were two identical rows. The title is the whole name the
+// service wrote (the part after «·» included), and the line under it says the
+// protocol next to the milliseconds.
 
 import { useCallback, useEffect, useState } from "react";
 
@@ -127,12 +132,18 @@ export default function LocationsScreen({
   const recent = items?.filter((entry) => entry.recent) ?? [];
   const all = items ?? [];
 
+  /** The name exactly as the service wrote it: «Британия · XHTTP». */
+  const titleOf = (entry: LocationEntry, index: number) => {
+    const base = entry.label || t("loc.unnamed", { n: index + 1 });
+    return entry.note ? `${base} · ${entry.note}` : base;
+  };
+
   const renderRow = (entry: LocationEntry, index: number) => (
     <button
       key={entry.id}
       type="button"
       className="row"
-      onClick={() => void pick(entry.id, entry.label)}
+      onClick={() => void pick(entry.id, titleOf(entry, index))}
       disabled={busy}
       data-selected={entry.selected ? "true" : undefined}
       aria-current={entry.selected ? "true" : undefined}
@@ -141,13 +152,12 @@ export default function LocationsScreen({
         {entry.flag ?? flagFor(entry.label)}
       </span>
       <span className="row-main">
-        <span className="row-title">
-          {entry.label || t("loc.unnamed", { n: index + 1 })}
-        </span>
+        <span className="row-title">{titleOf(entry, index)}</span>
         <span className="row-sub">
           {entry.rttMs !== undefined
             ? t("loc.ms", { ms: entry.rttMs })
-            : (entry.note ?? t(QUALITY_KEY[entry.quality]))}
+            : t(QUALITY_KEY[entry.quality])}
+          {entry.protocol ? ` · ${entry.protocol}` : ""}
         </span>
       </span>
       {entry.selected ? <span className="badge">{t("loc.pinned")}</span> : null}

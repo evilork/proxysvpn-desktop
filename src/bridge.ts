@@ -76,9 +76,10 @@ import {
 // the contract — src/types.ts may only grow together with Rust, and that file
 // is not ours to edit.
 //
-// Note what a `LocationEntry` does NOT carry: no host, no port, no protocol.
-// The rule "node addresses are never shown" is enforced by the shape of the
-// data, not by remembering to leave a field out of the JSX.
+// Note what a `LocationEntry` does NOT carry: no host, no port. The rule "node
+// addresses are never shown" is enforced by the shape of the data, not by
+// remembering to leave a field out of the JSX. The protocol name IS carried
+// since 27.09.2026 (owner's decision): it is a technology, not an address.
 
 export type LocationQuality = "good" | "ok" | "poor" | "blocked" | "unknown";
 
@@ -122,6 +123,12 @@ export interface LocationEntry {
   rttMs?: number;
   /** Badge the SERVER wrote, e.g. "12,4 из 50 ГБ". Never assembled here. */
   note?: string;
+  /**
+   * «VLESS · Vision», «VLESS · XHTTP», «Hysteria2» — a technology name from
+   * the core, never an address or a port. Shown since 27.09.2026 by the
+   * owner's decision: two «Британия» rows had nothing to tell them apart.
+   */
+  protocol: string;
   /** Among the last three the person used. */
   recent?: boolean;
   /** Pinned by hand for 24 hours. Nothing pinned means automatic. */
@@ -504,13 +511,14 @@ export function applyScenario(scenario: MockScenario): void {
 }
 
 const MOCK_LOCATIONS: LocationEntry[] = [
-  { id: "nl", label: "Нидерланды", flag: "🇳🇱", quality: "good", recent: true },
-  { id: "de", label: "Германия", flag: "🇩🇪", quality: "ok", recent: true },
+  { id: "nl", label: "Нидерланды", flag: "🇳🇱", quality: "good", recent: true, protocol: "Hysteria2" },
+  { id: "de", label: "Германия", flag: "🇩🇪", quality: "ok", recent: true, protocol: "VLESS · Vision" },
   // `note` imitates the server-written label: the app never assembles it.
-  { id: "us", label: "США", flag: "🇺🇸", quality: "unknown", note: "12,4 из 50 ГБ" },
-  { id: "uk", label: "Великобритания", flag: "🇬🇧", quality: "blocked" },
-  { id: "se", label: "Швеция", flag: "🇸🇪", quality: "unknown" },
-  { id: "fr", label: "Франция", flag: "🇫🇷", quality: "poor" },
+  { id: "us", label: "США", flag: "🇺🇸", quality: "unknown", note: "12,4 из 50 ГБ", protocol: "VLESS · Vision" },
+  { id: "uk", label: "Великобритания", flag: "🇬🇧", quality: "blocked", protocol: "VLESS · Vision" },
+  { id: "uk-x", label: "Великобритания", flag: "🇬🇧", quality: "good", note: "XHTTP", protocol: "VLESS · XHTTP" },
+  { id: "se", label: "Швеция", flag: "🇸🇪", quality: "unknown", protocol: "VLESS · Vision" },
+  { id: "fr", label: "Франция", flag: "🇫🇷", quality: "poor", protocol: "VLESS · Vision" },
 ];
 
 const CONNECT_STEPS: [VpnStep, number][] = [
