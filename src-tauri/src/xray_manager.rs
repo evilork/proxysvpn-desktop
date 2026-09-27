@@ -174,6 +174,7 @@ fn placeholder_vless() -> VlessConfig {
         flow: String::new(),
         spider_x: String::new(),
         remark: String::new(),
+        transport: crate::subscription::VlessTransport::Tcp,
     }
 }
 
@@ -474,6 +475,7 @@ mod tests {
             flow: "xtls-rprx-vision".into(),
             spider_x: String::new(),
             remark: "Германия".into(),
+            transport: crate::subscription::VlessTransport::Tcp,
         })
     }
 

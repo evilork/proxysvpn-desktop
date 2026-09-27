@@ -3467,6 +3467,7 @@ mod tests {
             flow: String::new(),
             spider_x: String::new(),
             remark: remark.into(),
+            transport: crate::subscription::VlessTransport::Tcp,
         })
     }
 

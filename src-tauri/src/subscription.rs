@@ -67,6 +67,84 @@ pub struct VlessConfig {
     pub flow: String,
     pub spider_x: String,
     pub remark: String,
+    /// What runs inside the REALITY handshake, from the link's `type=`.
+    pub transport: VlessTransport,
+}
+
+/// Transport of a VLESS entry.
+///
+/// Until 24.09.2026 every entry was TCP, and the builder had `"tcp"` written
+/// into it. The service now also sends XHTTP entries («Британия · XHTTP»):
+/// the same REALITY handshake, then HTTP requests inside it instead of one raw
+/// stream. Built as TCP, such an entry never connects and looks exactly like a
+/// dead node — which is what this app did with it until 27.09.2026.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum VlessTransport {
+    /// `type=tcp` or no `type` at all. Vision (`flow`) lives only here.
+    #[default]
+    Tcp,
+    /// `type=xhttp` with the `path`, `mode` and optional `host` of the link.
+    Xhttp {
+        path: String,
+        mode: XhttpMode,
+        host: Option<String>,
+    },
+}
+
+/// XHTTP client modes Xray accepts. The service always names one explicitly
+/// (`lib/inbound-transport.ts`): "auto" resolves differently per client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XhttpMode {
+    Auto,
+    PacketUp,
+    StreamUp,
+    StreamOne,
+}
+
+impl XhttpMode {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "auto" => Some(Self::Auto),
+            "packet-up" => Some(Self::PacketUp),
+            "stream-up" => Some(Self::StreamUp),
+            "stream-one" => Some(Self::StreamOne),
+            _ => None,
+        }
+    }
+
+    /// The value for `xhttpSettings.mode`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::PacketUp => "packet-up",
+            Self::StreamUp => "stream-up",
+            Self::StreamOne => "stream-one",
+        }
+    }
+}
+
+/// The request path the service may send: "/" plus RFC 3986 unreserved
+/// characters and "/", at most 128 in all — the rule of the service's own
+/// validator (`isXhttpSettings`), so anything it would refuse is refused here.
+fn valid_xhttp_path(path: &str) -> bool {
+    path.len() <= 128
+        && path.starts_with('/')
+        && path
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'/' | b'-'))
+}
+
+/// A DNS name for the XHTTP `host`: labels of letters, digits and inner
+/// hyphens, dot-separated, 253 characters at most.
+fn valid_xhttp_host(host: &str) -> bool {
+    host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +200,22 @@ impl ServerConfig {
             ServerConfig::Vless(_) => "VLESS",
             ServerConfig::Hy2(_) => "Hysteria2",
         }
+    }
+}
+
+/// Whether this build's engine can run the entry.
+pub fn engine_supports(server: &ServerConfig) -> bool {
+    engine_supports_on(server, cfg!(target_os = "ios"))
+}
+
+/// `sing_box`: the iOS build runs sing-box (`singbox.rs`), which has no XHTTP
+/// transport — `transport/` of SagerNet/sing-box has none as of 27.09.2026.
+/// Built there, an XHTTP entry would go out as plain TCP and fail every time
+/// while looking like a dead node, so that build does not list it at all.
+fn engine_supports_on(server: &ServerConfig, sing_box: bool) -> bool {
+    match server {
+        ServerConfig::Vless(c) => !(sing_box && matches!(c.transport, VlessTransport::Xhttp { .. })),
+        ServerConfig::Hy2(_) => true,
     }
 }
 
@@ -654,6 +748,9 @@ fn interpret_response(
         }
 
         match parse_server_line(line) {
+            // Left out, not counted as unreadable: the line is fine, this
+            // build's engine just cannot run it (see engine_supports).
+            Ok(cfg) if !engine_supports(&cfg) => {}
             Ok(cfg) => servers.push(cfg),
             // The line is not lost: the count travels to the window, which
             // says "одну локацию не удалось прочитать" instead of quietly
@@ -1108,6 +1205,10 @@ pub fn parse_vless_url(raw: &str) -> Result<VlessConfig, AppError> {
     let mut fingerprint = "chrome".to_string();
     let mut flow = String::new();
     let mut spider_x = String::new();
+    let mut network: Option<String> = None;
+    let mut xhttp_path: Option<String> = None;
+    let mut xhttp_mode: Option<String> = None;
+    let mut xhttp_host: Option<String> = None;
 
     for (k, v) in u.query_pairs() {
         match k.as_ref() {
@@ -1118,9 +1219,40 @@ pub fn parse_vless_url(raw: &str) -> Result<VlessConfig, AppError> {
             "fp" => fingerprint = v.into_owned(),
             "flow" => flow = v.into_owned(),
             "spx" => spider_x = v.into_owned(),
+            "type" => network = Some(v.into_owned()),
+            "path" => xhttp_path = Some(v.into_owned()),
+            "mode" => xhttp_mode = Some(v.into_owned()),
+            "host" => xhttp_host = Some(v.into_owned()),
             _ => {}
         }
     }
+
+    let transport = match network.as_deref() {
+        None | Some("") | Some("tcp") => VlessTransport::Tcp,
+        Some("xhttp") => {
+            let path = xhttp_path.filter(|p| valid_xhttp_path(p)).ok_or_else(malformed)?;
+            // Absent means what Xray itself does without it; present and
+            // unknown is a line we cannot build honestly.
+            let mode = match xhttp_mode.as_deref() {
+                None | Some("") => XhttpMode::Auto,
+                Some(m) => XhttpMode::parse(m).ok_or_else(malformed)?,
+            };
+            let host = match xhttp_host {
+                None => None,
+                Some(h) if h.is_empty() => None,
+                Some(h) if valid_xhttp_host(&h) => Some(h),
+                Some(_) => return Err(malformed()),
+            };
+            // Vision is a TCP-only feature: the service never puts `flow` on
+            // an XHTTP line, and one that did would not connect.
+            flow.clear();
+            VlessTransport::Xhttp { path, mode, host }
+        }
+        // ws, grpc, httpupgrade…: nothing here builds them, and a TCP config
+        // in their place would fail every time while looking like a dead
+        // node. Counted as unreadable instead, so the window says so.
+        Some(_) => return Err(malformed()),
+    };
 
     // REALITY without a public key cannot connect. This is also what makes the
     // refusal stubs unreadable as servers — which is why they are recognised
@@ -1144,6 +1276,7 @@ pub fn parse_vless_url(raw: &str) -> Result<VlessConfig, AppError> {
         flow,
         spider_x,
         remark: url_fragment(&u),
+        transport,
     })
 }
 
@@ -1411,7 +1544,9 @@ pub fn build_xray_config_with_routing_and_prefs(
     let mut user = serde_json::Map::new();
     user.insert("id".into(), json!(cfg.uuid));
     user.insert("encryption".into(), json!(cfg.encryption));
-    if !cfg.flow.is_empty() {
+    // Vision only over TCP; the parser already drops it for XHTTP, and the
+    // builder does not rely on that.
+    if !cfg.flow.is_empty() && cfg.transport == VlessTransport::Tcp {
         user.insert("flow".into(), json!(cfg.flow));
     }
 
@@ -1566,7 +1701,24 @@ fn build_outbounds(
     use serde_json::json;
 
     let mut stream = serde_json::Map::new();
-    stream.insert("network".into(), json!("tcp"));
+    match &cfg.transport {
+        VlessTransport::Tcp => {
+            stream.insert("network".into(), json!("tcp"));
+        }
+        VlessTransport::Xhttp { path, mode, host } => {
+            stream.insert("network".into(), json!("xhttp"));
+            let mut xhttp = serde_json::Map::new();
+            xhttp.insert("path".into(), json!(path));
+            xhttp.insert("mode".into(), json!(mode.as_str()));
+            if let Some(host) = host {
+                xhttp.insert("host".into(), json!(host));
+            }
+            // No `xmux` block: Xray's own defaults, the same a Happ user gets
+            // from this line. Tuning it is a measured experiment (DESIGN §9,
+            // phase 0), not a guess shipped to everyone.
+            stream.insert("xhttpSettings".into(), Value::Object(xhttp));
+        }
+    }
     stream.insert("security".into(), json!("reality"));
     stream.insert("realitySettings".into(), Value::Object(reality));
     if prefs.fragment {
@@ -2257,6 +2409,148 @@ mod tests {
         parse_vless_url(VLESS_LINE).expect("fixture")
     }
 
+    /// The XHTTP line exactly as the service builds it (`buildVlessUrl` in
+    /// frontend `lib/xpanel.ts`): `/?type=xhttp`, no `flow`, and the path,
+    /// mode and host of `xhttpLinkParams`, percent-encoded.
+    const XHTTP_LINE: &str = "vless://11111111-2222-3333-4444-555555555555@uk.example.net:2053/?type=xhttp&security=reality&pbk=PUBKEY&fp=firefox&sni=www.nhs.uk&sid=ab12&spx=%2F&path=%2F87588135c873&mode=stream-one#%D0%91%D1%80%D0%B8%D1%82%D0%B0%D0%BD%D0%B8%D1%8F%20%C2%B7%20XHTTP";
+
+    fn xhttp_fixture() -> VlessConfig {
+        parse_vless_url(XHTTP_LINE).expect("xhttp fixture")
+    }
+
+    #[test]
+    fn an_xhttp_line_is_read_as_xhttp_with_its_path_and_mode() {
+        let cfg = xhttp_fixture();
+        assert_eq!(
+            cfg.transport,
+            VlessTransport::Xhttp { path: "/87588135c873".into(), mode: XhttpMode::StreamOne, host: None }
+        );
+        assert_eq!(cfg.port, 2053);
+        assert_eq!(cfg.sni, "www.nhs.uk");
+        assert_eq!(cfg.fingerprint, "firefox");
+        assert_eq!(cfg.remark, "Британия · XHTTP");
+        assert_eq!(cfg.flow, "");
+    }
+
+    #[test]
+    fn a_tcp_line_and_a_line_without_type_stay_tcp() {
+        assert_eq!(vless_fixture().transport, VlessTransport::Tcp);
+        let no_type = VLESS_LINE.replace("&type=tcp", "");
+        assert_eq!(parse_vless_url(&no_type).expect("parses").transport, VlessTransport::Tcp);
+        assert_eq!(parse_vless_url(&no_type).expect("parses").flow, "xtls-rprx-vision");
+    }
+
+    #[test]
+    fn vision_never_rides_on_xhttp() {
+        let line = XHTTP_LINE.replace("&mode=", "&flow=xtls-rprx-vision&mode=");
+        let cfg = parse_vless_url(&line).expect("parses");
+        assert_eq!(cfg.flow, "");
+        let built = build_xray_config_with_routing(&cfg, None);
+        assert!(built["outbounds"][0]["settings"]["vnext"][0]["users"][0].get("flow").is_none());
+    }
+
+    #[test]
+    fn host_is_kept_when_valid_and_refused_when_not() {
+        let with_host = format!("{}", XHTTP_LINE.replace("&mode=", "&host=cdn.example.com&mode="));
+        match parse_vless_url(&with_host).expect("parses").transport {
+            VlessTransport::Xhttp { host, .. } => assert_eq!(host.as_deref(), Some("cdn.example.com")),
+            other => panic!("expected xhttp, got {other:?}"),
+        }
+        let empty_host = XHTTP_LINE.replace("&mode=", "&host=&mode=");
+        match parse_vless_url(&empty_host).expect("parses").transport {
+            VlessTransport::Xhttp { host, .. } => assert_eq!(host, None),
+            other => panic!("expected xhttp, got {other:?}"),
+        }
+        for bad in ["-bad.example", "a..b", "space%20host", "under_score.example"] {
+            let line = XHTTP_LINE.replace("&mode=", &format!("&host={bad}&mode="));
+            assert!(parse_vless_url(&line).is_err(), "host {bad} accepted");
+        }
+    }
+
+    #[test]
+    fn a_missing_mode_is_what_xray_does_without_one() {
+        let line = XHTTP_LINE.replace("&mode=stream-one", "");
+        match parse_vless_url(&line).expect("parses").transport {
+            VlessTransport::Xhttp { mode, .. } => assert_eq!(mode, XhttpMode::Auto),
+            other => panic!("expected xhttp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_broken_xhttp_line_is_unreadable_not_a_tcp_server() {
+        for (what, line) in [
+            ("no path", XHTTP_LINE.replace("&path=%2F87588135c873", "")),
+            ("path without slash", XHTTP_LINE.replace("path=%2F87588135c873", "path=87588135c873")),
+            ("path with a space", XHTTP_LINE.replace("path=%2F87588135c873", "path=%2Fa%20b")),
+            ("path with a query", XHTTP_LINE.replace("path=%2F87588135c873", "path=%2Fa%3Fb%3D1")),
+            ("unknown mode", XHTTP_LINE.replace("mode=stream-one", "mode=fast")),
+            ("ws", XHTTP_LINE.replace("type=xhttp", "type=ws")),
+            ("grpc", VLESS_LINE.replace("type=tcp", "type=grpc")),
+        ] {
+            assert!(parse_vless_url(&line).is_err(), "{what} accepted");
+        }
+        let long = format!("/{}", "a".repeat(128));
+        let line = XHTTP_LINE.replace("%2F87588135c873", &long);
+        assert!(parse_vless_url(&line).is_err(), "129-character path accepted");
+    }
+
+    #[test]
+    fn the_xhttp_config_carries_xhttp_settings_and_keeps_reality() {
+        let cfg = build_xray_config_with_routing(&xhttp_fixture(), None);
+        let stream = &cfg["outbounds"][0]["streamSettings"];
+        assert_eq!(cfg["outbounds"][0]["tag"], "proxy");
+        assert_eq!(stream["network"], "xhttp");
+        assert_eq!(stream["xhttpSettings"]["path"], "/87588135c873");
+        assert_eq!(stream["xhttpSettings"]["mode"], "stream-one");
+        assert!(stream["xhttpSettings"].get("host").is_none());
+        assert!(stream["xhttpSettings"].get("xmux").is_none(), "xmux is an experiment, not a default");
+        assert_eq!(stream["security"], "reality");
+        assert_eq!(stream["realitySettings"]["serverName"], "www.nhs.uk");
+        assert_eq!(stream["realitySettings"]["fingerprint"], "firefox");
+    }
+
+    #[test]
+    fn the_tcp_config_is_what_it_was() {
+        let cfg = build_xray_config_with_routing(&vless_fixture(), None);
+        let stream = &cfg["outbounds"][0]["streamSettings"];
+        assert_eq!(stream["network"], "tcp");
+        assert!(stream.get("xhttpSettings").is_none());
+        assert_eq!(cfg["outbounds"][0]["settings"]["vnext"][0]["users"][0]["flow"], "xtls-rprx-vision");
+    }
+
+    #[test]
+    fn fragmenting_works_the_same_over_xhttp() {
+        use crate::tunnel_prefs::TunnelPrefs;
+        let prefs = TunnelPrefs { fragment: true, ..Default::default() };
+        let cfg = build_xray_config_with_routing_and_prefs(&xhttp_fixture(), None, &prefs);
+        assert_eq!(cfg["outbounds"][0]["streamSettings"]["sockopt"]["dialerProxy"], "fragment");
+        assert_eq!(cfg["outbounds"][0]["streamSettings"]["network"], "xhttp");
+    }
+
+    /// Live check, off by default: builds the app's config for a real link and
+    /// writes it out, so the bundled xray can be run against a real node.
+    /// `WATAFAST_LIVE_LINK=vless://… WATAFAST_LIVE_OUT=/path.json cargo test
+    /// --lib live_config -- --ignored`. The link is read from the environment,
+    /// never printed.
+    #[test]
+    #[ignore]
+    fn live_config() {
+        let link = std::env::var("WATAFAST_LIVE_LINK").expect("WATAFAST_LIVE_LINK");
+        let out = std::env::var("WATAFAST_LIVE_OUT").expect("WATAFAST_LIVE_OUT");
+        let cfg = build_xray_config_with_routing(&parse_vless_url(&link).expect("link parses"), None);
+        std::fs::write(&out, serde_json::to_string_pretty(&cfg).expect("serializes")).expect("written");
+    }
+
+    #[test]
+    fn the_sing_box_build_leaves_xhttp_out_and_keeps_the_rest() {
+        let xhttp = ServerConfig::Vless(xhttp_fixture());
+        let tcp = ServerConfig::Vless(vless_fixture());
+        assert!(engine_supports_on(&xhttp, false), "xray runs it");
+        assert!(!engine_supports_on(&xhttp, true), "sing-box would build it as TCP");
+        assert!(engine_supports_on(&tcp, true));
+        assert!(engine_supports_on(&tcp, false));
+    }
+
     #[test]
     fn the_config_prefers_the_services_rules_over_ours() {
         let rules = parse_routing_line(&routing_line(INLINE_PROFILE)).expect("profile");
@@ -2403,8 +2697,13 @@ mod tests {
             }),
         ];
 
-        for (name, prefs) in cases {
-            let mut cfg = build_xray_config_with_routing_and_prefs(&vless_fixture(), None, &prefs);
+        let fixtures = [("tcp", vless_fixture()), ("xhttp", xhttp_fixture())];
+        for ((name, prefs), (transport, fixture)) in cases
+            .into_iter()
+            .flat_map(|case| fixtures.iter().map(move |f| (case.clone(), f.clone())))
+        {
+            let name = format!("{name}-{transport}");
+            let mut cfg = build_xray_config_with_routing_and_prefs(&fixture, None, &prefs);
             cfg["outbounds"][0]["streamSettings"]["realitySettings"]["publicKey"] =
                 serde_json::Value::String(public.clone());
             // Порт SOCKS у образца тот же, что у живого приложения; для

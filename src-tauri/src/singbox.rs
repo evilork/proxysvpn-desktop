@@ -161,6 +161,7 @@ mod tests {
             flow: "xtls-rprx-vision".into(),
             spider_x: String::new(),
             remark: "Test VLESS".into(),
+            transport: crate::subscription::VlessTransport::Tcp,
         })
     }
 
