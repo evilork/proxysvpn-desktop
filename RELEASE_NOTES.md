@@ -1,3 +1,27 @@
+# ProxysVPN Desktop v0.3.0-beta
+
+🇷🇺 Watafast: приложение само выбирает способ подключения, помнит, что работает в вашей сети, и подключается, даже когда сайты сервиса не открываются.
+
+🇬🇧 Watafast: the app picks the way to connect by itself, remembers what works on your network, and connects even when the service's sites do not open.
+
+## 🇷🇺 Что нового
+
+- **Watafast.** Локации на XHTTP (Британия, США, Франция) в списке называются «Watafast», автоматический выбор — тоже «Watafast».
+- **Память по сети.** Приложение запоминает, какая локация сработала дома, на работе, в мобильной сети, и в следующий раз начинает с неё.
+- **Гонка в новой сети.** В незнакомой сети два варианта подключения стартуют одновременно, побеждает первый ответивший.
+- **Подписанный список серверов.** Приложение получает от сервиса список, подписанный ключом сервиса, и хранит последний проверенный. Если ни один сайт сервиса не открывается, оно подключается по сохранённому списку. Поддельный список отвергается.
+- Исправлено: смена сети без отключения больше не путает память по сетям; служебный локальный порт гонки закрывается сразу после выбора и, пока открыт, требует пароль.
+
+## 🇬🇧 What's new
+
+- **Watafast.** XHTTP locations (Britain, USA, France) are shown as «Watafast», and so is the automatic choice.
+- **Per-network memory.** The app remembers which location worked at home, at work and on mobile data, and starts there next time.
+- **A race on a new network.** On a network it does not know yet, two ways to connect start at once and the first to answer wins.
+- **Signed server list.** The app gets a list signed with the service's key and keeps the last verified one. When none of the service's sites opens, it connects from the stored list; a forged list is rejected.
+- Fixed: changing networks without disconnecting no longer mixes up the per-network memory; the race's local helper port closes right after the choice and requires a password while it exists.
+
+---
+
 # ProxysVPN Desktop v0.2.0-beta
 
 🇷🇺 Быстрее подключается, работает на всех локациях, включая «Британия · XHTTP».
