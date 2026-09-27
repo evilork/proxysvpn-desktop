@@ -1222,8 +1222,13 @@ impl Core {
         // а проба следом не соединилась за шесть секунд - по открытому порту
         // тоже, значит упиралась не в TLS, а в холодную вторую половину пути.
         let engine_started = Instant::now();
+        #[cfg(target_os = "macos")]
         let engine_warm =
             probe::warm_through_socks(tun::SOCKS_PORT, warm_host, warm_port, WARM_BUDGET).await;
+        // На iOS движок живёт в расширении и своего SOCKS наружу не открывает:
+        // греть там можно только маршрут по умолчанию, второй заход ниже.
+        #[cfg(not(target_os = "macos"))]
+        let engine_warm = true;
         let engine_ms = engine_started.elapsed().as_millis();
 
         let tunnel_ms = probe::warm_through_tunnel(warm_host, warm_port, WARM_BUDGET).await;

@@ -1534,6 +1534,7 @@ pub fn build_xray_config_with_routing(cfg: &VlessConfig, routing: Option<&Routin
 }
 
 /// То же, но с настройками туннеля. Всё проверяемое живёт здесь.
+#[cfg(any(target_os = "macos", test))]
 pub fn build_xray_config_with_routing_and_prefs(
     cfg: &VlessConfig,
     routing: Option<&RoutingRules>,
@@ -1692,6 +1693,7 @@ pub fn build_xray_config_with_routing_and_prefs(
 /// Вынесено отдельной функцией, потому что дробление вставляет ЛИШНИЙ
 /// исходящий и меняет настройки сокета у основного: собирать это вперемешку с
 /// маршрутизацией в одном литерале стало нечитаемо.
+#[cfg(any(target_os = "macos", test))]
 fn build_outbounds(
     cfg: &VlessConfig,
     user: serde_json::Map<String, Value>,
