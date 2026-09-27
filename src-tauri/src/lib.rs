@@ -35,6 +35,7 @@ mod netmem;
 mod manifest;
 mod subscription;
 mod tunnel_prefs;
+mod notify_prefs;
 
 #[cfg(target_os = "macos")]
 mod hysteria_manager;
@@ -66,6 +67,7 @@ use events::{
 };
 use probe::{ProbeGate, ProbeReason, ProbeVerdict, TunnelMeter};
 use subscription::{fetch_subscription, ServerConfig};
+use tunnel_prefs::TransportPref;
 
 #[cfg(target_os = "macos")]
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
@@ -510,6 +512,30 @@ struct Session {
 
     routing_in_russia: bool,
     timeline: VecDeque<TimelineEntry>,
+
+    /// «Уведомления» (MoreScreen): true между a "protection dropped" notice
+    /// this session actually owes a matching "restored" one and that notice
+    /// having been sent. Set the moment a protected phase (`On`/`Unconfirmed`)
+    /// first leaves for `Healing`/`Failed`; cleared either by the restore
+    /// notice firing or by a manual `disconnect()` — a deliberate stop is not
+    /// an outage waiting to be "restored" later.
+    protection_drop_notified: bool,
+}
+
+/// A phase where traffic is actually believed to cross the tunnel — the two
+/// phases a "protection dropped" notice can fall FROM and a "restored" one
+/// can return TO. Deliberately excludes `Unconfirmed`'s cousin-in-spirit
+/// `Starting`: still connecting is not yet a drop from anything.
+fn is_protected_phase(phase: VpnPhase) -> bool {
+    matches!(phase, VpnPhase::On | VpnPhase::Unconfirmed)
+}
+
+/// A phase that means the tunnel stopped carrying traffic WITHOUT the person
+/// asking for that — the engine died and repair is running (`Healing`), or
+/// repair gave up (`Failed`). `Off` is never in this set: see `set_phase`'s
+/// own comment for why it is always the person's action, not the network's.
+fn is_dropped_phase(phase: VpnPhase) -> bool {
+    matches!(phase, VpnPhase::Healing | VpnPhase::Failed)
 }
 
 /// Whether the supervisor should ask again at the warm-up's pace (4 s)
@@ -566,6 +592,7 @@ impl Session {
             // machine's own timezone as soon as anyone asks.
             routing_in_russia: true,
             timeline: VecDeque::new(),
+            protection_drop_notified: false,
         }
     }
 
@@ -625,6 +652,16 @@ struct Core {
     /// Serialises connect / disconnect / location change. Held across engine
     /// work, which is why the session lock never is.
     operation: Mutex<()>,
+    /// «Уведомления»: не показывать, пока окно в фокусе - человек и так
+    /// смотрит на экран, где то же самое уже видно щитом. Обновляется
+    /// `WindowEvent::Focused` (macOS; на iOS окна Tauri нет вовсе, и уведомить
+    /// там некому этим путём — у Network Extension свои системные события).
+    window_focused: std::sync::atomic::AtomicBool,
+    /// Язык окна, для текста уведомления - `App.tsx` держит язык на своей
+    /// стороне (`LANG_KEY` в localStorage) и сообщает сюда через
+    /// `set_ui_lang` при старте и при каждой смене. `false` = ru, значение по
+    /// умолчанию до первого вызова - то же, что и умолчание окна.
+    ui_lang_en: std::sync::atomic::AtomicBool,
 
     #[cfg(target_os = "macos")]
     xray: xray_manager::SharedXrayState,
@@ -655,6 +692,8 @@ impl Core {
             app,
             session: Mutex::new(Session::new()),
             operation: Mutex::new(()),
+            window_focused: std::sync::atomic::AtomicBool::new(true),
+            ui_lang_en: std::sync::atomic::AtomicBool::new(false),
             #[cfg(target_os = "macos")]
             xray: xray_manager::new_state(),
             #[cfg(target_os = "macos")]
@@ -673,8 +712,9 @@ impl Core {
     /// window, including the ones no button caused — which is the whole bug
     /// this core was written to remove.
     async fn set_phase(&self, phase: VpnPhase, error: Option<AppError>) {
-        let payload = {
+        let (payload, drop_notice, restore_notice) = {
             let mut s = self.session.lock().await;
+            let old_phase = s.phase;
             s.phase = phase;
             s.error = error;
             if phase == VpnPhase::Healing {
@@ -688,12 +728,48 @@ impl Core {
             if phase == VpnPhase::Off {
                 s.location = None;
                 s.proto = None;
+                // A deliberate stop closes any outage this session was still
+                // tracking: there is nothing left to call "restored" on the
+                // next connect, and doing so would describe the person's own
+                // action back to them as if it had happened by itself.
+                s.protection_drop_notified = false;
             }
-            s.state_payload()
+            // «Уведомления» (MoreScreen, notify_prefs.rs). Two independent
+            // events, decided from the phase transition alone so this never
+            // needs a caller to remember to ask for it:
+            //   - "protection dropped": a phase that WAS protected leaves for
+            //     one that is not carrying traffic (`Healing` — the engine
+            //     died and repair is running — or `Failed` — repair gave up,
+            //     including the rarer case of failing before ever reaching
+            //     `Healing`). `Off` is deliberately excluded from "not
+            //     protected" here — seeing it is always the person's own
+            //     doing, directly or through a settings reconnect
+            //     (`reconnect_if_live`), never the network's.
+            //   - "protection restored": back to a protected phase, but ONLY
+            //     when a drop notice is actually owed — never on an ordinary
+            //     first connect, which never set the flag to begin with.
+            let old_protected = is_protected_phase(old_phase);
+            let new_protected = is_protected_phase(phase);
+            let drop_notice = old_protected && is_dropped_phase(phase);
+            let restore_notice = !old_protected && new_protected && s.protection_drop_notified;
+            if drop_notice {
+                s.protection_drop_notified = true;
+            } else if restore_notice {
+                s.protection_drop_notified = false;
+            }
+            (s.state_payload(), drop_notice, restore_notice)
         };
         let _ = self.app.emit(EV_STATE, payload);
         #[cfg(target_os = "macos")]
         self.refresh_tray(phase).await;
+        #[cfg(target_os = "macos")]
+        {
+            if drop_notice {
+                self.notify_protection(false).await;
+            } else if restore_notice {
+                self.notify_protection(true).await;
+            }
+        }
     }
 
     /// Progress inside `Starting`, and only there.
@@ -971,7 +1047,7 @@ impl Session {
             } else {
                 split_label(remark)
             };
-            let note = subscription::display_note(server, note);
+            let note = subscription::display_note(note);
             let label = if label.is_empty() {
                 fallback_label(index)
             } else {
@@ -1046,7 +1122,21 @@ impl Session {
     /// last step matters: a list where every node is demoted still has to
     /// produce a candidate, or the app refuses to try on the one network where
     /// the person is stuck.
-    fn choose_server(&self) -> Option<usize> {
+    ///
+    /// `transport` (TunnelScreen «Способ подключения») is a SOFT preference
+    /// layered on top of that order, not a new tier of its own: a manual pin
+    /// still wins outright (choosing one specific line already accepts its
+    /// transport), and every automatic tier below it prefers a match but
+    /// falls through to its own next tier rather than refuse a candidate it
+    /// would otherwise have picked. Between "fastest measured" and "anything
+    /// at all" sits one more step for exactly this preference: an unmeasured
+    /// list (the common case — nothing has an RTT yet) must not fall all the
+    /// way to ignoring `transport` just because nothing is measured. Only the
+    /// very last step ignores `transport` entirely, for the same reason it
+    /// already ignores health — a preference is not a reason to end up with
+    /// no node at all on the one network where nothing of the wanted kind is
+    /// reachable.
+    fn choose_server(&self, transport: TransportPref) -> Option<usize> {
         if self.servers.is_empty() {
             return None;
         }
@@ -1063,18 +1153,25 @@ impl Session {
                 .map(|id| self.demoted.get(&id).is_none_or(|until| *until <= now))
                 .unwrap_or(true)
         };
+        let wants = |index: usize| -> bool {
+            self.servers
+                .get(index)
+                .is_some_and(|server| subscription::matches_transport_pref(server, transport))
+        };
         // Тот, что подтвердился последним В ЭТОЙ СЕТИ (Watafast, 27.09.2026).
         // Дома проходит одно, в офисе и на мобильном - другое; общий
         // «последний удачный» начинал бы каждую сеть с чужого победителя.
         if let Some(network) = &self.network {
             if let Some(index) = self.network_winner_usable(network) {
-                return Some(index);
+                if wants(index) {
+                    return Some(index);
+                }
             }
         }
         // Тот, что ПОДТВЕРДИЛСЯ последним. Факт сильнее любой оценки.
         if let Some(id) = &self.last_good {
             if let Some(index) = self.index_of(id) {
-                if healthy(index) {
+                if healthy(index) && wants(index) {
                     return Some(index);
                 }
             }
@@ -1092,7 +1189,7 @@ impl Session {
         // замеров нет ни у кого, работает прежний порядок. Но и не выигрывают
         // вслепую - предпочесть неизвестное известному быстрому не за что.
         let fastest = (0..self.servers.len())
-            .filter(|index| healthy(*index))
+            .filter(|index| healthy(*index) && wants(*index))
             .filter_map(|index| {
                 let id = self.id_of(index)?;
                 let ms = self.rtt.get(&id).copied()?;
@@ -1102,6 +1199,20 @@ impl Session {
         if let Some((_, index)) = fastest {
             return Some(index);
         }
+        // Ни одного ЗАМЕРЕННОГО под здоровье и транспорт сразу - это не то же
+        // самое, что «ничего подходящего нет вовсе»: чаще всего это просто
+        // список, который ещё никто не мерил. Первый живой, что подходит под
+        // выбранный транспорт, всё ещё стоит найти раньше, чем сдаваться на
+        // предпочтении - тот же принцип, каким живёт авто-выбор без
+        // предпочтения (первый живой при отсутствии замеров), внутри
+        // отфильтрованного по транспорту подмножества.
+        if let Some(index) = (0..self.servers.len()).find(|index| healthy(*index) && wants(*index)) {
+            return Some(index);
+        }
+        // И только когда под выбранный транспорт нет вообще ни одного живого
+        // узла - предпочтение больше не спрашивают. Живой узел важнее точного
+        // совпадения транспорта, а на сети, где нет ни одного узла вовсе,
+        // первый по списку лучше отказа подключаться.
         (0..self.servers.len())
             .find(|index| healthy(*index))
             .or(Some(0))
@@ -1463,7 +1574,7 @@ impl Core {
                 },
             );
             let index = s
-                .choose_server()
+                .choose_server(tunnel_prefs::load().transport)
                 .ok_or_else(|| AppError::new(ErrorCode::SubEmpty))?;
             // Race only where we know nothing: no pin by hand, no winner on
             // this network. A known network starts on its winner alone.
@@ -1787,7 +1898,8 @@ impl Core {
         let link = link.ok_or_else(|| AppError::new(ErrorCode::NoSubscription))?;
         let url = effective_sub_url(&link, in_russia)?;
 
-        let sub = fetch_subscription(&url).await?;
+        let lang_en = self.ui_lang_en.load(std::sync::atomic::Ordering::Relaxed);
+        let sub = fetch_subscription(&url, lang_en).await?;
         if sub.servers.is_empty() {
             return Err(AppError::new(ErrorCode::SubEmpty));
         }
@@ -1858,7 +1970,7 @@ impl Core {
         };
 
         let (_, parsed_label, note) = split_label(server.remark());
-        let note = subscription::display_note(&server, note);
+        let note = subscription::display_note(note);
         let label = if parsed_label.is_empty() {
             fallback_label(index)
         } else {
@@ -2457,9 +2569,21 @@ impl Core {
                 // A ladder every few seconds is a way to keep a broken network
                 // busy, not a way to fix it.
                 drop(s);
-                self.set_phase(VpnPhase::Failed, Some(cause)).await;
+                // `heal` is also reached fire-and-forget, from `spawn_heal`
+                // (`connect_inner`'s "up but not carrying" branch returns
+                // `Ok(())` and lets the operation lock go BEFORE this task
+                // runs) — by the time it gets here, a newer `connect` or
+                // `disconnect` can already own the phase for a generation of
+                // its own. Without this check a stale ladder's "Failed"
+                // could land on top of that newer attempt's own state.
+                if self.is_current(generation).await {
+                    self.set_phase(VpnPhase::Failed, Some(cause)).await;
+                }
                 return;
             }
+        }
+        if !self.is_current(generation).await {
+            return;
         }
         self.set_phase(VpnPhase::Healing, Some(cause.clone())).await;
         self.spawn_healing_pulse(generation);
@@ -2548,7 +2672,7 @@ impl Core {
         // subscription over the ladder of sites and try the best of what comes
         // back. This is the step that closes "the server died" tickets.
         if self.refresh_subscription().await.is_ok() {
-            let next = self.session.lock().await.choose_server();
+            let next = self.session.lock().await.choose_server(tunnel_prefs::load().transport);
             if let Some(next) = next {
                 if self.switch_to(next, generation).await.is_ok() {
                     if let Some(phase) = self.try_probe(generation).await {
@@ -2725,7 +2849,14 @@ async fn tunnel_prefs_set(
     if !tunnel_prefs::store(&prefs) {
         return Err(AppError::new(ErrorCode::Unknown).to_payload());
     }
-    let core = core.inner().clone();
+    Ok(reconnect_if_live(core.inner().clone()).await)
+}
+
+/// Общий хвост для любой команды настроек, которая уже сохранила себя на
+/// диск и должна применить изменение НЕМЕДЛЕННО, если туннель поднят - вместо
+/// того чтобы промолчать до следующего подключения. Возвращает то же самое
+/// `true`/`false`, что окно уже умеет превращать в «Включаем...».
+async fn reconnect_if_live(core: Arc<Core>) -> bool {
     let live = {
         let s = core.session.lock().await;
         matches!(s.phase, VpnPhase::On | VpnPhase::Unconfirmed | VpnPhase::Healing)
@@ -2739,7 +2870,71 @@ async fn tunnel_prefs_set(
             let _ = core.connect().await;
         });
     }
-    Ok(live)
+    live
+}
+
+/// Итог сохранения «Своих правил» (TunnelScreen): что не приняли, по списку,
+/// и переподключился ли туннель. Строки, а не просто число - иначе окну
+/// нечем было бы объяснить «строка не принята» рядом с полем.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CustomRulesOutcome {
+    direct_ignored: Vec<String>,
+    proxy_ignored: Vec<String>,
+    reconnected: bool,
+}
+
+/// Проверить и сохранить «Свои правила»: два списка доменов (по строке на
+/// правило), «Всегда напрямую» и «Всегда через VPN». Каждая строка проходит
+/// через `tunnel_prefs::parse_custom_rules` - недействительная (адрес,
+/// ссылка, звёздочка) или домен, оказавшийся сразу в обоих списках, попадает
+/// в `*_ignored`, а не молча теряется и не роняет всю команду.
+#[tauri::command]
+async fn tunnel_rules_set(
+    core: tauri::State<'_, Arc<Core>>,
+    direct: String,
+    proxy: String,
+) -> Cmd<CustomRulesOutcome> {
+    let parsed = tunnel_prefs::parse_custom_rules(&direct, &proxy);
+    let mut prefs = tunnel_prefs::load();
+    prefs.direct_domains = parsed.direct;
+    prefs.proxy_domains = parsed.proxy;
+    if !tunnel_prefs::store(&prefs) {
+        return Err(AppError::new(ErrorCode::Unknown).to_payload());
+    }
+    let reconnected = reconnect_if_live(core.inner().clone()).await;
+    Ok(CustomRulesOutcome {
+        direct_ignored: parsed.direct_ignored,
+        proxy_ignored: parsed.proxy_ignored,
+        reconnected,
+    })
+}
+
+/// «Уведомления» (MoreScreen), как записаны сейчас. Не влияет на туннель -
+/// поэтому, в отличие от `tunnel_prefs_set`, никогда не переподключает.
+#[tauri::command]
+async fn notify_prefs_get() -> Cmd<notify_prefs::NotifyPrefs> {
+    Ok(notify_prefs::load())
+}
+
+#[tauri::command]
+async fn notify_prefs_set(enabled: bool) -> Cmd<()> {
+    if !notify_prefs::store(&notify_prefs::NotifyPrefs { enabled }) {
+        return Err(AppError::new(ErrorCode::Unknown).to_payload());
+    }
+    Ok(())
+}
+
+/// `App.tsx` держит язык окна на своей стороне (`LANG_KEY`); эта команда
+/// только сообщает его сюда, чтобы системное уведомление (`notify_protection`)
+/// заговорило на том же языке, что и всё остальное окно. Ничего не пишет на
+/// диск - при следующем запуске окно пришлёт его заново само, как и всегда
+/// делает при монтировании.
+#[tauri::command]
+async fn set_ui_lang(core: tauri::State<'_, Arc<Core>>, lang: String) -> Cmd<()> {
+    core.ui_lang_en
+        .store(lang == "en", std::sync::atomic::Ordering::Relaxed);
+    Ok(())
 }
 
 #[tauri::command]
@@ -3180,7 +3375,8 @@ impl Core {
         let Ok(url) = effective_sub_url(&link, in_russia) else {
             return (CheckState::Fail, false);
         };
-        match fetch_subscription(&url).await {
+        let lang_en = self.ui_lang_en.load(std::sync::atomic::Ordering::Relaxed);
+        match fetch_subscription(&url, lang_en).await {
             Ok(sub) => {
                 let fallback = !sub.source_host.eq_ignore_ascii_case(SITE_LADDER[0]);
                 (CheckState::Pass, fallback)
@@ -3822,6 +4018,39 @@ impl Core {
             }
         }
     }
+
+    /// «Уведомления» (MoreScreen, notify_prefs.rs): a system notification for
+    /// the two events `set_phase` decided are worth one — `restored = false`
+    /// is "protection dropped", `true` is "protection restored". Called at
+    /// most once per real phase change (see `set_phase`'s own gating), so no
+    /// separate de-duplication is needed here.
+    ///
+    /// Two more gates, both cheap to skip on: the setting itself, and the
+    /// window's own focus — a toast for something already visible as a shield
+    /// on screen would just be noise repeating itself.
+    async fn notify_protection(&self, restored: bool) {
+        if !notify_prefs::load().enabled {
+            return;
+        }
+        if self.window_focused.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let en = self.ui_lang_en.load(std::sync::atomic::Ordering::Relaxed);
+        let (title, body) = match (restored, en) {
+            (false, false) => ("Защита пропала", "Соединение прервалось, приложение пытается его восстановить"),
+            (false, true) => ("Protection dropped", "The connection broke; the app is trying to bring it back"),
+            (true, false) => ("Защита восстановлена", "Соединение снова работает"),
+            (true, true) => ("Protection restored", "The connection is working again"),
+        };
+        use tauri_plugin_notification::NotificationExt;
+        if let Err(err) = self.app.notification().builder().title(title).body(body).show() {
+            // A missed OS notification is not worth failing anything over —
+            // the shield in the window already says the same thing to anyone
+            // looking, which is the whole reason `notify_protection` skips
+            // itself while that window is focused.
+            logger::log("warn", "app", &format!("уведомление не показано: {err}"));
+        }
+    }
 }
 
 /// The tray's state line, so it can be rewritten as the phase changes.
@@ -3922,8 +4151,14 @@ pub fn run() {
     // собирают приложение без Builder.
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
-        .setup(|app| {
+        .plugin(tauri_plugin_clipboard_manager::init());
+    // «Уведомления» (notify_prefs.rs): desktop-only, same split as the
+    // dependency itself in Cargo.toml — iOS has no window to notify past, and
+    // its Network Extension speaks through its own OS-level lifecycle, not
+    // this plugin.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let builder = builder.plugin(tauri_plugin_notification::init());
+    let builder = builder.setup(|app| {
             let core = Core::new(app.handle().clone());
             app.manage(core);
 
@@ -3940,13 +4175,23 @@ pub fn run() {
 
     #[cfg(target_os = "macos")]
     let builder = builder
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
                 // Red-X / Cmd+W hides to the tray; the VPN keeps running.
                 // Tray → Выйти, or Cmd+Q, stops everything.
                 api.prevent_close();
                 let _ = window.hide();
             }
+            // «Уведомления»: не слать тост, пока окно на экране - в нём и так
+            // видно то же самое щитом. `Focused(false)` приходит и когда окно
+            // СКРЫТО (Cmd+W) - а это как раз момент, когда уведомление нужнее
+            // всего, так что это ровно нужная сторона проверки.
+            WindowEvent::Focused(focused) => {
+                if let Some(core) = window.app_handle().try_state::<Arc<Core>>() {
+                    core.window_focused.store(*focused, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            _ => {}
         });
 
     let app = builder
@@ -3960,6 +4205,10 @@ pub fn run() {
             measure_locations,
             tunnel_prefs_get,
             tunnel_prefs_set,
+            tunnel_rules_set,
+            notify_prefs_get,
+            notify_prefs_set,
+            set_ui_lang,
             select_location,
             sub_state,
             sub_set,
@@ -4080,19 +4329,19 @@ mod tests {
         s.net_memory.remember("office", &ids[1], now_ms());
 
         s.network = Some("office".into());
-        assert_eq!(s.choose_server(), Some(1), "the office's own winner beats the global last good");
+        assert_eq!(s.choose_server(TransportPref::Auto), Some(1), "the office's own winner beats the global last good");
 
         s.network = Some("cafe".into());
-        assert_eq!(s.choose_server(), Some(0), "an unknown network falls back to the global last good");
+        assert_eq!(s.choose_server(TransportPref::Auto), Some(0), "an unknown network falls back to the global last good");
 
         s.network = None;
-        assert_eq!(s.choose_server(), Some(0), "no network id: exactly the old behaviour");
+        assert_eq!(s.choose_server(TransportPref::Auto), Some(0), "no network id: exactly the old behaviour");
 
         // The office winner stops getting through: demoted and forgotten there.
         s.network = Some("office".into());
         s.demote(1);
         assert_eq!(s.net_memory.winner("office", now_ms()), None, "a demoted winner is forgotten");
-        assert_eq!(s.choose_server(), Some(0));
+        assert_eq!(s.choose_server(TransportPref::Auto), Some(0));
     }
 
     /// The "known network" gate at connect and `choose_server`'s own
@@ -4114,7 +4363,7 @@ mod tests {
 
         // Fresh, not demoted: both the predicate and choose_server agree.
         assert_eq!(s.network_winner_usable("office"), Some(0));
-        assert_eq!(s.choose_server(), Some(0));
+        assert_eq!(s.choose_server(TransportPref::Auto), Some(0));
 
         // The remembered winner is demoted directly, bypassing `demote()`.
         s.demoted.insert(ids[0].clone(), Instant::now() + Duration::from_secs(60));
@@ -4124,7 +4373,7 @@ mod tests {
             "a demoted winner must not read as usable"
         );
         assert_ne!(
-            s.choose_server(),
+            s.choose_server(TransportPref::Auto),
             Some(0),
             "choose_server must actually skip it too, in agreement with the predicate"
         );
@@ -4192,21 +4441,21 @@ mod tests {
         s.servers = vec![vless("🇩🇪 Германия"), vless("🇳🇱 Амстердам"), vless("🇬🇧 Британия")];
 
         // Без замеров - прежнее поведение: первый в списке.
-        assert_eq!(s.choose_server(), Some(0), "без замеров берём первый живой");
+        assert_eq!(s.choose_server(TransportPref::Auto), Some(0), "без замеров берём первый живой");
 
         // С замерами - самый быстрый, где бы он ни стоял.
         let ids: Vec<String> = (0..3).map(|i| s.id_of(i).expect("идентификатор есть")).collect();
         s.rtt.insert(ids[0].clone(), 180);
         s.rtt.insert(ids[1].clone(), 42);
         s.rtt.insert(ids[2].clone(), 95);
-        assert_eq!(s.choose_server(), Some(1), "42 мс обязаны победить 180");
+        assert_eq!(s.choose_server(TransportPref::Auto), Some(1), "42 мс обязаны победить 180");
 
         // Использование САМО ПО СЕБЕ ничего не значит: мы весь вечер бились
         // об Германию, и она возглавляла список недавних, ни разу не
         // подтвердившись. Выбор такое игнорирует.
         s.remember_use(0);
         assert_eq!(
-            s.choose_server(),
+            s.choose_server(TransportPref::Auto),
             Some(1),
             "попытка - не успех; самый быстрый по-прежнему побеждает"
         );
@@ -4214,14 +4463,14 @@ mod tests {
         // А вот ПОДТВЕРЖДЁННЫЙ узел главнее: это факт, а замер - оценка.
         s.last_good = Some(ids[2].clone());
         assert_eq!(
-            s.choose_server(),
+            s.choose_server(TransportPref::Auto),
             Some(2),
             "последний подтвердившийся узел важнее самого быстрого на бумаге"
         );
 
         // Но только пока он жив: наказанный узел уступает.
         s.demoted.insert(ids[2].clone(), Instant::now() + Duration::from_secs(60));
-        assert_eq!(s.choose_server(), Some(1), "наказанный узел не выбирают");
+        assert_eq!(s.choose_server(TransportPref::Auto), Some(1), "наказанный узел не выбирают");
     }
 
     /// Узел без замера не должен выигрывать вслепую у измеренного быстрого.
@@ -4233,10 +4482,85 @@ mod tests {
         // Германию не мерили (или это Hysteria2, где рукопожатия TCP не бывает).
         s.rtt.insert(ids[1].clone(), 60);
         assert_eq!(
-            s.choose_server(),
+            s.choose_server(TransportPref::Auto),
             Some(1),
             "известное быстрое предпочтительнее неизвестного"
         );
+    }
+
+    /// A transport preference is a SOFT filter: it wins a tie inside a tier,
+    /// but never leaves the app with no node at all where nothing of the
+    /// wanted kind is reachable.
+    #[test]
+    fn transport_pref_prefers_a_match_but_never_leaves_the_app_with_nothing() {
+        let mut xhttp = match vless("🇬🇧 Британия · XHTTP") {
+            ServerConfig::Vless(c) => c,
+            _ => unreachable!(),
+        };
+        xhttp.transport = crate::subscription::VlessTransport::Xhttp {
+            path: "/p".into(),
+            mode: crate::subscription::XhttpMode::StreamOne,
+            host: None,
+        };
+        let mut vision = match vless("🇩🇪 Германия") {
+            ServerConfig::Vless(c) => c,
+            _ => unreachable!(),
+        };
+        vision.flow = "xtls-rprx-vision".into();
+
+        let mut s = Session::new();
+        s.servers = vec![ServerConfig::Vless(vision), ServerConfig::Vless(xhttp)];
+
+        // Без предпочтения - прежнее поведение: первый в списке.
+        assert_eq!(s.choose_server(TransportPref::Auto), Some(0));
+        // «Только XHTTP» пропускает Vision и берёт единственный XHTTP.
+        assert_eq!(s.choose_server(TransportPref::XhttpOnly), Some(1));
+        // «Только Vision» симметрично берёт индекс 0.
+        assert_eq!(s.choose_server(TransportPref::VisionOnly), Some(0));
+
+        // Список из одного Vision-узла: «только XHTTP» не может быть
+        // выполнено, но приложение обязано вернуть хоть что-то, а не None.
+        let mut only_vision = Session::new();
+        only_vision.servers = vec![s.servers[0].clone()];
+        assert_eq!(
+            only_vision.choose_server(TransportPref::XhttpOnly),
+            Some(0),
+            "предпочтение не должно оставить приложение вовсе без узла"
+        );
+    }
+
+    /// Память по сети и «последний удачный» тоже уважают предпочтение: сменив
+    /// «Способ подключения», человек не должен молча вернуться на транспорт,
+    /// от которого он только что отказался, только потому что тот когда-то
+    /// сработал.
+    #[test]
+    fn transport_pref_overrides_stale_memory_of_the_wrong_transport() {
+        let mut xhttp = match vless("🇬🇧 Британия · XHTTP") {
+            ServerConfig::Vless(c) => c,
+            _ => unreachable!(),
+        };
+        xhttp.transport = crate::subscription::VlessTransport::Xhttp {
+            path: "/p".into(),
+            mode: crate::subscription::XhttpMode::StreamOne,
+            host: None,
+        };
+        let mut vision = match vless("🇩🇪 Германия") {
+            ServerConfig::Vless(c) => c,
+            _ => unreachable!(),
+        };
+        vision.flow = "xtls-rprx-vision".into();
+
+        let mut s = Session::new();
+        s.servers = vec![ServerConfig::Vless(vision), ServerConfig::Vless(xhttp)];
+        let ids: Vec<String> = (0..2).map(|i| s.id_of(i).expect("id")).collect();
+
+        // Vision «подтвердился последним» - память ядра.
+        s.last_good = Some(ids[0].clone());
+        assert_eq!(s.choose_server(TransportPref::Auto), Some(0));
+
+        // Человек только что переключился на «только XHTTP» - память о Vision
+        // не должна победить свежий выбор.
+        assert_eq!(s.choose_server(TransportPref::XhttpOnly), Some(1));
     }
 
     fn hy2(remark: &str) -> ServerConfig {
@@ -4322,7 +4646,7 @@ mod tests {
             id: second,
             at: Instant::now(),
         });
-        assert_eq!(s.choose_server(), Some(1));
+        assert_eq!(s.choose_server(TransportPref::Auto), Some(1));
     }
 
     #[test]
@@ -4333,14 +4657,14 @@ mod tests {
             id: second,
             at: Instant::now() - PIN_LIFETIME - Duration::from_secs(1),
         });
-        assert_eq!(s.choose_server(), Some(0));
+        assert_eq!(s.choose_server(TransportPref::Auto), Some(0));
     }
 
     #[test]
     fn a_demoted_country_is_passed_over_but_not_removed() {
         let mut s = session_with(vec![vless("A"), vless("B")]);
         s.demote(0);
-        assert_eq!(s.choose_server(), Some(1));
+        assert_eq!(s.choose_server(TransportPref::Auto), Some(1));
         // Still on the list, and named honestly rather than hidden.
         assert_eq!(s.locations()[0].quality, LocationQuality::Blocked);
     }
@@ -4350,7 +4674,7 @@ mod tests {
         let mut s = session_with(vec![vless("A"), vless("B")]);
         s.demote(0);
         s.demote(1);
-        assert!(s.choose_server().is_some());
+        assert!(s.choose_server(TransportPref::Auto).is_some());
     }
 
     #[test]
@@ -4363,13 +4687,13 @@ mod tests {
         // недавних, потому что об него и бились.
         s.remember_use(2);
         assert_eq!(
-            s.choose_server(),
+            s.choose_server(TransportPref::Auto),
             Some(0),
             "одной попытки мало: узел ещё ничего не доказал"
         );
 
         s.last_good = s.id_of(2);
-        assert_eq!(s.choose_server(), Some(2), "подтвердившийся узел берут первым");
+        assert_eq!(s.choose_server(TransportPref::Auto), Some(2), "подтвердившийся узел берут первым");
     }
 
     #[test]

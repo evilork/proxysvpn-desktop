@@ -49,6 +49,7 @@ use sha2::{Digest, Sha256};
 use crate::errors::AppError;
 use crate::events::SubMeta;
 use crate::subscription::{self, Hy2Config, ServerConfig, Subscription, VlessConfig, VlessTransport, XhttpMode};
+use crate::tunnel_prefs::TransportPref;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Keys
@@ -295,32 +296,101 @@ pub(crate) fn token_hash_hex(token: &str) -> String {
 // `engine_supports_on`, not re-derived here, so a future change to what the
 // subscription accepts cannot quietly diverge from what the manifest accepts.
 
-/// Reduce one location to the single `ServerConfig` v1 runs: the first
-/// candidate, in the server's own preference order, that (a) validates and
-/// (b) this build's engine can run. `None` when nothing in the location
-/// clears both — MANIFEST-v1.md "drop a location left without candidates".
+/// Reduce one location to the single `ServerConfig` v1 runs.
+///
+/// Order of preference: first, a candidate whose protocol matches
+/// `transport` (TunnelScreen «Способ подключения») and that (a) validates and
+/// (b) this build's engine can run; if `transport` is `Auto`, or no candidate
+/// of the chosen protocol clears both, fall back to the first candidate, in
+/// the server's own order, that clears them — today's behaviour, and what
+/// keeps a location from disappearing just because it does not offer the
+/// protocol asked for. `None` only when NOTHING in the location clears both —
+/// MANIFEST-v1.md "drop a location left without candidates" still applies
+/// exactly as before; a transport preference never drops a location by
+/// itself; it only picks which of its candidates wins.
+///
+/// A fallback is not silent: `used_fallback` tells the caller to say so in
+/// the location's own note, e.g. «XHTTP недоступен» — the location stays on
+/// the list, showing what it actually connects with instead.
+///
+/// `lang_en` picks the language of that note the same way `set_ui_lang`
+/// already threads the window's language into `Core::notify_protection`: the
+/// word is baked into `remark` here, on the Rust side, and the frontend
+/// renders it raw (`LocationsScreen.tsx`), so a note built in the wrong
+/// language cannot be fixed downstream.
 ///
 /// Candidates the app does not pick are not lost: the RAW envelope is what
 /// gets persisted (see `record_verified`), so they are still on disk for the
 /// in-location race a later version adds.
-fn build_location(location: &LocationWire, sing_box: bool) -> Option<ServerConfig> {
-    location.candidates.iter().find_map(|candidate| {
+fn build_location(
+    location: &LocationWire,
+    sing_box: bool,
+    transport: TransportPref,
+    lang_en: bool,
+) -> Option<ServerConfig> {
+    let runnable = |candidate: &CandidateWire| -> Option<ServerConfig> {
         let server = candidate_to_server(candidate)?;
-        if subscription::engine_supports_on(&server, sing_box) {
-            Some(with_remark(server, &location.flag, &location.label, location.note.as_deref()))
-        } else {
-            None
+        subscription::engine_supports_on(&server, sing_box).then_some(server)
+    };
+
+    let wanted_protocol = transport.candidate_protocol();
+    let preferred = wanted_protocol.and_then(|protocol| {
+        location
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.protocol.eq_ignore_ascii_case(protocol))
+            .find_map(runnable)
+    });
+
+    let (server, used_fallback) = match preferred {
+        Some(server) => (server, false),
+        None => {
+            let server = location.candidates.iter().find_map(runnable)?;
+            // Only a REAL fallback — `Auto` never asked for a specific
+            // protocol, so taking "whatever is first" is not a fallback from
+            // anything, it is the only mode `Auto` has.
+            (server, wanted_protocol.is_some())
         }
-    })
+    };
+
+    let note = if used_fallback {
+        let unavailable = if lang_en { "unavailable" } else { "недоступен" };
+        combine_notes(
+            location.note.as_deref(),
+            Some(&format!("{} {unavailable}", transport.label())),
+        )
+    } else {
+        location.note.clone()
+    };
+    Some(with_remark(server, &location.flag, &location.label, note.as_deref()))
+}
+
+/// Merge the location's own badge (`резерв`, `12,4 из 50 ГБ` — the SERVICE's
+/// word) with the one this app adds when it had to fall back away from the
+/// chosen transport. Neither replaces the other; a location can need both at
+/// once.
+fn combine_notes(service: Option<&str>, own: Option<&str>) -> Option<String> {
+    let service = service.map(str::trim).filter(|s| !s.is_empty());
+    match (service, own) {
+        (Some(a), Some(b)) => Some(format!("{a}, {b}")),
+        (Some(a), None) => Some(a.to_string()),
+        (None, Some(b)) => Some(b.to_string()),
+        (None, None) => None,
+    }
 }
 
 /// All usable locations of a verified manifest, in the order the server sent
 /// them (the same order rule the subscription list already follows).
-pub(crate) fn build_servers(verified: &Verified, sing_box: bool) -> Vec<ServerConfig> {
+pub(crate) fn build_servers(
+    verified: &Verified,
+    sing_box: bool,
+    transport: TransportPref,
+    lang_en: bool,
+) -> Vec<ServerConfig> {
     verified
         .locations
         .iter()
-        .filter_map(|location| build_location(location, sing_box))
+        .filter_map(|location| build_location(location, sing_box, transport, lang_en))
         .collect()
 }
 
@@ -1043,11 +1113,98 @@ mod tests {
             note: None,
             candidates: vec![valid_xhttp_candidate(), valid_vision_candidate()],
         };
-        let desktop = build_location(&location, false).expect("xhttp usable on desktop");
+        let desktop = build_location(&location, false, TransportPref::Auto, false).expect("xhttp usable on desktop");
         assert!(matches!(desktop, ServerConfig::Vless(c) if matches!(c.transport, VlessTransport::Xhttp { .. })));
 
-        let ios = build_location(&location, true).expect("vision usable on sing-box");
+        let ios = build_location(&location, true, TransportPref::Auto, false).expect("vision usable on sing-box");
         assert!(matches!(ios, ServerConfig::Vless(c) if c.transport == VlessTransport::Tcp));
+    }
+
+    #[test]
+    fn a_location_with_both_transports_honours_the_chosen_one() {
+        let location = LocationWire {
+            label: "Британия".to_string(),
+            flag: "🇬🇧".to_string(),
+            note: None,
+            candidates: vec![valid_xhttp_candidate(), valid_vision_candidate()],
+        };
+        let xhttp_pref = build_location(&location, false, TransportPref::XhttpOnly, false).expect("xhttp present");
+        assert!(matches!(xhttp_pref, ServerConfig::Vless(ref c) if matches!(c.transport, VlessTransport::Xhttp { .. })));
+        assert_eq!(xhttp_pref.remark(), "🇬🇧 Британия", "no fallback happened, no note added");
+
+        let vision_pref = build_location(&location, false, TransportPref::VisionOnly, false).expect("vision present");
+        assert!(matches!(vision_pref, ServerConfig::Vless(ref c) if c.transport == VlessTransport::Tcp));
+        assert_eq!(vision_pref.remark(), "🇬🇧 Британия");
+    }
+
+    #[test]
+    fn a_location_without_the_chosen_transport_falls_back_and_says_so() {
+        // Only XHTTP at this location — «Vision only» cannot be honoured.
+        let location = LocationWire {
+            label: "Британия".to_string(),
+            flag: "🇬🇧".to_string(),
+            note: None,
+            candidates: vec![valid_xhttp_candidate()],
+        };
+        let server = build_location(&location, false, TransportPref::VisionOnly, false)
+            .expect("the location is not dropped just because it lacks the preferred transport");
+        assert!(matches!(server, ServerConfig::Vless(ref c) if matches!(c.transport, VlessTransport::Xhttp { .. })));
+        assert_eq!(
+            server.remark(),
+            "🇬🇧 Британия · Vision недоступен",
+            "the fallback must be visible in the location list, not silent"
+        );
+    }
+
+    /// Review finding (28.09.2026): the fallback note was always the literal
+    /// Russian word "недоступен", even with the UI language set to English —
+    /// an otherwise-English screen reading "Britain · Vision недоступен".
+    /// `lang_en` must switch the word, not just the location's own label
+    /// (which stays exactly as the service sent it either way).
+    #[test]
+    fn the_fallback_note_follows_the_ui_language_not_just_the_locations_own_label() {
+        let location = LocationWire {
+            label: "Британия".to_string(),
+            flag: "🇬🇧".to_string(),
+            note: None,
+            candidates: vec![valid_xhttp_candidate()],
+        };
+        let server = build_location(&location, false, TransportPref::VisionOnly, true)
+            .expect("xhttp is still usable even though vision was asked for");
+        assert_eq!(
+            server.remark(),
+            "🇬🇧 Британия · Vision unavailable",
+            "an English window must not get a bare Russian word stitched into the row"
+        );
+    }
+
+    #[test]
+    fn a_fallback_note_is_added_next_to_the_services_own_badge_not_instead_of_it() {
+        let location = LocationWire {
+            label: "США".to_string(),
+            flag: "🇺🇸".to_string(),
+            note: Some("12,4 из 50 ГБ".to_string()),
+            candidates: vec![valid_vision_candidate()],
+        };
+        let server = build_location(&location, false, TransportPref::XhttpOnly, false).expect("vision usable");
+        assert_eq!(server.remark(), "🇺🇸 США · 12,4 из 50 ГБ, XHTTP недоступен");
+    }
+
+    #[test]
+    fn a_hysteria2_only_location_is_unaffected_by_auto_but_still_reports_a_vless_preference() {
+        let location = LocationWire {
+            label: "Швеция".to_string(),
+            flag: "🇸🇪".to_string(),
+            note: None,
+            candidates: vec![valid_hysteria2_candidate()],
+        };
+        // `Auto` never triggers a fallback note — this is its only mode.
+        let auto = build_location(&location, false, TransportPref::Auto, false).expect("hy2 usable");
+        assert_eq!(auto.remark(), "🇸🇪 Швеция");
+        // A VLESS-only preference honestly says this location cannot give it
+        // XHTTP or Vision either — it only has Hysteria2 to offer.
+        let xhttp_pref = build_location(&location, false, TransportPref::XhttpOnly, false).expect("hy2 usable");
+        assert_eq!(xhttp_pref.remark(), "🇸🇪 Швеция · XHTTP недоступен");
     }
 
     #[test]
@@ -1060,7 +1217,7 @@ mod tests {
             note: None,
             candidates: vec![broken],
         };
-        assert!(build_location(&location, false).is_none());
+        assert!(build_location(&location, false, TransportPref::Auto, false).is_none());
     }
 
     #[test]
@@ -1071,6 +1228,33 @@ mod tests {
             "🇺🇸 США · 12,4 из 50 ГБ"
         );
         assert_eq!(build_remark("", "Нидерланды", None), "Нидерланды");
+    }
+
+    /// A manifest location noted "XHTTP" (found live 27.09.2026 on
+    /// "Британия") must not come out the other end as "Британия · Watafast
+    /// · Watafast": `build_location` writes the note into `remark` exactly
+    /// as `subscription.rs` would, and `lib.rs::locations`/`start_on` read it
+    /// back with the same `split_label` + `display_note` — this is that
+    /// whole path, not just the string builder.
+    #[test]
+    fn a_manifest_location_noted_xhttp_does_not_double_its_own_protocol_name() {
+        let location = LocationWire {
+            label: "Британия".to_string(),
+            flag: "🇬🇧".to_string(),
+            note: Some("XHTTP".to_string()),
+            candidates: vec![valid_xhttp_candidate()],
+        };
+        let server = build_location(&location, false, TransportPref::Auto, false).expect("xhttp usable on desktop");
+        assert_eq!(server.remark(), "🇬🇧 Британия · XHTTP");
+        assert_eq!(server.protocol_label(), crate::subscription::WATAFAST_NAME);
+
+        let (_, label, note) = crate::split_label(server.remark());
+        assert_eq!(label, "Британия");
+        assert_eq!(
+            crate::subscription::display_note(note),
+            None,
+            "the note is only the transport word protocol_label already shows"
+        );
     }
 
     // ── Hosts validation ─────────────────────────────────────────────────

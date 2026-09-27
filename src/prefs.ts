@@ -24,6 +24,12 @@ export type ResolvedTheme = "light" | "dark";
 
 export const LANG_KEY = "proxysvpn_lang";
 export const THEME_KEY = "proxysvpn_theme";
+/** Connect the tunnel the moment the window opens, with no button press. Not
+ *  the same question as launching the APP at login — that one stays out of
+ *  the settings screen on purpose (see MoreScreen.tsx) because macOS will
+ *  not do it for us without a privileged helper. This is only about what the
+ *  app does with itself once it is already open, by whatever means. */
+export const AUTO_CONNECT_KEY = "proxysvpn_autoconnect";
 
 /** The query is asked for LIGHT on purpose: anything else — no preference, an
  *  engine that does not know the feature — must land on dark, which is this

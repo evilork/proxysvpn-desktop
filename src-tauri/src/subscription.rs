@@ -234,15 +234,48 @@ impl ServerConfig {
 /// The name our XHTTP-over-REALITY stack carries in the app.
 pub const WATAFAST_NAME: &str = "Watafast";
 
-/// The badge a location shows after «·». The service names its XHTTP entries
-/// «… · XHTTP»; in our app that stack is Watafast, so that badge reads so.
-/// Any other badge («резерв», «12,4 из 50 ГБ», «TCP») is the service's word
-/// and passes through untouched.
-pub fn display_note(server: &ServerConfig, note: Option<String>) -> Option<String> {
-    let is_xhttp = matches!(server, ServerConfig::Vless(c) if matches!(c.transport, VlessTransport::Xhttp { .. }));
-    match note {
-        Some(n) if is_xhttp && n.trim().eq_ignore_ascii_case("xhttp") => Some(WATAFAST_NAME.to_string()),
-        other => other,
+/// Words `protocol_label` can itself produce, lower-cased. A note that is
+/// only one of these is never new information — it is the transport, said
+/// twice — so it is dropped rather than kept or translated.
+///
+/// Found 27.09.2026: the service sent a «Британия» location noted «XHTTP»,
+/// this used to rename that note to «Watafast» (our name for XHTTP over
+/// REALITY), and `protocol_label` ALSO says «Watafast» for the same server —
+/// the log then read «узел: Британия · Watafast · Watafast». Dropping the
+/// note here instead means the fix holds even after the service stops
+/// sending transport words as notes at all, and for a note spelled in any
+/// case or attached to a server type it was not written for (a "Vision" note
+/// on a plain-TCP row is just as redundant as the real thing would be).
+const TRANSPORT_ONLY_NOTES: [&str; 5] = ["xhttp", "tcp", "vision", "watafast", "hysteria2"];
+
+/// The badge a location shows after «·», the service's own word minus the
+/// ones that only repeat what `protocol_label` already says next to it.
+/// Anything else («резерв», «12,4 из 50 ГБ») passes through untouched.
+pub fn display_note(note: Option<String>) -> Option<String> {
+    note.filter(|n| !TRANSPORT_ONLY_NOTES.contains(&n.trim().to_ascii_lowercase().as_str()))
+}
+
+/// Does this server match the person's chosen transport (TunnelScreen
+/// «Способ подключения»)? `Auto` matches everything — today's behaviour,
+/// unchanged. Only a VLESS server carries a transport this setting knows
+/// about; Hysteria2 is a different technology and this preference has no
+/// opinion on it either way.
+///
+/// Used as a SOFT preference by `Session::choose_server` (lib.rs): a tier
+/// that finds nothing matching falls through to the next tier exactly as it
+/// already does when nothing is healthy, rather than refusing to connect at
+/// all over a preference. `manifest.rs::build_location` is the HARD version
+/// of the same choice, for a manifest location's own list of candidates.
+pub(crate) fn matches_transport_pref(server: &ServerConfig, pref: crate::tunnel_prefs::TransportPref) -> bool {
+    use crate::tunnel_prefs::TransportPref;
+    match pref {
+        TransportPref::Auto => true,
+        TransportPref::XhttpOnly => {
+            matches!(server, ServerConfig::Vless(c) if matches!(c.transport, VlessTransport::Xhttp { .. }))
+        }
+        TransportPref::VisionOnly => {
+            matches!(server, ServerConfig::Vless(c) if c.transport == VlessTransport::Tcp && c.flow.starts_with("xtls-rprx-vision"))
+        }
     }
 }
 
@@ -637,12 +670,20 @@ type Headers = HashMap<String, String>;
 /// With an empty key table (today, in every shipped build) this is exactly
 /// `fetch_subscription_only` and nothing else runs — no extra request, no
 /// disk read, byte for byte the behaviour from before this existed.
-pub async fn fetch_subscription(sub_url: &str) -> Result<Subscription, AppError> {
+///
+/// `lang_en` is the window's current UI language (`Core::ui_lang_en`, kept in
+/// sync by `set_ui_lang` the same way it already reaches
+/// `Core::notify_protection`): a manifest location that falls back to a
+/// transport it wasn't asked for gets a note in this language, not always
+/// Russian — see `manifest::build_location`.
+pub async fn fetch_subscription(sub_url: &str, lang_en: bool) -> Result<Subscription, AppError> {
     if !manifest::manifest_enabled() {
         return fetch_subscription_only(sub_url).await;
     }
-    let (sub_result, manifest_result) =
-        tokio::join!(fetch_subscription_only(sub_url), fetch_manifest_servers(sub_url));
+    let (sub_result, manifest_result) = tokio::join!(
+        fetch_subscription_only(sub_url),
+        fetch_manifest_servers(sub_url, lang_en)
+    );
     manifest::merge(sub_result, manifest_result)
 }
 
@@ -719,8 +760,10 @@ fn retry_without_inline(err: &AppError) -> bool {
 }
 
 /// Compatibility entry point for `lib.rs`, which asks only for the list.
-pub async fn fetch_all_servers(sub_url: &str) -> Result<Vec<ServerConfig>, AppError> {
-    Ok(fetch_subscription(sub_url).await?.servers)
+/// `lang_en` is the UI language, forwarded to `fetch_manifest_servers` — see
+/// its doc comment.
+pub async fn fetch_all_servers(sub_url: &str, lang_en: bool) -> Result<Vec<ServerConfig>, AppError> {
+    Ok(fetch_subscription(sub_url, lang_en).await?.servers)
 }
 
 /// Fetch, verify and fall back for the Watafast manifest — MANIFEST-v1.md in
@@ -732,7 +775,7 @@ pub async fn fetch_all_servers(sub_url: &str) -> Result<Vec<ServerConfig>, AppEr
 /// came back did not verify AND nothing usable was cached either. Every one
 /// of those leaves `fetch_subscription`'s result exactly what
 /// `fetch_subscription_only` produced — see `manifest::merge`.
-async fn fetch_manifest_servers(sub_url: &str) -> Option<(Vec<ServerConfig>, String)> {
+async fn fetch_manifest_servers(sub_url: &str, lang_en: bool) -> Option<(Vec<ServerConfig>, String)> {
     let token = subscription_token(sub_url)?;
     let token_hash = manifest::token_hash_hex(&token);
     let now_ms = now_millis();
@@ -765,7 +808,8 @@ async fn fetch_manifest_servers(sub_url: &str) -> Option<(Vec<ServerConfig>, Str
     }
     // iOS runs sing-box, which has no XHTTP transport — the exact split
     // `engine_supports_on` already draws for the subscription list.
-    let servers = manifest::build_servers(&verified, cfg!(target_os = "ios"));
+    let transport = crate::tunnel_prefs::load().transport;
+    let servers = manifest::build_servers(&verified, cfg!(target_os = "ios"), transport, lang_en);
     if servers.is_empty() {
         return None;
     }
@@ -1924,6 +1968,30 @@ pub fn build_xray_config_with_routing_and_prefs(
         "outboundTag": "dns-out",
         "port": 53
     }));
+    // 5a/5b. «Свои правила» (TunnelScreen): человек мог сам вписать что-то, о
+    // чём подписка не знает - обе свои строки идут ПЕРЕД профилем подписки, а
+    // не после, потому что xray берёт первое совпавшее правило. Без этого
+    // порядка «Всегда через VPN» для домена, который профиль подписки шлёт
+    // напрямую, не значило бы ничего: правило подписки совпало бы первым.
+    //
+    // Форма ("domain": [...]) та же самая, что и у правил подписки чуть ниже -
+    // значит, и утечка DNS исключена тем же способом: xray матчит домен ДО
+    // резолва (см. разбор dns-in выше), так что имя из этих списков никогда
+    // не уходит на резолвер не того выхода, каким бы список ни был.
+    if !prefs.proxy_domains.is_empty() {
+        rules.push(json!({
+            "type": "field",
+            "outboundTag": "proxy",
+            "domain": prefs.proxy_domains
+        }));
+    }
+    if !prefs.direct_domains.is_empty() {
+        rules.push(json!({
+            "type": "field",
+            "outboundTag": "direct",
+            "domain": prefs.direct_domains
+        }));
+    }
     if !direct_ips.is_empty() {
         rules.push(json!({
             "type": "field",
@@ -1969,6 +2037,27 @@ pub fn build_xray_config_with_routing_and_prefs(
             // 07.09.2026), поэтому запрос AAAA - гарантированное ожидание
             // впустую на каждом имени.
             "queryStrategy": prefs.ip_kind.query_strategy(),
+            // Гонка, не очередь. Без этого поля список из двух резолверов
+            // (DoH к 1.1.1.1, TCP к 8.8.8.8) xray спрашивает ПО ОЧЕРЕДИ:
+            // первый получает весь свой `timeoutMs`, и только после отказа
+            // или тайм-аута очередь доходит до второго. На холодном туннеле
+            // (первые секунды после подключения, замер 27.09.2026) это и
+            // читалось в журнале как «context deadline exceeded» пачками —
+            // DoH не успевал за 4 с по умолчанию, а TCP-резервный тем временем
+            // просто ждал своей очереди. `enableParallelQuery` (Xray-core
+            // 26.3.27, app/dns) спрашивает оба резолвера из `servers` СРАЗУ и
+            // берёт первый ответ — маршрут запроса (правило 2 выше, через
+            // узел) и сами адреса резолверов не меняются, только то, что оба
+            // спрошены одновременно.
+            "enableParallelQuery": true,
+            // Отдать чуть устаревшую запись, пока идёт обновление, а не
+            // заставлять имя ждать: полезно ровно для тех же первых секунд,
+            // когда браузер уже открывал это имя раньше в сессии. Час — то
+            // же самое значение, каким люди обычно ограничивают доверие к
+            // TTL, которого уже нет: свежий ответ приходит и заменяет его
+            // фоном, а не через час срока действия.
+            "serveStale": true,
+            "serveExpiredTTL": 3600,
             "tag": "dns-in"
         },
         "inbounds": [
@@ -2964,16 +3053,38 @@ mod tests {
     }
 
     #[test]
-    fn the_xhttp_badge_reads_watafast_and_other_badges_pass_through() {
-        let x = ServerConfig::Vless(xhttp_fixture());
-        let v = ServerConfig::Vless(vless_fixture());
-        assert_eq!(display_note(&x, Some("XHTTP".into())).as_deref(), Some("Watafast"));
-        assert_eq!(display_note(&x, Some("резерв".into())).as_deref(), Some("резерв"));
-        assert_eq!(display_note(&x, None), None);
-        // Only an XHTTP entry is renamed: a Vision row badged "XHTTP" by some
-        // mistake keeps the service's word rather than a false name.
-        assert_eq!(display_note(&v, Some("XHTTP".into())).as_deref(), Some("XHTTP"));
-        assert_eq!(display_note(&v, Some("TCP".into())).as_deref(), Some("TCP"));
+    fn a_transport_only_note_is_dropped_never_shown_twice() {
+        // Found live 27.09.2026: the service sent "Британия · XHTTP" and the
+        // old rename-to-Watafast rule made the log read
+        // "узел: Британия · Watafast · Watafast" — `protocol_label` already
+        // says "Watafast" for this exact server. Dropping the note removes
+        // the duplicate regardless of which side (site or app) is "correct".
+        assert_eq!(display_note(Some("XHTTP".into())), None);
+        // Case and the specific transport word must not matter: the service
+        // could send any of them, on any server, and each is just as
+        // redundant next to `protocol_label`.
+        for word in ["xhttp", "XHTTP", "XhTtP", "TCP", "tcp", "Vision", "VISION", "Watafast", "WATAFAST", "Hysteria2", "HYSTERIA2"] {
+            assert_eq!(display_note(Some(word.into())), None, "{word:?} should be dropped");
+        }
+        // A note with real information is untouched.
+        assert_eq!(display_note(Some("резерв".into())).as_deref(), Some("резерв"));
+        assert_eq!(display_note(Some("12,4 из 50 ГБ".into())).as_deref(), Some("12,4 из 50 ГБ"));
+        assert_eq!(display_note(None), None);
+        // Whitespace around a transport word is still recognised.
+        assert_eq!(display_note(Some("  XHTTP  ".into())), None);
+    }
+
+    /// The manifest builds the exact same `"{flag} {label} · {note}"` shape
+    /// (manifest.rs::build_remark, "the existing list rendering needs no
+    /// manifest-specific branch at all") — this is that same string, read
+    /// back by `split_label` and passed to `display_note` the way `lib.rs`
+    /// does for every location, subscription- or manifest-sourced alike.
+    #[test]
+    fn a_manifest_shaped_remark_drops_its_transport_note_too() {
+        let remark = "🇬🇧 Британия · XHTTP";
+        let (_, label, note) = crate::split_label(remark);
+        assert_eq!(label, "Британия");
+        assert_eq!(display_note(note), None);
     }
 
     #[test]
@@ -2985,6 +3096,31 @@ mod tests {
         let hy2 = parse_hy2_url("hysteria2://secret@nl.example.net:443?sni=www.bing.com&insecure=1#NL")
             .expect("hy2 parses");
         assert_eq!(ServerConfig::Hy2(hy2).protocol_label(), "Hysteria2");
+    }
+
+    #[test]
+    fn transport_pref_matching_is_auto_permissive_and_otherwise_exact() {
+        use crate::tunnel_prefs::TransportPref;
+
+        let vision = ServerConfig::Vless(vless_fixture());
+        let xhttp = ServerConfig::Vless(xhttp_fixture());
+        let hy2 = ServerConfig::Hy2(
+            parse_hy2_url("hysteria2://secret@nl.example.net:443?sni=www.bing.com&insecure=1#NL")
+                .expect("hy2 parses"),
+        );
+
+        // Auto: everything matches, exactly today's behaviour.
+        for server in [&vision, &xhttp, &hy2] {
+            assert!(matches_transport_pref(server, TransportPref::Auto));
+        }
+
+        assert!(matches_transport_pref(&xhttp, TransportPref::XhttpOnly));
+        assert!(!matches_transport_pref(&vision, TransportPref::XhttpOnly));
+        assert!(!matches_transport_pref(&hy2, TransportPref::XhttpOnly));
+
+        assert!(matches_transport_pref(&vision, TransportPref::VisionOnly));
+        assert!(!matches_transport_pref(&xhttp, TransportPref::VisionOnly));
+        assert!(!matches_transport_pref(&hy2, TransportPref::VisionOnly));
     }
 
     #[test]
@@ -3031,6 +3167,67 @@ mod tests {
         // service has spoken — that is what "one list" means.
         assert!(!text.contains("domain:kinopoisk.ru"), "seed leaked in");
         assert_eq!(cfg["routing"]["domainStrategy"], "IPIfNonMatch");
+    }
+
+    /// «Свои правила» (TunnelScreen) обязаны победить профиль подписки для
+    /// ОДНОГО и того же имени: xray берёт первое совпавшее правило, и
+    /// собственный список человека - не намёк, а решение.
+    #[test]
+    fn custom_rules_win_over_the_subscription_profile_for_the_same_name() {
+        use crate::tunnel_prefs::TunnelPrefs;
+        let rules = parse_routing_line(&routing_line(INLINE_PROFILE)).expect("profile");
+        // taximaxim.ru идёт напрямую в профиле подписки (см. фикстуру ниже);
+        // человек велел слать его через VPN своим собственным списком.
+        let prefs = TunnelPrefs {
+            proxy_domains: vec!["domain:taximaxim.ru".into()],
+            ..Default::default()
+        };
+        let cfg = build_xray_config_with_routing_and_prefs(&vless_fixture(), Some(&rules), &prefs);
+        let own = cfg["routing"]["rules"]
+            .as_array()
+            .expect("rules")
+            .iter()
+            .position(|r| r["domain"] == serde_json::json!(["domain:taximaxim.ru"]) && r["outboundTag"] == "proxy")
+            .expect("свой rule для taximaxim.ru есть");
+        let theirs = cfg["routing"]["rules"]
+            .as_array()
+            .expect("rules")
+            .iter()
+            .position(|r| {
+                r["outboundTag"] == "direct"
+                    && r["domain"]
+                        .as_array()
+                        .is_some_and(|d| d.iter().any(|v| v == "domain:taximaxim.ru"))
+            })
+            .expect("правило подписки тоже осталось в конфиге");
+        assert!(own < theirs, "своё правило обязано идти раньше правила подписки");
+    }
+
+    #[test]
+    fn custom_direct_domains_also_appear_ahead_of_the_subscription_profile() {
+        use crate::tunnel_prefs::TunnelPrefs;
+        let rules = parse_routing_line(&routing_line(INLINE_PROFILE)).expect("profile");
+        let prefs = TunnelPrefs {
+            direct_domains: vec!["domain:my-own-site.example".into()],
+            ..Default::default()
+        };
+        let cfg = build_xray_config_with_routing_and_prefs(&vless_fixture(), Some(&rules), &prefs);
+        let text = cfg.to_string();
+        assert!(text.contains("my-own-site.example"));
+        let idx_own = text.find("my-own-site.example").unwrap();
+        let idx_theirs = text.find("taximaxim.ru").unwrap();
+        assert!(idx_own < idx_theirs, "своё правило должно быть записано раньше профиля подписки");
+    }
+
+    #[test]
+    fn empty_custom_lists_add_no_rules_at_all() {
+        use crate::tunnel_prefs::TunnelPrefs;
+        let cfg = build_xray_config_with_routing_and_prefs(&vless_fixture(), None, &TunnelPrefs::default());
+        let rules = cfg["routing"]["rules"].as_array().expect("rules");
+        assert!(
+            rules.iter().all(|r| r["outboundTag"] != "proxy" || r["domain"].is_null()),
+            "без своих списков не должно появляться лишних domain-правил на proxy"
+        );
     }
 
     #[test]
@@ -3122,6 +3319,29 @@ mod tests {
         );
     }
 
+    /// На холодном туннеле DoH и TCP-резерв обязаны спрашиваться разом, а не
+    /// по очереди — иначе первый неотвеченный DoH-запрос съедает свой полный
+    /// тайм-аут прежде, чем xray вообще попробует второй резолвер (замер
+    /// 27.09.2026: пачка «context deadline exceeded» в первые секунды после
+    /// подключения). Поле подтверждено `-dump` настоящего бинаря: без него
+    /// `enableParallelQuery` в разобранной конфигурации не появляется вовсе.
+    #[test]
+    fn dns_servers_are_raced_in_parallel_not_queued() {
+        let cfg = build_xray_config_with_routing(&vless_fixture(), None);
+        let dns = &cfg["dns"];
+        assert_eq!(
+            dns["enableParallelQuery"], true,
+            "по умолчанию xray спрашивает резервный резолвер только после отказа первого"
+        );
+        // Отдать устаревший ответ на время обновления - тоже про эти первые
+        // секунды, для имён, уже разрешённых раньше в этой же сессии.
+        assert_eq!(dns["serveStale"], true);
+        assert!(
+            dns["serveExpiredTTL"].as_u64().is_some_and(|s| s > 0),
+            "serveStale без срока ничего не отдаёт"
+        );
+    }
+
     /// Конфигурацию принимает НАСТОЯЩИЙ xray, а не только наши ожидания.
     ///
     /// Тест знает, чего мы хотим; бинарь знает, что он примет. Второе важнее:
@@ -3164,6 +3384,7 @@ mod tests {
             ("всё разом", TunnelPrefs {
                 fragment: true, ip_kind: IpKind::Both,
                 dns: DnsChoice::Custom, custom_dns: "https://dns.quad9.net/dns-query".into(),
+                ..Default::default()
             }),
         ];
 

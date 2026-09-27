@@ -90,6 +90,14 @@ export type IpKind = "ipv4" | "ipv6" | "both";
 export type DnsChoice = "internal" | "system" | "custom";
 
 /**
+ * «Способ подключения» (TunnelScreen). `auto` - сегодняшнее поведение: первый
+ * кандидат, который умеет этот движок. Остальные два ограничивают выбор одним
+ * транспортом; локация, где его нет, не пропадает из списка - она подключится
+ * тем, что есть, и список это покажет.
+ */
+export type TransportPref = "auto" | "xhttpOnly" | "visionOnly";
+
+/**
  * Настройки туннеля.
  *
  * Здесь только то, что ДЕЙСТВИТЕЛЬНО меняет работу. Мультиплексирования нет
@@ -103,6 +111,24 @@ export interface TunnelPrefs {
   dns: DnsChoice;
   /** Адрес для dns === "custom". Пустая строка = выбран, но не введён. */
   customDns: string;
+  transport: TransportPref;
+  /** «Свои правила» → «Всегда напрямую», уже проверенные строки в форме xray. */
+  directDomains: string[];
+  /** «Свои правила» → «Всегда через VPN», та же форма. */
+  proxyDomains: string[];
+}
+
+/** Итог сохранения «Своих правил»: что не приняли, по каждому списку. */
+export interface CustomRulesOutcome {
+  directIgnored: string[];
+  proxyIgnored: string[];
+  /** true - туннель был поднят и переподключается. */
+  reconnected: boolean;
+}
+
+/** «Уведомления» (MoreScreen): системные тосты о падении/восстановлении защиты. */
+export interface NotifyPrefs {
+  enabled: boolean;
 }
 
 export interface LocationEntry {
@@ -268,6 +294,12 @@ export interface CoreBridge {
   tunnelPrefs(): Promise<TunnelPrefs>;
   /** Записать и применить. true - туннель был поднят и переподключается. */
   setTunnelPrefs(prefs: TunnelPrefs): Promise<boolean>;
+  /** Проверить и сохранить «Свои правила» (по строке на домен в каждом поле). */
+  setCustomRules(direct: string, proxy: string): Promise<CustomRulesOutcome>;
+  notifyPrefs(): Promise<NotifyPrefs>;
+  setNotifyPrefs(enabled: boolean): Promise<void>;
+  /** Сообщить ядру текущий язык окна - для текста системных уведомлений. */
+  setUiLang(lang: string): Promise<void>;
   /** Померить рукопожатие до каждой локации. Возвращает тот же список с числами. */
   measureLocations(): Promise<LocationEntry[]>;
   selectLocation(id: string | null): Promise<void>;
@@ -385,6 +417,22 @@ class TauriBridge implements CoreBridge {
 
   setTunnelPrefs(prefs: TunnelPrefs): Promise<boolean> {
     return call<boolean>("tunnel_prefs_set", { prefs });
+  }
+
+  setCustomRules(direct: string, proxy: string): Promise<CustomRulesOutcome> {
+    return call<CustomRulesOutcome>("tunnel_rules_set", { direct, proxy });
+  }
+
+  notifyPrefs(): Promise<NotifyPrefs> {
+    return call<NotifyPrefs>("notify_prefs_get");
+  }
+
+  setNotifyPrefs(enabled: boolean): Promise<void> {
+    return call<void>("notify_prefs_set", { enabled });
+  }
+
+  setUiLang(lang: string): Promise<void> {
+    return call<void>("set_ui_lang", { lang });
   }
 
   locations(): Promise<LocationEntry[]> {
@@ -804,7 +852,12 @@ class MockBridge implements CoreBridge {
     ipKind: "ipv4",
     dns: "internal",
     customDns: "",
+    transport: "auto",
+    directDomains: [],
+    proxyDomains: [],
   };
+
+  private notify: NotifyPrefs = { enabled: true };
 
   async tunnelPrefs(): Promise<TunnelPrefs> {
     await this.pause(120);
@@ -816,6 +869,90 @@ class MockBridge implements CoreBridge {
     this.prefs = { ...prefs };
     // В макете «переподключаемся» - это правда, только когда туннель поднят.
     return this.state.phase === "on" || this.state.phase === "unconfirmed";
+  }
+
+  /** Та же проверка, что и в Rust (tunnel_prefs.rs), для правдоподобного макета. */
+  private static validateDomain(raw: string): string | null {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    let rest = trimmed;
+    let prefix = "domain:";
+    if (trimmed.startsWith("full:")) {
+      prefix = "full:";
+      rest = trimmed.slice(5);
+    } else if (trimmed.startsWith("domain:")) {
+      rest = trimmed.slice(7);
+    }
+    if (!rest || rest.length > 253) return null;
+    // Ни схемы, ни пути, ни порта, ни звёздочки, ни пробела - только имя.
+    // ":" здесь же ловит и IPv6 (у него в форме без схемы двоеточие есть
+    // всегда), а IPv4 - отдельной проверкой чуть ниже, тем же порядком, что
+    // и validate_custom_domain в tunnel_prefs.rs.
+    if (/[:/\\*\s]/.test(rest)) return null;
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(rest)) return null;
+    const labels = rest.split(".");
+    if (labels.length < 2) return null;
+    for (const label of labels) {
+      if (!label || label.length > 63 || label.startsWith("-") || label.endsWith("-")) return null;
+      if (!/^[a-zA-Z0-9-]+$/.test(label)) return null;
+    }
+    return `${prefix}${rest.toLowerCase()}`;
+  }
+
+  private static parseList(raw: string): { accepted: string[]; ignored: string[] } {
+    const accepted: string[] = [];
+    const ignored: string[] = [];
+    const seen = new Set<string>();
+    for (const rawLine of raw.split("\n")) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      if (accepted.length >= 200) {
+        ignored.push(line);
+        continue;
+      }
+      const valid = MockBridge.validateDomain(line);
+      if (valid && !seen.has(valid)) {
+        seen.add(valid);
+        accepted.push(valid);
+      } else if (!valid) {
+        ignored.push(line);
+      }
+    }
+    return { accepted, ignored };
+  }
+
+  async setCustomRules(direct: string, proxy: string): Promise<CustomRulesOutcome> {
+    await this.pause(260);
+    const d = MockBridge.parseList(direct);
+    const p = MockBridge.parseList(proxy);
+    const directSet = new Set(d.accepted);
+    const clashing = p.accepted.filter((x) => directSet.has(x));
+    const clashSet = new Set(clashing);
+    this.prefs = {
+      ...this.prefs,
+      directDomains: d.accepted.filter((x) => !clashSet.has(x)),
+      proxyDomains: p.accepted.filter((x) => !clashSet.has(x)),
+    };
+    return {
+      directIgnored: [...d.ignored, ...clashing],
+      proxyIgnored: [...p.ignored, ...clashing],
+      reconnected: this.state.phase === "on" || this.state.phase === "unconfirmed",
+    };
+  }
+
+  async notifyPrefs(): Promise<NotifyPrefs> {
+    await this.pause(80);
+    return { ...this.notify };
+  }
+
+  async setNotifyPrefs(enabled: boolean): Promise<void> {
+    await this.pause(80);
+    this.notify = { enabled };
+  }
+
+  async setUiLang(_lang: string): Promise<void> {
+    // Ядру в макете не о чем говорить на этом языке - системных уведомлений
+    // макет не показывает вовсе.
   }
 
   async measureLocations(): Promise<LocationEntry[]> {

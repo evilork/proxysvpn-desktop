@@ -26,6 +26,7 @@ import {
 } from "./bridge";
 import { makeT, type Lang } from "./i18n";
 import {
+  AUTO_CONNECT_KEY,
   LANG_KEY,
   THEME_KEY,
   applyTheme,
@@ -51,6 +52,7 @@ import LocationsScreen from "./components/LocationsScreen";
 import LogViewer from "./components/LogViewer";
 import MainScreen from "./components/MainScreen";
 import MoreScreen from "./components/MoreScreen";
+import RulesScreen from "./components/RulesScreen";
 import TunnelScreen from "./components/TunnelScreen";
 import OnboardingScreen from "./components/OnboardingScreen";
 import PairScreen from "./components/PairScreen";
@@ -72,7 +74,8 @@ type Route =
   | "techlog"
   | "report"
   | "where"
-  | "tunnel";
+  | "tunnel"
+  | "rules";
 
 const TOAST_MS = 4000;
 /** Recovery is silent below this; past it the sheet may be opened. */
@@ -84,9 +87,18 @@ function initialLang(): Lang {
   return typeof navigator !== "undefined" && navigator.language.startsWith("en") ? "en" : "ru";
 }
 
+function initialAutoConnect(): boolean {
+  return readStored(AUTO_CONNECT_KEY) === "true";
+}
+
 export default function App() {
   const [lang, setLang] = useState<Lang>(initialLang);
   const [theme, setTheme] = useState<ThemePref>(readThemePref);
+  const [autoConnect, setAutoConnectState] = useState<boolean>(initialAutoConnect);
+  // One attempt per window, made once we actually know there is a link to
+  // connect with — never again after that, or turning the tunnel off by hand
+  // would be undone by the very next render.
+  const triedAutoConnect = useRef(false);
 
   const [state, setState] = useState<StatePayload>({ phase: "off" });
   const [step, setStep] = useState<VpnStep | undefined>(undefined);
@@ -111,6 +123,11 @@ export default function App() {
   useEffect(() => {
     writeStored(LANG_KEY, lang);
     document.documentElement.setAttribute("lang", lang);
+    // Ядро не хранит язык окна само - оно только говорит на нём в системных
+    // уведомлениях (notify_prefs.rs), когда окно не в фокусе. "Не удалось" тут
+    // не о чем сообщать: следующий системный тост просто выйдет на прежнем
+    // языке, ничего в самом окне от этого не портится.
+    void bridge.setUiLang(lang).catch(() => undefined);
   }, [lang]);
 
   useEffect(() => {
@@ -122,6 +139,11 @@ export default function App() {
     if (theme !== "system") return undefined;
     return watchSystemTheme(() => applyTheme("system"));
   }, [theme]);
+
+  const setAutoConnect = useCallback((value: boolean) => {
+    setAutoConnectState(value);
+    writeStored(AUTO_CONNECT_KEY, value ? "true" : "false");
+  }, []);
 
   // ── toast ────────────────────────────────────────────────────────────────
 
@@ -226,6 +248,23 @@ export default function App() {
 
   // ── the one button ───────────────────────────────────────────────────────
 
+  // A rejection is trusted only once the core has nothing newer to say. Right
+  // after a relaunch (the privileged one, or any other) the very first
+  // `connect` can reject while the core's OWN events already moved past it —
+  // its generation guard is what decides which attempt owns the phase, not
+  // this promise's order of arrival. Asking for the snapshot re-reads that
+  // same decision instead of overwriting it with a stale "failed".
+  const settleAfterRejection = useCallback(async (err: unknown) => {
+    try {
+      const snapshot = await bridge.snapshot();
+      setState(snapshot.state);
+      if (snapshot.state.phase !== "failed") return;
+    } catch {
+      // No core to ask at all - the rejection is the only truth left.
+    }
+    setState({ phase: "failed", error: toAppError(err) });
+  }, []);
+
   const connect = useCallback(async () => {
     setBusy(true);
     try {
@@ -233,22 +272,22 @@ export default function App() {
     } catch (err) {
       // `connect` can fail before the core emits anything (no link, malformed
       // link), so the rejection has to become a phase by itself.
-      setState({ phase: "failed", error: toAppError(err) });
+      await settleAfterRejection(err);
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [settleAfterRejection]);
 
   const disconnect = useCallback(async () => {
     setBusy(true);
     try {
       await bridge.disconnect();
     } catch (err) {
-      setState({ phase: "failed", error: toAppError(err) });
+      await settleAfterRejection(err);
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [settleAfterRejection]);
 
   const toggle = useCallback(() => {
     if (state.phase === "off" || state.phase === "failed") void connect();
@@ -263,6 +302,33 @@ export default function App() {
       // back onto the pairing screen for no reason.
     }
   }, []);
+
+  // Effect [2]: "Подключаться сразу" (MoreScreen). Waits for every barrier
+  // the button itself would wait for — the onboarding steps resolved to none
+  // needed, and a link actually confirmed by `sub_state` (not the optimistic
+  // `hasLink` default [1] uses for its first frame) — so this can never race
+  // ahead of the screen that would otherwise ask for one. One attempt per
+  // window: a person who disconnects by hand must stay disconnected, not be
+  // reconnected by the next unrelated render.
+  //
+  // `top === "pair"` below only rules out the PUSHED pairing screen (the
+  // `switch (top)` case). [1]'s own un-pushed pairing screen never sets
+  // `top`, so both of its `onDone` handlers claim `triedAutoConnect` for
+  // themselves before calling `connect` — see the comment there for why this
+  // effect cannot be trusted to notice that a connect is already underway.
+  useEffect(() => {
+    if (triedAutoConnect.current) return;
+    if (!autoConnect) return;
+    if (onboarding === null || onboarding.length > 0) return;
+    if (sub === null || !sub.hasLink) return;
+    if (state.phase !== "off") return;
+    // [1]'s own "connect right after pairing" already owns this moment for a
+    // brand-new link; firing here too would just be a second, wasted
+    // reconnect racing the first.
+    if (top === "pair") return;
+    triedAutoConnect.current = true;
+    void connect();
+  }, [autoConnect, onboarding, sub, state.phase, top, connect]);
 
   // ── recovery sheet ───────────────────────────────────────────────────────
 
@@ -343,6 +409,15 @@ export default function App() {
       return (
         <PairScreen
           onDone={() => {
+            // Claim the one auto-connect attempt BEFORE `refreshSubState`
+            // resolves, not after: its `setSub` below is what turns
+            // `sub.hasLink` true, and the auto-connect effect [2] reacts to
+            // that same change. Left unset, `setSub` and `connect`'s own
+            // `setBusy(true)` land in the same batch, the effect re-runs
+            // seeing `sub.hasLink: true` and `phase: "off"` (the real
+            // `connect` below hasn't heard back yet) and fires a SECOND,
+            // concurrent connect that tears down the first.
+            triedAutoConnect.current = true;
             void refreshSubState().then(() => void connect());
           }}
         />
@@ -356,6 +431,8 @@ export default function App() {
             onClose={pop}
             onDone={() => {
               pop();
+              // Same race as [1]'s pairing screen above, guarded the same way.
+              triedAutoConnect.current = true;
               void refreshSubState().then(() => void connect());
             }}
           />
@@ -410,6 +487,8 @@ export default function App() {
         );
       case "tunnel":
         return <TunnelScreen onClose={pop} />;
+      case "rules":
+        return <RulesScreen onClose={pop} />;
       case "more":
         return (
           <MoreScreen
@@ -418,10 +497,13 @@ export default function App() {
             theme={theme}
             onTheme={setTheme}
             onLang={setLang}
+            autoConnect={autoConnect}
+            onAutoConnect={setAutoConnect}
             onClose={pop}
             onSubscription={() => push("subscription")}
             onWhere={() => push("where")}
             onTunnel={() => push("tunnel")}
+            onRules={() => push("rules")}
             onTimeline={() => push("timeline")}
             onUnlinked={() => {
               reset();

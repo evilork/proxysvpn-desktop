@@ -17,7 +17,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { bridge, type DnsChoice, type IpKind, type TunnelPrefs } from "../bridge";
+import { bridge, type DnsChoice, type IpKind, type TransportPref, type TunnelPrefs } from "../bridge";
 import type { MsgKey } from "../i18n";
 import { Screen, Spinner, useUi } from "./ui";
 
@@ -31,6 +31,12 @@ const DNS_CHOICES: [DnsChoice, MsgKey][] = [
   ["internal", "tun.dns.internal"],
   ["system", "tun.dns.system"],
   ["custom", "tun.dns.custom"],
+];
+
+const TRANSPORTS: [TransportPref, MsgKey][] = [
+  ["auto", "tun.transport.auto"],
+  ["xhttpOnly", "tun.transport.xhttp"],
+  ["visionOnly", "tun.transport.vision"],
 ];
 
 export default function TunnelScreen({ onClose }: { onClose: () => void }) {
@@ -49,7 +55,17 @@ export default function TunnelScreen({ onClose }: { onClose: () => void }) {
       .catch(() => {
         // Не прочиталось - покажем умолчания: экран без настроек бесполезен,
         // а ядро в этом случае и само работает по умолчаниям.
-        if (alive) setPrefs({ fragment: false, ipKind: "ipv4", dns: "internal", customDns: "" });
+        if (alive) {
+          setPrefs({
+            fragment: false,
+            ipKind: "ipv4",
+            dns: "internal",
+            customDns: "",
+            transport: "auto",
+            directDomains: [],
+            proxyDomains: [],
+          });
+        }
       });
     return () => {
       alive = false;
@@ -128,6 +144,28 @@ export default function TunnelScreen({ onClose }: { onClose: () => void }) {
           </span>
           <span className="row-side">
             <input type="checkbox" checked={false} disabled readOnly />
+          </span>
+        </div>
+
+        <div className="row">
+          <span className="row-main">
+            <span className="row-title">{t("tun.transport")}</span>
+            <span className="row-sub">{t("tun.transportHint")}</span>
+          </span>
+        </div>
+        <div className="row">
+          <span className="segmented">
+            {TRANSPORTS.map(([value, key]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={prefs.transport === value}
+                disabled={busy}
+                onClick={() => void apply({ ...prefs, transport: value })}
+              >
+                {t(key)}
+              </button>
+            ))}
           </span>
         </div>
 
