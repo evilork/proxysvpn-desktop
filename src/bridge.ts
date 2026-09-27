@@ -82,6 +82,28 @@ import {
 
 export type LocationQuality = "good" | "ok" | "poor" | "blocked" | "unknown";
 
+/** Какие адреса спрашивать у резолвера. */
+export type IpKind = "ipv4" | "ipv6" | "both";
+
+/** Чей резолвер спрашивает ядро. */
+export type DnsChoice = "internal" | "system" | "custom";
+
+/**
+ * Настройки туннеля.
+ *
+ * Здесь только то, что ДЕЙСТВИТЕЛЬНО меняет работу. Мультиплексирования нет
+ * намеренно: наши узлы идут с XTLS Vision, а он с ним несовместим, и тумблер
+ * не делал бы ничего. Окно говорит об этом прямо, вместо того чтобы прятать.
+ */
+export interface TunnelPrefs {
+  /** Дробить первое приветствие TLS - против DPI, который ищет имя по образцу. */
+  fragment: boolean;
+  ipKind: IpKind;
+  dns: DnsChoice;
+  /** Адрес для dns === "custom". Пустая строка = выбран, но не введён. */
+  customDns: string;
+}
+
 export interface LocationEntry {
   /** Stable id from the core. Never an address. */
   id: string;
@@ -90,6 +112,14 @@ export interface LocationEntry {
   /** Flag emoji; the UI falls back to a globe when the core omits it. */
   flag?: string;
   quality: LocationQuality;
+  /**
+   * Рукопожатие TCP до узла, миллисекунды.
+   *
+   * Отсутствует, пока не померили, и у локаций на Hysteria2 - там порт UDP,
+   * и рукопожатию TCP стучать некуда. Отсутствие числа рисуется словом, а не
+   * нулём и не прочерком-ошибкой.
+   */
+  rttMs?: number;
   /** Badge the SERVER wrote, e.g. "12,4 из 50 ГБ". Never assembled here. */
   note?: string;
   /** Among the last three the person used. */
@@ -228,6 +258,11 @@ export interface CoreBridge {
   disconnect(): Promise<void>;
 
   locations(): Promise<LocationEntry[]>;
+  tunnelPrefs(): Promise<TunnelPrefs>;
+  /** Записать и применить. true - туннель был поднят и переподключается. */
+  setTunnelPrefs(prefs: TunnelPrefs): Promise<boolean>;
+  /** Померить рукопожатие до каждой локации. Возвращает тот же список с числами. */
+  measureLocations(): Promise<LocationEntry[]>;
   selectLocation(id: string | null): Promise<void>;
 
   subState(): Promise<SubState>;
@@ -333,6 +368,18 @@ class TauriBridge implements CoreBridge {
   disconnect(): Promise<void> {
     return call<void>("vpn_disconnect");
   }
+  measureLocations(): Promise<LocationEntry[]> {
+    return call<LocationEntry[]>("measure_locations");
+  }
+
+  tunnelPrefs(): Promise<TunnelPrefs> {
+    return call<TunnelPrefs>("tunnel_prefs_get");
+  }
+
+  setTunnelPrefs(prefs: TunnelPrefs): Promise<boolean> {
+    return call<boolean>("tunnel_prefs_set", { prefs });
+  }
+
   locations(): Promise<LocationEntry[]> {
     return call<LocationEntry[]>("list_locations");
   }
@@ -740,6 +787,38 @@ class MockBridge implements CoreBridge {
     return MOCK_LOCATIONS.map((entry) => ({
       ...entry,
       selected: entry.id === this.selected,
+    }));
+  }
+
+  /** Макет хранит настройки в памяти: страница перезагрузилась - как новые. */
+  private prefs: TunnelPrefs = {
+    fragment: false,
+    ipKind: "ipv4",
+    dns: "internal",
+    customDns: "",
+  };
+
+  async tunnelPrefs(): Promise<TunnelPrefs> {
+    await this.pause(120);
+    return { ...this.prefs };
+  }
+
+  async setTunnelPrefs(prefs: TunnelPrefs): Promise<boolean> {
+    await this.pause(260);
+    this.prefs = { ...prefs };
+    // В макете «переподключаемся» - это правда, только когда туннель поднят.
+    return this.state.phase === "on" || this.state.phase === "unconfirmed";
+  }
+
+  async measureLocations(): Promise<LocationEntry[]> {
+    // Замер дольше выдачи списка - так и в жизни.
+    await this.pause(900);
+    return MOCK_LOCATIONS.map((entry, i) => ({
+      ...entry,
+      selected: entry.id === this.selected,
+      // Каждая четвёртая без числа: так на экране видно, как выглядит
+      // локация на Hysteria2 и не ломается ли вёрстка без миллисекунд.
+      rttMs: i % 4 === 3 ? undefined : 28 + i * 17,
     }));
   }
 

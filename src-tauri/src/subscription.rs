@@ -1386,7 +1386,7 @@ const SEED_DIRECT_IPS: &[&str] = &["geoip:private", "geoip:ru"];
 /// service last sent.
 #[cfg(target_os = "macos")]
 pub fn build_xray_config(cfg: &VlessConfig) -> Value {
-    build_xray_config_with_routing(cfg, last_routing().as_ref())
+    build_xray_config_with_routing_and_prefs(cfg, last_routing().as_ref(), &crate::tunnel_prefs::load())
 }
 
 /// The same, with the rules passed in. Everything testable lives here.
@@ -1397,6 +1397,15 @@ pub fn build_xray_config(cfg: &VlessConfig) -> Value {
 /// the tunnel on purpose.
 #[cfg(any(target_os = "macos", test))]
 pub fn build_xray_config_with_routing(cfg: &VlessConfig, routing: Option<&RoutingRules>) -> Value {
+    build_xray_config_with_routing_and_prefs(cfg, routing, &crate::tunnel_prefs::TunnelPrefs::default())
+}
+
+/// То же, но с настройками туннеля. Всё проверяемое живёт здесь.
+pub fn build_xray_config_with_routing_and_prefs(
+    cfg: &VlessConfig,
+    routing: Option<&RoutingRules>,
+    prefs: &crate::tunnel_prefs::TunnelPrefs,
+) -> Value {
     use serde_json::json;
 
     let mut user = serde_json::Map::new();
@@ -1439,12 +1448,43 @@ pub fn build_xray_config_with_routing(cfg: &VlessConfig, routing: Option<&Routin
         "network": "udp",
         "port": "443"
     }));
-    // 2. LAN always direct, whatever the profile says: a printer and a router
+    // 2. СОБСТВЕННЫЕ запросы имён xray - через узел, и только через него.
+    //
+    // Это лечение поломки, которая стоила нам 1,2 секунды на КАЖДОЕ новое
+    // соединение (замер 22.09.2026: пять подряд - 1,18 / 1,17 / 1,25 / 1,20 /
+    // 1,21 с, при том что само имя разрешалось за 2 мс).
+    //
+    // Механика. `domainStrategy: IPIfNonMatch` заставляет xray разрешать имя
+    // каждого соединения, чтобы выбрать маршрут. Раздела `dns` у нас не было,
+    // поэтому он спрашивал СИСТЕМНЫЙ резолвер - то есть слал пакет на
+    // 8.8.8.8 прямо из процесса. Исходящим соединениям мы физический
+    // интерфейс прописываем (xray_manager.rs, sockopt.interface), а этому
+    // запросу - нет: он уходил в маршрут по умолчанию, то есть ОБРАТНО В
+    // ТУННЕЛЬ, к самому xray. Петля разрывалась только по таймеру.
+    //
+    // Браузер открывает десятки соединений на страницу, и по секунде с
+    // лишним на каждое - это и есть «подключилось, но ничего не грузит».
+    // Happ и INCY этого не знают, потому что раздел `dns` у них есть.
+    rules.push(json!({
+        "type": "field",
+        "inboundTag": ["dns-in"],
+        "outboundTag": "proxy"
+    }));
+    // 3. LAN always direct, whatever the profile says: a printer and a router
     //    admin page have no business crossing a border.
     rules.push(json!({
         "type": "field",
         "outboundTag": "direct",
         "ip": ["geoip:private"]
+    }));
+    // 4. Чужие запросы имён (браузера, системы) тоже забирает xray.
+    //
+    // Идёт ПОСЛЕ правила про частные сети: запрос к домашнему роутеру - это
+    // локальное имя, и отправлять его за границу незачем.
+    rules.push(json!({
+        "type": "field",
+        "outboundTag": "dns-out",
+        "port": 53
     }));
     if !direct_ips.is_empty() {
         rules.push(json!({
@@ -1462,8 +1502,37 @@ pub fn build_xray_config_with_routing(cfg: &VlessConfig, routing: Option<&Routin
     }
     // No catch-all: xray sends what matched nothing to the first outbound.
 
+    let outbounds = build_outbounds(cfg, user, reality, prefs);
+
     json!({
         "log": { "loglevel": "warning" },
+        // Свой резолвер вместо системного. Без него xray спрашивал имя в
+        // обход наших правил - см. длинный разбор у правила 2 выше.
+        //
+        // `UseIPv4` намеренно: IPv6-выхода у наших узлов нет (проверено
+        // 07.09.2026 по всему флоту), и запрос AAAA - это гарантированное
+        // ожидание впустую на каждом имени.
+        "dns": {
+            // DoH и TCP, а не голый UDP - и это исправление собственной ошибки,
+            // сделанной несколькими часами раньше.
+            //
+            // Сначала тут стояло ["1.1.1.1", "8.8.8.8"], то есть запросы по
+            // UDP. А отправляем мы их через `proxy`, и двумя правилами выше
+            // сами же написали: Vision работает ТОЛЬКО по TCP, потому и QUIC
+            // заблокирован. Запрос уходил в выход, который его не несёт, и
+            // первые секунды после подъёма туннеля имена не разрешались вовсе:
+            // замер показал 30 секунд на первое имя, а дальше - миллисекунды.
+            //
+            // DoH идёт по TCP/443 и проходит там же, где обычный трафик.
+            // `tcp://` вторым - на случай, если DoH у человека режут: тот же
+            // транспорт, но без HTTPS поверх.
+            "servers": prefs.dns_servers(),
+            // IPv6-выхода у наших узлов нет ни на одном (проверено по флоту
+            // 07.09.2026), поэтому запрос AAAA - гарантированное ожидание
+            // впустую на каждом имени.
+            "queryStrategy": prefs.ip_kind.query_strategy(),
+            "tag": "dns-in"
+        },
         "inbounds": [
             {
                 "tag": "socks-in",
@@ -1474,32 +1543,73 @@ pub fn build_xray_config_with_routing(cfg: &VlessConfig, routing: Option<&Routin
                 "sniffing": { "enabled": true, "destOverride": ["http", "tls"] }
             }
         ],
-        "outbounds": [
-            {
-                "tag": "proxy",
-                "protocol": "vless",
-                "settings": {
-                    "vnext": [{
-                        "address": cfg.host,
-                        "port": cfg.port,
-                        "users": [ Value::Object(user) ]
-                    }]
-                },
-                "streamSettings": {
-                    "network": "tcp",
-                    "security": "reality",
-                    "realitySettings": Value::Object(reality)
-                }
-            },
-            { "tag": "direct", "protocol": "freedom" },
-            { "tag": "block",  "protocol": "blackhole" }
-        ],
+        "outbounds": outbounds,
         "routing": {
             "domainStrategy": domain_strategy,
             "rules": rules
         }
     })
 }
+
+/// Исходящие: узел, прямой выход, чёрная дыра, резолвер и - по желанию -
+/// дробильщик рукопожатия.
+///
+/// Вынесено отдельной функцией, потому что дробление вставляет ЛИШНИЙ
+/// исходящий и меняет настройки сокета у основного: собирать это вперемешку с
+/// маршрутизацией в одном литерале стало нечитаемо.
+fn build_outbounds(
+    cfg: &VlessConfig,
+    user: serde_json::Map<String, Value>,
+    reality: serde_json::Map<String, Value>,
+    prefs: &crate::tunnel_prefs::TunnelPrefs,
+) -> Vec<Value> {
+    use serde_json::json;
+
+    let mut stream = serde_json::Map::new();
+    stream.insert("network".into(), json!("tcp"));
+    stream.insert("security".into(), json!("reality"));
+    stream.insert("realitySettings".into(), Value::Object(reality));
+    if prefs.fragment {
+        // Основной выход дозванивается ЧЕРЕЗ дробильщик: тот режет первый
+        // пакет рукопожатия, и запрещённое имя в ClientHello оказывается
+        // разрезанным между пакетами. Простая проверка по образцу его уже не
+        // находит.
+        stream.insert("sockopt".into(), json!({ "dialerProxy": "fragment" }));
+    }
+
+    let mut outbounds = vec![
+        json!({
+            "tag": "proxy",
+            "protocol": "vless",
+            "settings": { "vnext": [{
+                "address": cfg.host,
+                "port": cfg.port,
+                "users": [ Value::Object(user) ]
+            }]},
+            "streamSettings": Value::Object(stream)
+        }),
+        json!({ "tag": "direct", "protocol": "freedom" }),
+        json!({ "tag": "block",  "protocol": "blackhole" }),
+        // Отвечает на запросы имён сам, по разделу `dns` выше.
+        json!({ "tag": "dns-out", "protocol": "dns" }),
+    ];
+
+    if prefs.fragment {
+        outbounds.push(json!({
+            "tag": "fragment",
+            "protocol": "freedom",
+            "settings": { "fragment": {
+                // Режем ТОЛЬКО приветствие TLS: дробить весь поток дорого и
+                // заметно само по себе.
+                "packets": "tlshello",
+                "length": "100-200",
+                "interval": "10-20"
+            }}
+        }));
+    }
+    outbounds
+}
+
 
 // ───────────────────────────────────────────────────────────────────────────
 // Tests
@@ -2190,6 +2300,192 @@ mod tests {
             assert_eq!(first["network"], "udp");
             assert_eq!(first["port"], "443");
         }
+    }
+
+    /// У xray обязан быть СВОЙ резолвер, и его запросы - идти через узел.
+    ///
+    /// Без этого xray спрашивал имя системным резолвером, запрос уходил в
+    /// маршрут по умолчанию (то есть обратно в туннель, к самому xray) и
+    /// разрешался только по таймеру. Замер 22.09.2026: 1,2 секунды на каждое
+    /// новое соединение при том, что само имя разрешается за 2 мс.
+    #[test]
+    fn xray_resolves_names_through_the_node_not_through_the_tunnel() {
+        let cfg = build_xray_config_with_routing(&vless_fixture(), None);
+
+        let dns = &cfg["dns"];
+        assert!(!dns.is_null(), "раздела dns нет - xray снова пойдёт в систему");
+        assert_eq!(
+            dns["queryStrategy"], "UseIPv4",
+            "IPv6-выхода у узлов нет, и запрос AAAA - это ожидание впустую"
+        );
+        assert_eq!(dns["tag"], "dns-in", "без метки правило маршрутизации не сработает");
+
+        // Транспорт резолвера обязан быть TCP-совместимым: запросы идут через
+        // `proxy`, а Vision несёт только TCP - поэтому голый UDP-адрес здесь
+        // означает мёртвые первые секунды после подъёма туннеля.
+        for server in dns["servers"].as_array().expect("серверы перечислены") {
+            let addr = server.as_str().expect("адрес строкой");
+            assert!(
+                addr.starts_with("https://") || addr.starts_with("tcp://"),
+                "{addr}: резолвер по UDP не пройдёт через выход, который несёт только TCP"
+            );
+        }
+
+        let rules = cfg["routing"]["rules"].as_array().expect("правила есть");
+        let own = rules
+            .iter()
+            .find(|r| r["inboundTag"][0] == "dns-in")
+            .expect("собственные запросы xray должны иметь своё правило");
+        assert_eq!(
+            own["outboundTag"], "proxy",
+            "запросы имён самого xray обязаны идти через узел, иначе петля"
+        );
+
+        // И этот же outbound должен существовать, иначе xray не стартует.
+        let outbounds = cfg["outbounds"].as_array().expect("исходящие есть");
+        assert!(
+            outbounds.iter().any(|o| o["tag"] == "dns-out" && o["protocol"] == "dns"),
+            "правило указывает на dns-out, а его в конфигурации нет"
+        );
+
+        // Порядок: частные сети раньше перехвата порта 53, иначе запрос к
+        // домашнему роутеру уедет за границу.
+        let private_at = rules.iter().position(|r| r["ip"][0] == "geoip:private");
+        let dns_port_at = rules.iter().position(|r| r["port"] == 53);
+        assert!(
+            private_at < dns_port_at,
+            "локальный резолвер должен остаться локальным"
+        );
+    }
+
+    /// Конфигурацию принимает НАСТОЯЩИЙ xray, а не только наши ожидания.
+    ///
+    /// Тест знает, чего мы хотим; бинарь знает, что он примет. Второе важнее:
+    /// 22.09.2026 мы уже отправляли в него раздел `dns` с голыми UDP-адресами
+    /// - он их принял, а работать не стало.
+    ///
+    /// Ключ REALITY генерируется тем же бинарём: в образце стоит заглушка,
+    /// которую xray справедливо отвергает.
+    #[test]
+    fn xray_itself_accepts_every_combination_we_can_produce() {
+        use crate::tunnel_prefs::{DnsChoice, IpKind, TunnelPrefs};
+        use std::process::Command;
+
+        let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries/xray-aarch64-apple-darwin");
+        if !bin.exists() {
+            // На чужой машине бинаря может не быть - это не повод падать.
+            eprintln!("xray рядом не найден, проверка на живом бинаре пропущена");
+            return;
+        }
+
+        let keys = Command::new(&bin).arg("x25519").output().expect("x25519 запустился");
+        let text = String::from_utf8_lossy(&keys.stdout);
+        let public = text
+            .lines()
+            .find(|l| l.to_lowercase().contains("public"))
+            .and_then(|l| l.split_whitespace().last())
+            .expect("открытый ключ напечатан")
+            .to_string();
+
+        let dir = std::env::temp_dir().join("proxysvpn-xray-check");
+        std::fs::create_dir_all(&dir).expect("папка создалась");
+
+        let cases: Vec<(&str, TunnelPrefs)> = vec![
+            ("умолчания", TunnelPrefs::default()),
+            ("дробление", TunnelPrefs { fragment: true, ..Default::default() }),
+            ("системный DNS", TunnelPrefs { dns: DnsChoice::System, ..Default::default() }),
+            ("свой DNS", TunnelPrefs { dns: DnsChoice::Custom, custom_dns: "9.9.9.9".into(), ..Default::default() }),
+            ("оба семейства", TunnelPrefs { ip_kind: IpKind::Both, ..Default::default() }),
+            ("всё разом", TunnelPrefs {
+                fragment: true, ip_kind: IpKind::Both,
+                dns: DnsChoice::Custom, custom_dns: "https://dns.quad9.net/dns-query".into(),
+            }),
+        ];
+
+        for (name, prefs) in cases {
+            let mut cfg = build_xray_config_with_routing_and_prefs(&vless_fixture(), None, &prefs);
+            cfg["outbounds"][0]["streamSettings"]["realitySettings"]["publicKey"] =
+                serde_json::Value::String(public.clone());
+            // Порт SOCKS у образца тот же, что у живого приложения; для
+            // проверки конфигурации это неважно, xray её только разбирает.
+            let path = dir.join(format!("{}.json", name.replace(' ', "-")));
+            std::fs::write(&path, serde_json::to_string(&cfg).expect("сериализуется"))
+                .expect("записалось");
+
+            let out = Command::new(&bin)
+                .args(["run", "-test", "-c"])
+                .arg(&path)
+                .output()
+                .expect("xray запустился");
+            let said = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(
+                !said.contains("Failed to start"),
+                "xray отверг конфигурацию «{name}»:\n{said}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Дробление рукопожатия: лишний выход и звонок основного через него.
+    #[test]
+    fn fragmentation_adds_a_dialer_and_routes_the_node_through_it() {
+        use crate::tunnel_prefs::TunnelPrefs;
+
+        let off = build_xray_config_with_routing_and_prefs(
+            &vless_fixture(), None, &TunnelPrefs::default());
+        let outs = off["outbounds"].as_array().expect("исходящие есть");
+        assert!(
+            !outs.iter().any(|o| o["tag"] == "fragment"),
+            "выключенное дробление не должно оставлять следов в конфигурации"
+        );
+        assert!(
+            off["outbounds"][0]["streamSettings"]["sockopt"].is_null(),
+            "без дробления узел звонит напрямую"
+        );
+
+        let on = build_xray_config_with_routing_and_prefs(
+            &vless_fixture(), None,
+            &TunnelPrefs { fragment: true, ..Default::default() });
+        let outs = on["outbounds"].as_array().expect("исходящие есть");
+        let frag = outs.iter().find(|o| o["tag"] == "fragment").expect("дробильщик добавлен");
+        assert_eq!(frag["protocol"], "freedom");
+        assert_eq!(
+            frag["settings"]["fragment"]["packets"], "tlshello",
+            "режем только приветствие TLS, а не весь поток"
+        );
+        assert_eq!(
+            on["outbounds"][0]["streamSettings"]["sockopt"]["dialerProxy"], "fragment",
+            "без этого дробильщик стоит в стороне и ничего не делает"
+        );
+        // И узел остаётся узлом: дробление не должно подменять выход.
+        assert_eq!(on["outbounds"][0]["tag"], "proxy");
+        assert_eq!(on["outbounds"][0]["protocol"], "vless");
+    }
+
+    /// Настройки DNS доезжают до конфигурации, а не остаются в окне.
+    #[test]
+    fn dns_preferences_reach_the_config() {
+        use crate::tunnel_prefs::{DnsChoice, IpKind, TunnelPrefs};
+
+        let system = build_xray_config_with_routing_and_prefs(
+            &vless_fixture(), None,
+            &TunnelPrefs { dns: DnsChoice::System, ..Default::default() });
+        assert_eq!(system["dns"]["servers"][0], "localhost");
+
+        let both = build_xray_config_with_routing_and_prefs(
+            &vless_fixture(), None,
+            &TunnelPrefs { ip_kind: IpKind::Both, ..Default::default() });
+        assert_eq!(both["dns"]["queryStrategy"], "UseIP");
+
+        let own = build_xray_config_with_routing_and_prefs(
+            &vless_fixture(), None,
+            &TunnelPrefs { dns: DnsChoice::Custom, custom_dns: "9.9.9.9".into(), ..Default::default() });
+        assert_eq!(own["dns"]["servers"][0], "tcp://9.9.9.9");
     }
 
     #[test]

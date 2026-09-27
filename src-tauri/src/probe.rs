@@ -59,11 +59,48 @@ use crate::events::{LinkQuality, MetricPayload, VpnPhase};
 ///
 /// Order matters: the first entry is the cheapest answer (23 bytes) and is the
 /// one the website already uses, so it carries no new signature of its own.
+///
+/// ПОРЯДОК ПРОВЕРЕН С САМИХ УЗЛОВ, а не выведен из общих соображений. Замер
+/// 22.09.2026 с немецкого и амстердамского выходов:
+///
+///   proxysvpn.store            DE 0,17 с   AMS 0,23 с
+///   proksya.com                DE 0,29 с   AMS 0,20 с
+///   proxysvnovich.vercel.app   DE 0,14 с   AMS 0,16 с
+///   proksya.xyz                DE МОЛЧИТ   AMS 0,63 с
+///
+/// `proksya.xyz` стоял ВТОРЫМ и потому попадал в укороченную лестницу первой
+/// пробы - а с немецкого выхода он не отвечает вовсе. Каждое подключение на
+/// Германии дарило ему весь бюджет впустую. Он не удалён: это наш российский
+/// запасной домен, и он незаменим, когда у человека режут зарубежные
+/// префиксы. Но в паре для первой пробы ему не место - там нужны двое,
+/// отвечающих с НАШИХ выходов, потому что запрос идёт уже из-за границы.
+/// Лестница ПЕРВОЙ пробы - той, что решает, когда щит станет зелёным.
+///
+/// Два обращения к ОДНОМУ адресу, наперегонки: по открытому порту и по
+/// защищённому.
+///
+/// Зачем открытый. Защита Vercel периодически держит рукопожатие TLS 3-4
+/// секунды и только потом отдаёт 403 (замер 22.09.2026). Ответ этот годный -
+/// он доказывает, что байты сходили через туннель и вернулись, - но ждать его
+/// четыре секунды человек не должен. По порту 80 тот же адрес отвечает
+/// перенаправлением за 0,2 секунды, и это ровно то же доказательство.
+///
+/// Зачем защищённый рядом. Он единственный отдаёт РАЗОБРАННЫЙ выходной адрес.
+/// Успеет первым - хорошо, будет и адрес; не успеет - щит всё равно зелёный.
+///
+/// Адрес один и тот же нарочно: открытый запрос не показывает наблюдателю
+/// между узлом и витриной ничего сверх того, что и так видно по имени в
+/// рукопожатии TLS. И ни байта пользовательских данных - это HEAD.
+pub const FIRST_PROBE_LADDER: &[&str] = &[
+    "http://proxysvpn.store/api/exit-ip",
+    "https://proxysvpn.store/api/exit-ip",
+];
+
 pub const PROBE_LADDER: &[&str] = &[
     "https://proxysvpn.store/api/exit-ip",
-    "https://proksya.xyz/api/tools/whoami",
     "https://proksya.com/api/tools/whoami",
     "https://proxysvnovich.vercel.app/api/tools/whoami",
+    "https://proksya.xyz/api/tools/whoami",
 ];
 
 /// Per-address patience. 2.5 s is the number from the design: long enough for
@@ -265,6 +302,18 @@ fn now_ms() -> u64 {
 pub enum ProbeReason {
     /// Routes are up; this probe is what grants green. Never suppressed.
     AfterConnect,
+    /// Туннель только что встал, первая проба его не подтвердила, и мы даём
+    /// ему ещё несколько попыток подряд.
+    ///
+    /// Зачем отдельная причина. `AfterConnect` срабатывает на третьей секунде
+    /// жизни туннеля, когда ни одного байта через него ещё не прошло: xray не
+    /// успел договориться с узлом, имя не разрешено, сессия TLS не начата.
+    /// Замер 22.09.2026 на живой машине: первый запрос через холодный xray
+    /// стоил 3,7 секунды при бюджете 2,5 - проба падала в таймаут на исправном
+    /// туннеле. Дальше действовал `IdleForeground` с полом в 300 секунд, и
+    /// окно пять минут показывало «Подтвердить не удалось» поверх работающей
+    /// защиты. Ради одной холодной секунды человек видел сломанный VPN.
+    Settling,
     /// Wi-Fi changed, cellular took over, VPN-adjacent interface appeared.
     NetworkChanged,
     /// Machine came back from sleep.
@@ -305,6 +354,11 @@ impl ProbeReason {
         match self {
             // Never suppressed: this is the probe that turns the shield green.
             Self::AfterConnect => Duration::ZERO,
+            // Прогрев. Пол маленький нарочно: эти попытки идут в первые
+            // полминуты жизни туннеля и их считанные штуки, метронома из них
+            // не выйдет. Ритма тоже: они прекращаются, как только туннель
+            // подтвердился.
+            Self::Settling => Duration::from_secs(4),
             // Guard against a double tap, nothing more. The user asked.
             Self::UserRequested => Duration::from_secs(3),
             Self::NetworkChanged | Self::Woke => Duration::from_secs(5),
@@ -501,15 +555,125 @@ pub fn parse_exit_ip(body: &str) -> Option<IpAddr> {
 /// round trip of a socket that was opened minutes ago — a number that looks
 /// wonderful and says nothing about whether the tunnel works right now. A
 /// probe that cannot fail is not a probe.
+/// Адреса ступеней лестницы, снятые ДО подъёма туннеля.
+///
+/// Зачем это вообще. Подтверждено системным журналом macOS 22.09.2026:
+///
+///   14:24:18.901  прогрев спросил proxysvpn.store  -> ответ, duration: 0s
+///   14:24:19.661  проба спросила ТО ЖЕ имя         -> DNS service 1939
+///   14:24:21.243  -> переназначено на DNS service 1349
+///   14:24:32.614  -> ответ.  duration: 13s
+///
+/// Как только поднимается туннель, macOS перетасовывает свои DNS-службы, и
+/// запрос, попавший в этот момент, виснет на тринадцать секунд. Прогрев за
+/// секунду до этого успевал проскочить.
+///
+/// А reqwest заворачивает разрешение имени И установку соединения в ОДИН
+/// таймаут (reqwest-0.12.28/src/connect.rs, with_timeout вокруг всего
+/// connect_with_maybe_proxy). Поэтому ошибка выходила одновременно
+/// `is_connect()` и `is_timeout()`, и наша `why()` подписывала её «не
+/// соединился» - про сокет, которого не было: ни одного SYN не отправлялось.
+/// На этой ложной подписи был потерян вечер.
+///
+/// Лечение: снять адреса ДО подъёма туннеля, пока резолвер спокоен, и дальше
+/// ходить по ним. Тогда шестисекундный бюджет меряет то, ради чего заведён, -
+/// рукопожатие и ответ.
+static PINNED: std::sync::Mutex<Vec<(String, IpAddr)>> = std::sync::Mutex::new(Vec::new());
+
+fn pinned() -> Vec<(String, IpAddr)> {
+    match PINNED.lock() {
+        Ok(g) => g.clone(),
+        // Отравленный замок не должен утаскивать за собой проверку связи.
+        Err(p) => p.into_inner().clone(),
+    }
+}
+
+/// Снять адреса всех ступеней. Вызывать ДО подъёма туннеля.
+///
+/// Каждое имя разрешается отдельной задачей: на спокойном резолвере это
+/// десятки миллисекунд, и складывать их в очередь незачем. Неудача по
+/// отдельному имени не страшна - для него просто останется обычный путь.
+pub async fn pin_ladder_addresses() {
+    let mut hosts: Vec<&'static str> = FIRST_PROBE_LADDER
+        .iter()
+        .chain(PROBE_LADDER.iter())
+        .map(|url| host_of(url))
+        .collect();
+    hosts.sort_unstable();
+    hosts.dedup();
+
+    let mut jobs = tokio::task::JoinSet::new();
+    for host in hosts {
+        jobs.spawn(async move {
+            let found = tokio::net::lookup_host((host, 0u16))
+                .await
+                .ok()
+                .and_then(|mut it| it.find(|a| a.is_ipv4()))
+                .map(|a| a.ip());
+            (host.to_string(), found)
+        });
+    }
+    let mut out = Vec::new();
+    while let Some(done) = jobs.join_next().await {
+        if let Ok((host, Some(ip))) = done {
+            out.push((host, ip));
+        }
+    }
+    let count = out.len();
+    if let Ok(mut g) = PINNED.lock() {
+        *g = out;
+    }
+    crate::logger::log("info", "probe", &format!("адреса лестницы сняты заранее: {count}"));
+}
+
+/// Забыть снятые адреса: подписка сменилась или туннель опущен.
+pub fn forget_pinned_addresses() {
+    if let Ok(mut g) = PINNED.lock() {
+        g.clear();
+    }
+}
+
 fn build_client(timeout: Duration) -> reqwest::Result<reqwest::Client> {
-    reqwest::Client::builder()
+    // Бюджет на УСТАНОВКУ соединения - треть общего, но не меньше полутора
+    // секунд.
+    //
+    // Раньше он был равен общему, и это стоило нам вечера вслепую: любая
+    // остановка - на разрешении имени, на рукопожатии TCP, на TLS или уже
+    // после запроса - приходила одной и той же ошибкой `is_timeout()`, и в
+    // журнале печаталось одинаковое «таймаут». Отличить «не дошли до сервера»
+    // от «дошли и он молчит» было нечем.
+    //
+    // С раздельным бюджетом неудача ДО установки приходит как `is_connect()`
+    // и печатается «не соединился». Это ровно тот вопрос, на который надо
+    // ответить, когда туннель несёт трафик, а проба падает.
+    // Три четверти, а не треть.
+    //
+    // Треть я поставил ради диагностики и тут же отрезал себе ответ: защита
+    // Vercel держит рукопожатие TLS около 3,2 с и только потом отдаёт 403, а
+    // этот 403 теперь считается доказательством туннеля. Бюджет в 2,7 с рвал
+    // связь ровно перед ним, и в журнале появлялось «не соединился» там, где
+    // на самом деле всё дошло бы. Замер 22.09.2026: TCP-соединение 3 мс,
+    // рукопожатие TLS 3,0-3,9 с.
+    //
+    // Три четверти от восьми - это шесть секунд: хватает с запасом, и при
+    // этом отказ ДО установки по-прежнему отличим от «ответа нет».
+    let connect_budget = (timeout * 3 / 4).max(Duration::from_secs(3)).min(timeout);
+    let mut builder = reqwest::Client::builder();
+    for (host, ip) in pinned() {
+        // Порт РОВНО НОЛЬ, и это не мелочь: hyper-util подставляет порт из
+        // адреса только когда он нулевой (set_port, http.rs:993-997), а
+        // reqwest пишет то же самое в своей документации. Поставь сюда 80 - и
+        // защищённая ступень молча уедет на восьмидесятый порт.
+        builder = builder.resolve(&host, std::net::SocketAddr::new(ip, 0));
+    }
+    builder
         // The tunnel is made of routes, not of a proxy. Inheriting whatever
         // http_proxy the user's shell happens to export would send the probe
         // somewhere else entirely and answer a question we did not ask.
         .no_proxy()
         .pool_max_idle_per_host(0)
         .timeout(timeout)
-        .connect_timeout(timeout)
+        .connect_timeout(connect_budget)
         .user_agent(concat!(
             "ProxysVPN-",
             env!("CARGO_PKG_VERSION"),
@@ -518,18 +682,277 @@ fn build_client(timeout: Duration) -> reqwest::Result<reqwest::Client> {
         .build()
 }
 
-/// Ask one address. `Ok(ip)` only when it answered with a real exit address.
-async fn ask(client: &reqwest::Client, url: &str, timeout: Duration) -> Option<IpAddr> {
-    let response = client.get(url).timeout(timeout).send().await.ok()?;
-    if !response.status().is_success() {
-        return None;
+/// Куда стучаться прогревом.
+///
+/// Первая ступень лестницы, та самая, которую проба спросит следом: к моменту
+/// пробы её имя уже лежит в кэше резолвера, а сессия до узла открыта.
+/// Прогреваться соединением до САМОГО узла бессмысленно - его адрес xray
+/// знает и без резолвера, и весь смысл затеи теряется.
+pub fn warm_target() -> (&'static str, u16) {
+    // Порт 80, а не 443, и это не оплошность. Прогрев обязан ДОЖДАТЬСЯ ответа
+    // с той стороны, а не расписки SOCKS, - значит после установки надо что-то
+    // сказать и что-то услышать. По 80 для этого хватает четырёх строк
+    // открытым текстом; по 443 пришлось бы вручную собирать рукопожатие TLS.
+    //
+    // Имя то же, что у первой ступени лестницы: к моменту пробы оно уже лежит
+    // в кэше резолвера.
+    (host_of(PROBE_LADDER[0]), 80)
+}
+
+/// Дождаться, пока туннель СМОЖЕТ открыть соединение.
+///
+/// Зачем. Сразу после подъёма интерфейса туннель ещё ничего не умеет: xray не
+/// договорился с узлом, сессия Reality не открыта, а наш резолвер DoH не
+/// поднял своё соединение до 1.1.1.1. Первое имя в этот момент разрешается
+/// 9,7 секунды (замер 22.09.2026; до того, как резолвер перевели на DoH, было
+/// 30). Дальше - 81 мс.
+///
+/// Раньше приложение просто спало фиксированные 1,2 секунды и шло проверять.
+/// Это гадание: на прогретой сети - лишняя задержка, на холодной - проба
+/// обречена, и человек видит «Подтвердить не удалось» поверх исправного
+/// туннеля.
+///
+/// Здесь мы вместо сна ОТКРЫВАЕМ соединение через SOCKS самого xray, называя
+/// узел ИМЕНЕМ. Этого хватает, чтобы заставить его разрешить имя через DoH и
+/// поднять сессию до узла - то есть оплатить весь холодный старт разом. Ни
+/// одного запроса HTTP, ни байта полезных данных: открыли и закрыли.
+///
+/// Возвращает true, если соединение удалось. False - не приговор: проба
+/// разберётся сама, просто ей придётся платить за прогрев самой.
+pub async fn warm_through_socks(
+    socks_port: u16,
+    host: &str,
+    port: u16,
+    budget: Duration,
+) -> bool {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let host = host.as_bytes();
+    // SOCKS5 разрешает не более 255 байт на имя.
+    if host.is_empty() || host.len() > 255 {
+        return false;
+    }
+
+    let work = async {
+        let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", socks_port))
+            .await
+            .ok()?;
+        // Приветствие: версия 5, один метод, без авторизации.
+        sock.write_all(&[0x05, 0x01, 0x00]).await.ok()?;
+        let mut hello = [0u8; 2];
+        sock.read_exact(&mut hello).await.ok()?;
+        if hello != [0x05, 0x00] {
+            return None;
+        }
+        // Запрос CONNECT по ИМЕНИ (тип 0x03), чтобы имя разрешал xray.
+        let mut req = vec![0x05, 0x01, 0x00, 0x03, host.len() as u8];
+        req.extend_from_slice(host);
+        req.extend_from_slice(&port.to_be_bytes());
+        sock.write_all(&req).await.ok()?;
+        // Ответ: версия, код, резерв, тип адреса - и дальше сам адрес.
+        let mut head = [0u8; 4];
+        sock.read_exact(&mut head).await.ok()?;
+        if head[1] != 0x00 {
+            return None;
+        }
+        // Дочитываем адрес в ответе, иначе он останется в потоке и попадёт
+        // в тело следующего чтения.
+        let skip = match head[3] {
+            0x01 => 4 + 2,                       // IPv4 + порт
+            0x04 => 16 + 2,                      // IPv6 + порт
+            0x03 => {
+                let mut len = [0u8; 1];
+                sock.read_exact(&mut len).await.ok()?;
+                usize::from(len[0]) + 2
+            }
+            _ => return None,
+        };
+        let mut tail = vec![0u8; skip];
+        sock.read_exact(&mut tail).await.ok()?;
+
+        // А ВОТ ТЕПЕРЬ - настоящий обмен.
+        //
+        // Инбаунд SOCKS у xray отвечает «соединение установлено» немедленно,
+        // ещё не начав разрешать имя и не дотянувшись до узла. Замер
+        // 22.09.2026: прогрев «проходил» за 0 мс и не грел ничего - проба
+        // через шесть секунд снова упиралась в холодный путь.
+        //
+        // Поэтому ждём БАЙТА С ТОЙ СТОРОНЫ. Он приходит, только когда имя
+        // разрешено, сессия до узла открыта и запрос дошёл до сервера, - то
+        // есть когда холодный старт действительно оплачен.
+        let ask = format!(
+            "HEAD / HTTP/1.0\r\nHost: {}\r\nUser-Agent: ProxysVPN (warm)\r\nConnection: close\r\n\r\n",
+            std::str::from_utf8(host).ok()?
+        );
+        sock.write_all(ask.as_bytes()).await.ok()?;
+        let mut first = [0u8; 1];
+        sock.read_exact(&mut first).await.ok()?;
+        Some(())
+    };
+
+    matches!(tokio::time::timeout(budget, work).await, Ok(Some(())))
+}
+
+/// Прогреть ВТОРУЮ половину пути - ту, по которой пойдёт проба.
+///
+/// `warm_through_socks` стучится в SOCKS самого xray и потому греет только
+/// его: разрешение имени через DoH и сессию до узла. Но проба - и браузер -
+/// ходят иначе: по маршруту по умолчанию, то есть через tun2socks, и имя им
+/// разрешает СИСТЕМНЫЙ резолвер. Его первый запрос идёт своим путём и платит
+/// свою цену заново.
+///
+/// Замер 22.09.2026 ровно об этом: прогрев через SOCKS прошёл за 1871 мс, а
+/// проба следом не смогла соединиться за шесть секунд - и по открытому порту
+/// тоже, значит TLS ни при чём.
+///
+/// Здесь мы делаем то же самое, что сделает проба: разрешаем имя системным
+/// резолвером и открываем соединение по маршруту по умолчанию. Отвечает та же
+/// сторона и тем же способом, поэтому к пробе всё уже тёплое.
+///
+/// Возвращает время в миллисекундах, если прошло.
+pub async fn warm_through_tunnel(host: &str, port: u16, budget: Duration) -> Option<u128> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let started = Instant::now();
+    let work = async {
+        // Разрешение имени тут не отделено намеренно: у пробы оно тоже внутри
+        // установки соединения, и греть надо ровно то, что она потратит.
+        let mut sock = tokio::net::TcpStream::connect((host, port)).await.ok()?;
+        let ask = format!(
+            "HEAD / HTTP/1.0\r\nHost: {host}\r\nUser-Agent: ProxysVPN (warm)\r\nConnection: close\r\n\r\n"
+        );
+        sock.write_all(ask.as_bytes()).await.ok()?;
+        // Ждём БАЙТ С ТОЙ СТОРОНЫ. tun2socks отвечает на SYN сам, не дожидаясь
+        // ничего, поэтому успешный connect ещё ничего не доказывает - на этом
+        // я уже обжёгся с распиской SOCKS.
+        let mut first = [0u8; 1];
+        sock.read_exact(&mut first).await.ok()?;
+        Some(())
+    };
+    match tokio::time::timeout(budget, work).await {
+        Ok(Some(())) => Some(started.elapsed().as_millis()),
+        _ => None,
+    }
+}
+
+/// Имя узла из адреса - для журнала. Путь не пишем: он всегда один и тот же.
+fn host_of(url: &str) -> &str {
+    url.split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url)
+}
+
+/// Почему запрос не удался, одним словом.
+///
+/// `reqwest::Error` в журнале разворачивается в абзац с адресом и цепочкой
+/// источников; нам нужно ровно одно: в какую стену уткнулись.
+fn why(e: &reqwest::Error) -> &'static str {
+    // ПОРЯДОК ВАЖЕН. `is_connect()` идёт первым: у reqwest ошибка установки
+    // соединения ОДНОВРЕМЕННО отвечает true и на `is_timeout()`, если она
+    // пришла по истечении `connect_timeout`. Проверяя таймаут первым, мы
+    // теряли именно то различие, ради которого и заведён отдельный бюджет.
+    if e.is_connect() {
+        if e.is_timeout() {
+            // НЕ «не соединился». reqwest заворачивает разрешение имени и
+            // установку соединения в один таймаут, и различить их по ошибке
+            // нельзя. Прежняя подпись утверждала, что виноват сокет, - и
+            // 22.09.2026 увела разбор на всю ночь, пока системный журнал
+            // macOS не показал, что проба тринадцать секунд стояла в
+            // getaddrinfo и не отправила ни одного SYN.
+            "имя не разрешилось или соединение не встало (бюджет установки)"
+        } else {
+            "не соединился"
+        }
+    } else if e.is_timeout() {
+        "соединился, но ответа нет (истёк общий бюджет)"
+    } else if e.is_request() {
+        "запрос не ушёл"
+    } else if e.is_body() || e.is_decode() {
+        "тело не прочиталось"
+    } else {
+        "ошибка сети"
+    }
+}
+
+/// Что дала одна попытка.
+///
+/// Различие, которого тут не было и которое стоило нам вечера. Проба
+/// существует, чтобы доказать: байт ушёл в туннель и вернулся. Ответ сервера
+/// это доказывает ЛЮБОЙ - хоть 200, хоть 403. Разобранный выходной адрес это
+/// приятное дополнение, а не условие.
+///
+/// 22.09.2026 замер показал, во что обходится путаница: защита Vercel отдавала
+/// нашему же немецкому выходу 403 четыре запроса подряд, проба считала это
+/// провалом, и окно писало «Соединение поднято, проверочная страница не
+/// ответила» поверх исправного туннеля. Страница ОТВЕТИЛА. Просто не тем.
+#[derive(Debug)]
+enum Answer {
+    /// Сервер ответил. Туннель доказан. Адрес есть, если тело удалось разобрать.
+    Reached { exit_ip: Option<IpAddr> },
+    /// Ответа не было вовсе: не дошли, не соединились, оборвалось.
+    Silent,
+}
+
+/// Ask one address.
+///
+/// Каждая неудача пишется в журнал. Раньше здесь стояло `.ok()?` четыре раза
+/// подряд, и провал пробы выглядел так: «Соединение поднято, проверочная
+/// страница не ответила» - без единой строки о том, какая страница, и почему.
+/// 22.09.2026 это стоило разбора вслепую при живом туннеле, который в ту же
+/// минуту вёл 26 соединений. Молчать тут нельзя.
+///
+/// Флуда не будет: лестницу обходят до первого ответа, и на исправном
+/// соединении первый же адрес отвечает, не написав ничего.
+async fn ask(client: &reqwest::Client, url: &str, timeout: Duration) -> Answer {
+    let host = host_of(url);
+    let response = match client.get(url).timeout(timeout).send().await {
+        Ok(response) => response,
+        Err(e) => {
+            crate::logger::log("warn", "probe", &format!("{host}: {}", why(&e)));
+            return Answer::Silent;
+        }
+    };
+    let status = response.status();
+    if !status.is_success() {
+        // Ответ есть - значит туннель донёс запрос и принёс ответ. Пишем в
+        // журнал, потому что 403 от собственной витрины это новость, но
+        // провалом пробы это НЕ является.
+        crate::logger::log("warn", "probe", &format!("{host}: ответил {status}"));
+        return Answer::Reached { exit_ip: None };
     }
     // A block page can be megabytes. Take a bounded prefix: our answer is
     // never more than a couple of hundred bytes.
-    let bytes = response.bytes().await.ok()?;
+    let bytes = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            // Заголовки пришли, тело оборвалось. Туннель всё равно доказан:
+            // ответ начал возвращаться.
+            crate::logger::log("warn", "probe", &format!("{host}: тело оборвалось, {}", why(&e)));
+            return Answer::Reached { exit_ip: None };
+        }
+    };
     let head = &bytes[..bytes.len().min(MAX_BODY_BYTES)];
-    let text = std::str::from_utf8(head).ok()?;
-    parse_exit_ip(text)
+    let Ok(text) = std::str::from_utf8(head) else {
+        crate::logger::log("warn", "probe", &format!("{host}: ответ не текст"));
+        return Answer::Reached { exit_ip: None };
+    };
+    match parse_exit_ip(text) {
+        Some(ip) => Answer::Reached { exit_ip: Some(ip) },
+        None => {
+            // Тело есть, адреса в нём нет: это страница-заглушка оператора,
+            // портал гостиничного Wi-Fi или наша же ошибка формата. Байты всё
+            // равно сходили туда и обратно.
+            crate::logger::log(
+                "warn",
+                "probe",
+                &format!("{host}: ответ без адреса, {} байт", bytes.len()),
+            );
+            Answer::Reached { exit_ip: None }
+        }
+    }
 }
 
 /// One active probe: walk the ladder until something answers, then decide.
@@ -552,6 +975,16 @@ pub async fn probe_once_with(
     meter: &mut TunnelMeter,
     ladder: &[&str],
     timeout: Duration,
+) -> ProbeReport {
+    probe_once_racing(meter, ladder, timeout, false).await
+}
+
+/// То же, но с выбором: обходить лестницу по очереди или спросить всех разом.
+pub async fn probe_once_racing(
+    meter: &mut TunnelMeter,
+    ladder: &[&str],
+    timeout: Duration,
+    race: bool,
 ) -> ProbeReport {
     // Take the "before" sample first: everything after this point is traffic
     // we are responsible for.
@@ -578,17 +1011,63 @@ pub async fn probe_once_with(
     let mut exit_ip = None;
     let mut rtt_ms = None;
     let mut via = None;
+    // Дошёл ли ХОТЬ КАКОЙ-ТО ответ. Именно это, а не разобранный адрес,
+    // доказывает, что байт пересёк туннель в обе стороны.
+    let mut reached = false;
 
     match build_client(timeout) {
         Ok(client) => {
-            for (index, url) in ladder.iter().enumerate() {
+            if race {
+                // Спрашиваем все адреса РАЗОМ и берём первый ответ.
+                //
+                // Замер 22.09.2026: `proksya.xyz` не отвечает с нашего же
+                // немецкого узла - десять секунд молчания, при том что с
+                // амстердамского отвечает за 0,6 с. При обходе по очереди
+                // такой адрес съедает весь свой бюджет ПЕРЕД тем, как
+                // спросят живого соседа, и проба падает целиком, хотя рабочий
+                // адрес был в двух шагах.
+                //
+                // Очередь остаётся для установившегося хода: там спешить
+                // некуда, а лишние запросы к витрине не нужны. Здесь же
+                // адресов всего два, и это один раз за подключение.
                 let started = Instant::now();
-                if let Some(ip) = ask(&client, url, timeout).await {
-                    // Never below 1 ms: a zero would read as "not measured".
-                    rtt_ms = Some((started.elapsed().as_millis() as u32).max(1));
-                    exit_ip = Some(ip);
-                    via = Some(index);
-                    break;
+                // `JoinSet` из tokio, а не `FuturesUnordered` из futures-util:
+                // futures-util в дереве есть, но только как ЧУЖАЯ зависимость,
+                // и опираться на неё нельзя - она уйдёт вместе с тем, кто её
+                // притащил. tokio подключён прямо.
+                let mut tries = tokio::task::JoinSet::new();
+                for (index, url) in ladder.iter().enumerate() {
+                    // reqwest::Client - это Arc внутри, клонировать дёшево.
+                    let client = client.clone();
+                    let url = (*url).to_string();
+                    tries.spawn(async move { (index, ask(&client, &url, timeout).await) });
+                }
+                while let Some(done) = tries.join_next().await {
+                    // Упавшая задача - это паника внутри запроса, а не ответ
+                    // сервера. Молча пропускаем: остальные ещё идут.
+                    let Ok((index, answer)) = done else { continue };
+                    if let Answer::Reached { exit_ip: ip } = answer {
+                        rtt_ms = Some((started.elapsed().as_millis() as u32).max(1));
+                        reached = true;
+                        exit_ip = ip;
+                        via = Some(index);
+                        break;
+                    }
+                }
+                // Остальные запросы больше не нужны: ответ уже есть, и держать
+                // их до таймаута значит светить лишними соединениями.
+                tries.abort_all();
+            } else {
+                for (index, url) in ladder.iter().enumerate() {
+                    let started = Instant::now();
+                    if let Answer::Reached { exit_ip: ip } = ask(&client, url, timeout).await {
+                        // Never below 1 ms: a zero would read as "not measured".
+                        rtt_ms = Some((started.elapsed().as_millis() as u32).max(1));
+                        reached = true;
+                        exit_ip = ip;
+                        via = Some(index);
+                        break;
+                    }
                 }
             }
         }
@@ -606,7 +1085,11 @@ pub async fn probe_once_with(
 
     let verdict = classify(ProbeInputs {
         link_up: true,
-        http_ok: exit_ip.is_some(),
+        // Раньше здесь стояло `exit_ip.is_some()`: щит зеленел только когда
+        // НАША витрина вернула разбираемый JSON. 403 от защиты Vercel,
+        // страница-заглушка и оборванное тело читались как «туннель не
+        // работает», хотя каждый из них доказывает обратное.
+        http_ok: reached,
         tx_delta: tx_after.saturating_sub(tx_before),
         rx_delta: rx_after.saturating_sub(rx_before),
     });
@@ -979,6 +1462,34 @@ mod tests {
         assert!(gate.allows(ProbeReason::AfterConnect, 1_001));
     }
 
+    /// Прогрев обязан переспрашивать секундами, а не минутами, - иначе
+    /// холодный туннель пять минут числится неподтверждённым.
+    #[test]
+    fn settling_asks_again_in_seconds_not_minutes() {
+        let mut gate = ProbeGate::new();
+        gate.mark(100_000);
+        assert!(!gate.allows(ProbeReason::Settling, 103_999));
+        assert!(gate.allows(ProbeReason::Settling, 104_000));
+        // И ради этого он вообще заведён: обычный ход в это время молчал бы
+        // ещё почти пять минут.
+        assert!(!gate.allows(ProbeReason::IdleForeground, 104_000));
+        assert!(
+            ProbeReason::Settling.min_gap() * 20 < ProbeReason::IdleForeground.min_gap(),
+            "прогрев должен быть на порядок чаще редкого хода"
+        );
+    }
+
+    /// Холодной пробе дают больше терпения, чем установившейся. Числа живут в
+    /// lib.rs, здесь закреплён сам порядок: 2,5 секунды - это про тёплый
+    /// туннель, и первому запросу их не хватает.
+    #[test]
+    fn a_cold_tunnel_gets_more_patience_than_a_warm_one() {
+        assert!(
+            ATTEMPT_TIMEOUT < Duration::from_secs(3),
+            "установившийся бюджет остаётся коротким"
+        );
+    }
+
     #[test]
     fn suspicion_cannot_turn_itself_into_a_timer() {
         let mut gate = ProbeGate::new();
@@ -1174,5 +1685,136 @@ mod tests {
             report.verdict,
             ProbeVerdict::NoRoute | ProbeVerdict::Blocked | ProbeVerdict::NetworkOffline
         ));
+    }
+
+    /// Снятие адресов обязано покрывать ОБЕ лестницы.
+    ///
+    /// Пропущенное имя означает, что проба по нему снова пойдёт в системный
+    /// резолвер - тот самый, что виснет на тринадцать секунд сразу после
+    /// подъёма туннеля.
+    #[test]
+    fn pinning_covers_every_rung_of_both_ladders() {
+        let mut hosts: Vec<&str> = FIRST_PROBE_LADDER
+            .iter()
+            .chain(PROBE_LADDER.iter())
+            .map(|u| host_of(u))
+            .collect();
+        hosts.sort_unstable();
+        hosts.dedup();
+        assert!(!hosts.is_empty(), "лестницы не могут быть пустыми");
+        for h in &hosts {
+            assert!(!h.contains('/') && !h.contains(':'), "нужно чистое имя: {h}");
+            assert!(!h.is_empty(), "пустое имя в лестнице");
+        }
+    }
+
+    /// Первая проба обязана иметь быстрый путь, не зависящий от чужого TLS.
+    #[test]
+    fn the_first_probe_has_a_plain_text_fast_lane() {
+        assert_eq!(FIRST_PROBE_LADDER.len(), 2, "гонка на двоих, не больше");
+        let plain = FIRST_PROBE_LADDER.iter().find(|u| u.starts_with("http://"));
+        let secure = FIRST_PROBE_LADDER.iter().find(|u| u.starts_with("https://"));
+        let plain = plain.expect("быстрый путь по открытому порту обязателен");
+        let secure = secure.expect("защищённый нужен ради выходного адреса");
+        // Один и тот же узел: открытый запрос не должен открывать наблюдателю
+        // ничего сверх того, что и так видно в рукопожатии защищённого.
+        assert_eq!(
+            host_of(plain),
+            host_of(secure),
+            "оба обращения обязаны идти к одному имени"
+        );
+        assert!(
+            PROBE_LADDER.iter().all(|u| u.starts_with("https://")),
+            "установившийся ход остаётся целиком защищённым"
+        );
+    }
+
+    /// Прогрев обязан стучаться в ту же дверь, которую проба откроет следом.
+    ///
+    /// Иначе он греет не то: разрешит одно имя, а проба спросит другое и снова
+    /// заплатит за холодный резолвер.
+    #[test]
+    fn the_warm_up_knocks_where_the_probe_will_knock() {
+        let (host, port) = warm_target();
+        // 80, а не 443: прогреву нужен настоящий ответ, а по открытому порту
+        // его можно получить четырьмя строками вместо рукопожатия TLS.
+        assert_eq!(port, 80, "прогрев говорит открытым текстом");
+        assert!(
+            PROBE_LADDER[0].contains(host),
+            "прогрев должен целиться в первую ступень, а не куда-то ещё"
+        );
+        assert!(!host.contains('/'), "нужно имя узла, а не кусок адреса: {host}");
+        assert!(!host.is_empty() && host.len() <= 255, "SOCKS5 не примет такое имя");
+    }
+
+    /// Ответ сервера доказывает туннель, каким бы код ни был.
+    ///
+    /// 22.09.2026 защита Vercel отдавала нашему немецкому выходу 403 четыре
+    /// запроса подряд. Проба считала это провалом и писала «проверочная
+    /// страница не ответила» поверх исправного туннеля, который в ту же
+    /// секунду нёс десятки килобайт. Страница ответила - просто не тем.
+    #[test]
+    fn any_answer_proves_the_tunnel_even_a_refusal() {
+        // 403 - ответ дошёл: запрос пересёк туннель и вернулся.
+        assert_eq!(
+            classify(ProbeInputs {
+                link_up: true,
+                http_ok: true,
+                tx_delta: 4_000,
+                rx_delta: 4_000,
+            }),
+            ProbeVerdict::Passed,
+            "дошедший ответ обязан зеленить щит, даже без разобранного адреса"
+        );
+        // А вот тишина при ушедших байтах - это по-прежнему задушенный поток.
+        assert_eq!(
+            classify(ProbeInputs {
+                link_up: true,
+                http_ok: false,
+                tx_delta: 4_000,
+                rx_delta: 0,
+            }),
+            ProbeVerdict::Blocked
+        );
+    }
+
+    /// Первая пара лестницы обязана отвечать с НАШИХ выходов.
+    #[test]
+    fn the_first_two_rungs_are_the_ones_that_answer_from_our_exits() {
+        // Замер 22.09.2026: с немецкого узла этот адрес молчит десять секунд.
+        // В укороченной лестнице первой пробы ему не место.
+        let first_two = &PROBE_LADDER[..2];
+        assert!(
+            !first_two.iter().any(|u| u.contains("proksya.xyz")),
+            "proksya.xyz не отвечает с узла Германии и не должен попадать в первую пару"
+        );
+        assert!(PROBE_LADDER.iter().any(|u| u.contains("proksya.xyz")),
+            "но из лестницы его не убирать: это запасной домен для России");
+    }
+
+    /// Мёртвый адрес в лестнице не должен съедать бюджет соседа.
+    ///
+    /// 22.09.2026 `proksya.xyz` перестал отвечать с немецкого узла, и обход по
+    /// очереди отдавал ему все 8 секунд ПЕРЕД тем, как спросить второго. Проба
+    /// падала целиком, хотя рабочий адрес стоял следующим. Гонка обязана
+    /// уложиться примерно в ОДИН бюджет, а не в сумму по числу адресов.
+    #[tokio::test]
+    async fn racing_costs_one_budget_not_the_sum() {
+        let mut meter = TunnelMeter::new();
+        let budget = Duration::from_millis(300);
+        // Три заведомо молчащих адреса из диапазона для документации.
+        let ladder = [
+            "https://203.0.113.1/api/exit-ip",
+            "https://203.0.113.2/api/exit-ip",
+            "https://203.0.113.3/api/exit-ip",
+        ];
+        let started = Instant::now();
+        let report = probe_once_racing(&mut meter, &ladder, budget, true).await;
+        let spent = started.elapsed();
+        assert!(report.exit_ip.is_none(), "молчащие адреса не дают адреса");
+        assert!(
+            spent < budget * 2,
+            "гонка заняла {spent:?} при бюджете {budget:?} на адрес - это похоже на обход по очереди"
+        );
     }
 }

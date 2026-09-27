@@ -51,6 +51,7 @@ import LocationsScreen from "./components/LocationsScreen";
 import LogViewer from "./components/LogViewer";
 import MainScreen from "./components/MainScreen";
 import MoreScreen from "./components/MoreScreen";
+import TunnelScreen from "./components/TunnelScreen";
 import OnboardingScreen from "./components/OnboardingScreen";
 import PairScreen from "./components/PairScreen";
 import ProblemScreen from "./components/ProblemScreen";
@@ -70,7 +71,8 @@ type Route =
   | "timeline"
   | "techlog"
   | "report"
-  | "where";
+  | "where"
+  | "tunnel";
 
 const TOAST_MS = 4000;
 /** Recovery is silent below this; past it the sheet may be opened. */
@@ -406,6 +408,8 @@ export default function App() {
             onOpenBot={() => openExternal(botUrl)}
           />
         );
+      case "tunnel":
+        return <TunnelScreen onClose={pop} />;
       case "more":
         return (
           <MoreScreen
@@ -417,6 +421,7 @@ export default function App() {
             onClose={pop}
             onSubscription={() => push("subscription")}
             onWhere={() => push("where")}
+            onTunnel={() => push("tunnel")}
             onTimeline={() => push("timeline")}
             onUnlinked={() => {
               reset();

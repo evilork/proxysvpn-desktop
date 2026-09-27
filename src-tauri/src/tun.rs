@@ -354,12 +354,19 @@ async fn spawn_tun2socks(bin: &std::path::Path) -> Result<Child, AppError> {
         TUN_NAME,
         "-proxy",
         &format!("socks5://127.0.0.1:{}", SOCKS_PORT),
-        // `warning`, not `info`. At `info` tun2socks writes one line per
+        // `warn`, not `info`. At `info` tun2socks writes one line per
         // connection, which is a list of the addresses the person visited and
         // was the bulk of an 82.7 MB log file. The logger drops those lines
         // anyway; not producing them saves the IPC, the parsing and the disk.
+        //
+        // Именно `warn`. Стояло `warning` — такого уровня у tun2socks нет, он
+        // принимает debug|info|warn|error|silent и на чужом падает сразу:
+        // «[ENGINE] failed to start: unrecognized level». То есть ТУННЕЛЬ НЕ
+        // ПОДНИМАЛСЯ ВООБЩЕ, а человек видел «Соединение не запустилось».
+        // Найдено живым прогоном 22.09.2026; тесты этого не видели, потому
+        // что строку никто не сверял с самим бинарём.
         "-loglevel",
-        "warning",
+        "warn",
     ])
     .stdout(Stdio::piped())
     .stderr(Stdio::piped())

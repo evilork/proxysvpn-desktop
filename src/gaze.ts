@@ -18,17 +18,48 @@
 // угол очень медленно подтягивается к текущему (постоянная времени около 20 с).
 // Быстрый наклон глаз отрабатывает, смену позы - нет.
 
-/** Насколько зрачок отходит от центра, в единицах холста марки (1720x1804). */
-export const GAZE_RANGE = { x: 26, y: 10 } as const;
+/**
+ * Насколько зрачок отходит от центра, в единицах холста марки (1720x1804).
+ *
+ * Не на глаз. Прорезь снята с марки 109 вершинами, и для каждого смещения
+ * считалось расстояние от центра зрачка до ближайшей стенки: ход кончается
+ * там, где круг радиусом 92 упёрся бы в веко. Зрачок обязан оставаться
+ * ЦЕЛЫМ кругом - это требование владельца, поэтому серп на краю не
+ * допускается, и ход ограничен вписанным эллипсом, а не габаритом прорези.
+ *
+ * Числа идут в паре с точкой покоя из Eye.tsx: зрачок стоит в середине
+ * видимого белка (468), и оттуда ход симметричен. Пока он стоял в точке из
+ * марки (537.4), у правого края коридора, симметричный ход упирался в 51 -
+ * глаз топтался в правой половине белка.
+ *
+ * Запас над веком 4 единицы по всему краю хода: проверено обходом эллипса с
+ * шагом в градус. Без запаса зрачок целовал веко на сглаживании.
+ */
+export const GAZE_RANGE = { x: 92, y: 23 } as const;
 
 /** Наклон, при котором зрачок доходит до края хода, в градусах. */
 const FULL_TILT_DEG = 22;
 
-/** Доля пути к цели за кадр. При 60 к/с это примерно четверть секунды. */
-const FOLLOW = 0.12;
+/**
+ * Пружина взгляда вместо доли пути за кадр.
+ *
+ * Было `current += (target - current) * 0.12` - показательное затухание: старт
+ * вялый, хвост длинный, глаз словно едет по маслу. Живой глаз ходит
+ * саккадами: резко трогается, быстро встаёт, чуть перелетает.
+ *
+ * Пружина это и даёт. Затухание 0,84 от критического - перелёт есть, но
+ * ровно на грани заметности; на 63 % пути глаз приходит примерно за 40 мс
+ * вместо прежних 130.
+ */
+const STIFFNESS = 240;
+const DAMPING = 26;
 
-/** Меньше этого считаем, что доехали, и останавливаем цикл. */
+/** Доехали, когда и ошибка, и скорость малы. Иначе цикл крутится вечно. */
 const SETTLED = 0.002;
+const SETTLED_SPEED = 0.02;
+
+/** Потолок шага. Вкладка была свёрнута - не выстреливать глазом на полкадра. */
+const MAX_STEP_SEC = 1 / 30;
 
 /** Скорость сползания базового угла за кадр: 20 с при 60 к/с. */
 const BASE_DRIFT = 1 / (20 * 60);
@@ -130,6 +161,60 @@ export function motionNeedsSecureContext(): boolean {
   return typeof window !== "undefined" && !window.isSecureContext;
 }
 
+/**
+ * Где сейчас находится сам глаз, в координатах окна.
+ *
+ * Без этого «следить за стрелкой» невозможно: раньше взгляд считался от
+ * ЦЕНТРА ОКНА, то есть глаз смотрел не на курсор, а в сторону той половины
+ * окна, где курсор оказался. Стоило эмблеме быть не в середине - и взгляд
+ * всегда косил. Якорь ставит сам глаз (Eye.tsx), потому что только он знает
+ * свой прямоугольник.
+ */
+export interface GazeAnchorPoint {
+  /** Центр САМОГО глаза в координатах окна, не центр эмблемы. */
+  cx: number;
+  cy: number;
+  /** Расстояние, на котором ход выбран примерно на три четверти. */
+  reach: number;
+}
+
+type GazeAnchor = () => GazeAnchorPoint | null;
+
+let anchor: GazeAnchor | null = null;
+
+export function setGazeAnchor(fn: GazeAnchor | null): void {
+  anchor = fn;
+}
+
+/**
+ * Курсор - во взгляд.
+ *
+ * Насыщение через гиперболический тангенс, а не обрезка: у обрезки есть
+ * стенка, за которой глаз мёртв, и человек её чувствует. Тангенс не доходит
+ * до края никогда, поэтому дальний угол окна всё равно чуть-чуть двигает
+ * зрачок, а вблизи ход почти линейный.
+ *
+ * Мера расстояния приходит вместе с якорем и берётся от размера эмблемы, а не
+ * в пикселях: одинаково работает и в узком окне, и на большом экране.
+ *
+ * @param px,py  курсор в координатах окна
+ * @param at     где глаз; null - якоря нет, считаем от центра окна
+ */
+export function pointerToGaze(
+  px: number,
+  py: number,
+  at: GazeAnchorPoint | null,
+  viewport: { width: number; height: number },
+): Gaze {
+  const cx = at ? at.cx : viewport.width / 2;
+  const cy = at ? at.cy : viewport.height / 2;
+  const reach = Math.max(
+    at ? at.reach : Math.min(viewport.width, viewport.height) / 2,
+    1,
+  );
+  return { x: Math.tanh((px - cx) / reach), y: Math.tanh((py - cy) / reach) };
+}
+
 function clamp1(v: number): number {
   return v < -1 ? -1 : v > 1 ? 1 : v;
 }
@@ -187,6 +272,10 @@ class GazeSource {
   private listeners = new Set<(g: Gaze) => void>();
   private target: Gaze = { x: 0, y: 0 };
   private current: Gaze = { x: 0, y: 0 };
+  /** Скорость зрачка по осям, долей хода в секунду. Это и есть пружина. */
+  private vx = 0;
+  private vy = 0;
+  private lastTs = 0;
   private base: { beta: number; gamma: number } | null = null;
   private frame = 0;
   private fromSensor = false;
@@ -226,6 +315,7 @@ class GazeSource {
     this.bound = true;
     window.addEventListener("deviceorientation", this.onTilt);
     window.addEventListener("pointermove", this.onPointer, { passive: true });
+    window.addEventListener("pointerout", this.onPointerOut, { passive: true });
     document.addEventListener("visibilitychange", this.onVisibility);
     // Первый жест где угодно - и сразу спрашиваем про датчик.
     window.addEventListener("pointerdown", primeGaze, { once: true, capture: true });
@@ -237,6 +327,7 @@ class GazeSource {
     this.bound = false;
     window.removeEventListener("deviceorientation", this.onTilt);
     window.removeEventListener("pointermove", this.onPointer);
+    window.removeEventListener("pointerout", this.onPointerOut);
     document.removeEventListener("visibilitychange", this.onVisibility);
     window.removeEventListener("pointerdown", primeGaze, { capture: true });
     window.removeEventListener("touchend", primeGaze, { capture: true });
@@ -244,6 +335,9 @@ class GazeSource {
     this.frame = 0;
     this.target = { x: 0, y: 0 };
     this.current = { x: 0, y: 0 };
+    this.vx = 0;
+    this.vy = 0;
+    this.lastTs = 0;
     this.base = null;
     this.fromSensor = false;
   }
@@ -286,24 +380,49 @@ class GazeSource {
     this.pointerEvents += 1;
     // Датчик главнее: если он заговорил, мышь больше не вмешивается.
     if (this.fromSensor) return;
-    const w = window.innerWidth || 1;
-    const h = window.innerHeight || 1;
-    this.target = {
-      x: clamp1(((e.clientX - w / 2) / (w / 2)) * 1.2),
-      y: clamp1(((e.clientY - h / 2) / (h / 2)) * 1.2),
-    };
+    this.target = pointerToGaze(e.clientX, e.clientY, anchor ? anchor() : null, {
+      width: window.innerWidth || 1,
+      height: window.innerHeight || 1,
+    });
+    this.run();
+  };
+
+  /**
+   * Курсор ушёл из окна - глаз возвращается прямо.
+   *
+   * Иначе он застывает скошенным в ту сторону, куда мышь вышла, и это читается
+   * как зависшая анимация, а не как живой взгляд.
+   */
+  private onPointerOut = (e: PointerEvent): void => {
+    if (this.fromSensor) return;
+    if (e.relatedTarget !== null) return;
+    this.target = { x: 0, y: 0 };
     this.run();
   };
 
   private run(): void {
     if (this.frame) return;
-    const step = (): void => {
+    this.lastTs = 0;
+    const step = (ts: number): void => {
+      // Шаг по реальному времени, а не по кадру: на 120-герцовом экране глаз
+      // обязан двигаться с той же скоростью, что и на 60-герцовом.
+      const dt = this.lastTs ? Math.min((ts - this.lastTs) / 1000, MAX_STEP_SEC) : 1 / 60;
+      this.lastTs = ts;
+
       const dx = this.target.x - this.current.x;
       const dy = this.target.y - this.current.y;
-      this.current = { x: this.current.x + dx * FOLLOW, y: this.current.y + dy * FOLLOW };
+      this.vx += (STIFFNESS * dx - DAMPING * this.vx) * dt;
+      this.vy += (STIFFNESS * dy - DAMPING * this.vy) * dt;
+      this.current = { x: this.current.x + this.vx * dt, y: this.current.y + this.vy * dt };
       for (const fn of this.listeners) fn(this.current);
-      if (Math.abs(dx) < SETTLED && Math.abs(dy) < SETTLED) {
+
+      const speed = Math.max(Math.abs(this.vx), Math.abs(this.vy));
+      if (Math.abs(dx) < SETTLED && Math.abs(dy) < SETTLED && speed < SETTLED_SPEED) {
+        // Доехали. Ставим точно в цель, гасим скорость и отпускаем кадры:
+        // иначе цикл крутится вечно ради движения в тысячную долю хода.
         this.current = { ...this.target };
+        this.vx = 0;
+        this.vy = 0;
         for (const fn of this.listeners) fn(this.current);
         this.frame = 0;
         return;

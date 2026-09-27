@@ -2,13 +2,18 @@
 //
 // [5] Countries — the manual choice, for the minority who need a specific one.
 //
-// Quality is a WORD, never milliseconds. The same number means three
-// different things across our platforms: on macOS the ping is measured beside
-// the tunnel, on iOS through it, and on Hysteria2 a TCP probe into a UDP port
-// never comes up at all. "быстро / средне / медленно / сейчас не проходит /
-// проверим при подключении" is true in all three cases. The only number in
-// the whole interface is the round trip of the CURRENT connection, measured
-// through the tunnel, where it is comparable with itself.
+// Миллисекунды ЕСТЬ - по решению владельца от 22.09.2026. Раньше здесь были
+// только слова, и довод был такой: одно и то же число значит на наших
+// платформах разное, а на Hysteria2 рукопожатия TCP не бывает вовсе.
+//
+// Первая половина довода снята тем, ЧТО именно мы теперь меряем: это
+// рукопожатие TCP до самого узла, снятое одинаково для всех строк списка, а
+// не смесь замеров с разных путей. Такие числа сравнимы между собой - ровно
+// для этого список и открывают.
+//
+// Вторая половина довода осталась верной и соблюдена: у локаций на Hysteria2
+// числа НЕТ, и на их месте по-прежнему слово. Ноль, прочерк и «ошибка» там
+// недопустимы - именно так когда-то и родился вечный спиннер.
 //
 // Nothing here carries an address, a port or a protocol — not in the row, not
 // in `aria-label`, not in a tooltip. An unnamed entry becomes "Сервер №3",
@@ -77,6 +82,32 @@ export default function LocationsScreen({
     void load();
   }, [load]);
 
+  // Числа приезжают ВТОРЫМ заходом, уже поверх открытого списка.
+  //
+  // Слить это с `load` нельзя: рукопожатие до десятка узлов занимает секунды,
+  // и человек всё это время смотрел бы на пустой экран вместо готового
+  // списка, по которому уже можно ткнуть.
+  useEffect(() => {
+    if (!items) return;
+    let alive = true;
+    void bridge
+      .measureLocations()
+      .then((list) => {
+        // Экран мог закрыться или список - обновиться, пока мы мерили.
+        if (alive && list.length > 0) setItems(list);
+      })
+      .catch(() => {
+        // Замер - украшение: без него список остаётся со словами и полностью
+        // рабочим. Ошибку показывать не за что.
+      });
+    return () => {
+      alive = false;
+    };
+    // Намеренно один раз за открытие: перемер на каждое изменение списка
+    // превратил бы экран в метроном по узлам.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items !== null]);
+
   const pick = useCallback(
     async (id: string | null, label: string | null) => {
       setBusy(true);
@@ -113,7 +144,11 @@ export default function LocationsScreen({
         <span className="row-title">
           {entry.label || t("loc.unnamed", { n: index + 1 })}
         </span>
-        <span className="row-sub">{entry.note ?? t(QUALITY_KEY[entry.quality])}</span>
+        <span className="row-sub">
+          {entry.rttMs !== undefined
+            ? t("loc.ms", { ms: entry.rttMs })
+            : (entry.note ?? t(QUALITY_KEY[entry.quality]))}
+        </span>
       </span>
       {entry.selected ? <span className="badge">{t("loc.pinned")}</span> : null}
     </button>

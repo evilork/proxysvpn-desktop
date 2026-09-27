@@ -32,6 +32,7 @@ mod logger;
 mod ping;
 mod probe;
 mod subscription;
+mod tunnel_prefs;
 
 #[cfg(target_os = "macos")]
 mod hysteria_manager;
@@ -85,7 +86,45 @@ const ROUTE_CHECK_EVERY: Duration = Duration::from_secs(5);
 /// Pause before the first probe of a fresh tunnel (design M1). Long enough for
 /// the engine's own handshake to finish, short enough that nobody waits.
 const FIRST_PROBE_DELAY: Duration = Duration::from_millis(1200);
+
+/// Сколько ждать, пока туннель научится открывать соединения.
+///
+/// Это не сон, а ожидание события: мы открываем одно соединение через SOCKS
+/// самого xray и ждём ответа. На прогретой сети оно приходит за десятки
+/// миллисекунд, на холодной - за секунды, и всё это время человек видит
+/// честное «Включаем...», а не преждевременный провал.
+///
+/// 12 секунд - потолок на случай, когда узел не отвечает вовсе. Дальше
+/// начинает работать обычный разбор: проба, лечение, следующий узел.
+const WARM_BUDGET: Duration = Duration::from_secs(12);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(2500);
+
+/// Терпение для пробы по ХОЛОДНОМУ туннелю.
+///
+/// 2500 мс выбирали под установившееся соединение: столько нужно плохой
+/// мобильной сети, чтобы закончить рукопожатие TLS. К первому запросу после
+/// подъёма туннеля это число неприменимо - там сверху ложатся разрешение
+/// имени, рукопожатие xray с узлом и открытие сессии Reality, и ни одного
+/// байта до этого через туннель не прошло. Замер 22.09.2026 на живой машине:
+/// 3,7 секунды. Три прогона подряд падали в таймаут на исправном туннеле,
+/// который в ту же минуту вёл 35 соединений.
+///
+/// 8 секунд - с запасом больше замеренного и всё ещё внутри бюджета
+/// подключения; по два адреса это 16 секунд худшего случая.
+const COLD_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Сколько времени переспрашивать туннель, который встал, но не подтвердился.
+///
+/// Считаем ЧАСАМИ, а не попытками, и это исправление собственной ошибки.
+/// Сначала тут стояло «четыре попытки», и вышло вот что: одна попытка - это
+/// два адреса по 8 секунд, то есть до 16 секунд, плюс пол в 4 секунды. Четыре
+/// таких - больше минуты, и всё это время человек смотрел на «Включаем...».
+/// Ложный провал обменялся на долгое враньё.
+///
+/// 45 секунд - это две-три попытки на медленной лестнице и десяток на
+/// быстрой. Главное, что потолок известен заранее и не зависит от того, как
+/// долго молчит сеть.
+const SETTLING_WINDOW: Duration = Duration::from_secs(45);
 
 /// Outgoing bytes with nothing coming back for this long is the passive half
 /// of "suspicion" (M1). It never decides anything on its own — it only buys a
@@ -175,6 +214,10 @@ struct LocationEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     flag: Option<String>,
     quality: LocationQuality,
+    /// Рукопожатие TCP до узла, миллисекунды. `None` - числа нет: у hysteria
+    /// его не бывает (порт UDP), либо узел не ответил, либо ещё не мерили.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rtt_ms: Option<u32>,
     /// A badge the SERVER wrote ("12,4 из 50 ГБ"), never assembled here.
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<String>,
@@ -367,6 +410,15 @@ struct Session {
     recents: VecDeque<String>,
     demoted: HashMap<String, Instant>,
     quality: HashMap<String, LocationQuality>,
+    /// Замеренные рукопожатия по локациям, для списка стран.
+    rtt: HashMap<String, u32>,
+    /// Узел, который ПОСЛЕДНИМ действительно подтвердился пробой.
+    ///
+    /// Не то же самое, что «недавний»: в недавние узел попадает в момент
+    /// попытки, удачной или нет. Весь вечер 22.09.2026 приложение бралось за
+    /// Германию именно поэтому - она возглавляла список недавних, хотя ни разу
+    /// не подтвердилась.
+    last_good: Option<String>,
 
     sub_fetched_at: Option<u64>,
     sub_used_fallback: bool,
@@ -376,6 +428,9 @@ struct Session {
 
     meter: TunnelMeter,
     gate: ProbeGate,
+    /// До какого момента переспрашивать холодный туннель чаще обычного.
+    /// Ставится на подключении, истекает сам.
+    settling_until: Option<Instant>,
     /// Bumped by every connect and every disconnect. A task whose generation
     /// is stale finishes quietly instead of writing over a newer session.
     generation: u64,
@@ -404,11 +459,14 @@ impl Session {
             recents: VecDeque::new(),
             demoted: HashMap::new(),
             quality: HashMap::new(),
+            rtt: HashMap::new(),
+            last_good: None,
             sub_fetched_at: None,
             sub_used_fallback: false,
             sub_source_host: None,
             meter: TunnelMeter::new(),
             gate: ProbeGate::new(),
+            settling_until: None,
             generation: 0,
             heal_rounds: 0,
             heal_blocked_until: None,
@@ -839,6 +897,7 @@ impl Session {
             out.push(LocationEntry {
                 recent: self.recents.contains(&id),
                 selected: self.pinned.as_ref().is_some_and(|p| p.id == id),
+                rtt_ms: self.rtt.get(&id).copied(),
                 id,
                 label,
                 flag,
@@ -881,12 +940,36 @@ impl Session {
                 .map(|id| self.demoted.get(&id).is_none_or(|until| *until <= now))
                 .unwrap_or(true)
         };
-        for id in self.recents.iter() {
+        // Тот, что ПОДТВЕРДИЛСЯ последним. Факт сильнее любой оценки.
+        if let Some(id) = &self.last_good {
             if let Some(index) = self.index_of(id) {
                 if healthy(index) {
                     return Some(index);
                 }
             }
+        }
+        // Самый быстрый из ЗАМЕРЕННЫХ.
+        //
+        // До этого здесь стоял просто первый живой из списка - то есть выбор
+        // определялся порядком, в котором подписка перечислила страны. У
+        // владельца первой шла Германия, и приложение упорно бралось за неё,
+        // хотя Амстердам в тот вечер отвечал заметно быстрее.
+        //
+        // Берём рукопожатие TCP до узла - то же число, что видно в списке
+        // стран. Узлы без замера (их ещё не мерили, или это Hysteria2, где
+        // рукопожатия TCP не бывает) не проигрывают автоматически: если
+        // замеров нет ни у кого, работает прежний порядок. Но и не выигрывают
+        // вслепую - предпочесть неизвестное известному быстрому не за что.
+        let fastest = (0..self.servers.len())
+            .filter(|index| healthy(*index))
+            .filter_map(|index| {
+                let id = self.id_of(index)?;
+                let ms = self.rtt.get(&id).copied()?;
+                Some((ms, index))
+            })
+            .min();
+        if let Some((_, index)) = fastest {
+            return Some(index);
         }
         (0..self.servers.len())
             .find(|index| healthy(*index))
@@ -1104,13 +1187,65 @@ impl Core {
                 .ok_or_else(|| AppError::new(ErrorCode::SubEmpty))?
         };
 
+        // Снять адреса ступеней ПОКА РЕЗОЛВЕР СПОКОЕН.
+        //
+        // Как только поднимется туннель, macOS перетасует DNS-службы, и
+        // запрос, попавший в этот момент, виснет на тринадцать секунд
+        // (подтверждено системным журналом 22.09.2026). Здесь же, до подъёма,
+        // это десятки миллисекунд.
+        probe::pin_ladder_addresses().await;
+
         self.start_on(index, generation, false).await?;
         if !self.is_current(generation).await {
             return Ok(());
         }
 
         self.set_step(VpnStep::Probing).await;
-        tokio::time::sleep(FIRST_PROBE_DELAY).await;
+        // Открываем окно прогрева ДО первой пробы: если она не подтвердит
+        // туннель, надзиратель переспросит через секунды, а не через пять
+        // минут.
+        self.session.lock().await.settling_until = Some(Instant::now() + SETTLING_WINDOW);
+
+        // Ждём СОБЫТИЯ, а не времени: пока через туннель не пройдёт первое
+        // соединение, проверять нечего. Оно же оплачивает весь холодный старт
+        // - разрешение имени через DoH и сессию до узла, - поэтому проба сразу
+        // за ним идёт уже по тёплому пути.
+        let (warm_host, warm_port) = probe::warm_target();
+
+        // Прогрев в ДВА захода, потому что путей тоже два.
+        //
+        // Первый - через SOCKS самого xray: будит его резолвер DoH и сессию до
+        // узла. Второй - через маршрут по умолчанию, то есть через tun2socks и
+        // СИСТЕМНЫЙ резолвер: именно так пойдут и проба, и браузер.
+        //
+        // Одного первого мало, и это замерено: 22.09.2026 он прошёл за 1871 мс,
+        // а проба следом не соединилась за шесть секунд - по открытому порту
+        // тоже, значит упиралась не в TLS, а в холодную вторую половину пути.
+        let engine_started = Instant::now();
+        let engine_warm =
+            probe::warm_through_socks(tun::SOCKS_PORT, warm_host, warm_port, WARM_BUDGET).await;
+        let engine_ms = engine_started.elapsed().as_millis();
+
+        let tunnel_ms = probe::warm_through_tunnel(warm_host, warm_port, WARM_BUDGET).await;
+        let warmed = engine_warm && tunnel_ms.is_some();
+
+        logger::log(
+            if warmed { "info" } else { "warn" },
+            "tun",
+            &format!(
+                "прогрев: движок {} за {engine_ms} мс, туннель {}",
+                if engine_warm { "ок" } else { "НЕ ПРОШЁЛ" },
+                match tunnel_ms {
+                    Some(ms) => format!("ок за {ms} мс"),
+                    None => "НЕ ПРОШЁЛ".to_string(),
+                }
+            ),
+        );
+        if !warmed {
+            // Прогрев не вышел - не беда: даём прежнюю фиксированную паузу,
+            // чтобы не броситься проверять совсем уж мгновенно.
+            tokio::time::sleep(FIRST_PROBE_DELAY).await;
+        }
         // `AfterConnect` has no floor, so this always asks: it is the probe
         // that decides whether the shield turns green at all.
         let verdict = self
@@ -1125,6 +1260,15 @@ impl Core {
             ProbeVerdict::Passed | ProbeVerdict::Unconfirmed => {
                 let label = self.session.lock().await.location.clone();
                 self.note(TimelineCode::Connected, label).await;
+                // Состояние показываем сразу, каким бы оно ни было.
+                //
+                // Пробовали иначе - держать окно на «Включаем...», пока идёт
+                // прогрев. Вышло хуже: спиннер крутился больше минуты, и это
+                // враньё оказалось неприятнее честного «поднято, но не
+                // подтверждено». Тем более что кнопка «Выключить» под ним
+                // работает, а туннель к этому моменту уже несёт трафик.
+                // Прогрев продолжает переспрашивать в фоне и сам переведёт
+                // щит в зелёное, когда проверка пройдёт.
                 self.set_phase(verdict.phase(), None).await;
                 self.spawn_supervisor(generation);
                 Ok(())
@@ -1198,6 +1342,15 @@ impl Core {
             }
         }
         self.emit_meta().await;
+
+        // Список стран сменился - значит прежние замеры относятся уже не к
+        // тем узлам. Меряем заново, ФОНОМ: обновление подписки не должно
+        // ждать двенадцати рукопожатий, а автовыбор к моменту нажатия
+        // «Включить» уже будет знать, кто быстрее.
+        let core = self.clone();
+        tauri::async_runtime::spawn(async move {
+            core.measure_all_rtt().await;
+        });
         Ok(())
     }
 
@@ -1252,6 +1405,9 @@ impl Core {
     }
 
     async fn disconnect(self: &Arc<Self>) {
+        // Снятые адреса живут ровно столько, сколько соединение: держать их
+        // дольше - значит однажды пойти по устаревшему.
+        probe::forget_pinned_addresses();
         // Bumped BEFORE the lock is taken: a connect or a repair in flight
         // notices at its next checkpoint and stops, so "Отмена" is felt in a
         // second rather than after the ladder finishes.
@@ -1289,25 +1445,87 @@ impl Core {
         }
 
         let mut meter = { self.session.lock().await.meter };
+        let (rx_before_probe, tx_before_probe) = meter.totals();
         // Two addresses, not four: the first probe of a session decides how
         // long the person waits for green, and the rest of the ladder only
         // matters once the first has actually failed.
         let ladder = match reason {
-            ProbeReason::AfterConnect => &probe::PROBE_LADDER[..2],
+            // Первая проба идёт по своей лестнице: там тот же адрес по
+            // открытому и по защищённому порту, наперегонки. Подробности - у
+            // FIRST_PROBE_LADDER.
+            ProbeReason::AfterConnect | ProbeReason::Settling => probe::FIRST_PROBE_LADDER,
             _ => probe::PROBE_LADDER,
         };
-        let report = probe::probe_once_with(&mut meter, ladder, PROBE_TIMEOUT).await;
+        // Холодному туннелю - холодное терпение.
+        let patience = match reason {
+            ProbeReason::AfterConnect | ProbeReason::Settling => COLD_PROBE_TIMEOUT,
+            _ => PROBE_TIMEOUT,
+        };
+        // Первая проба спрашивает адреса РАЗОМ: один мёртвый адрес не должен
+        // съедать весь бюджет до того, как спросят живого соседа. Установившийся
+        // ход остаётся очередью - там спешить некуда.
+        let race = matches!(
+            reason,
+            ProbeReason::AfterConnect | ProbeReason::Settling
+        );
+        let report = probe::probe_once_racing(&mut meter, ladder, patience, race).await;
 
         let verdict = self.interpret(report.verdict).await;
+        if verdict != ProbeVerdict::Passed {
+            // Приговор и обе половины улики в одной строке. Именно дельты
+            // отличают «ушло и не вернулось» от «ничего не ушло», и без них
+            // по журналу не отличить задушенный туннель от мёртвого адреса.
+            logger::log(
+                "warn",
+                "probe",
+                &format!(
+                    "{verdict:?}: отдано {} Б, принято {} Б за пробу, адресов в лестнице {}",
+                    report.tx_bytes.saturating_sub(tx_before_probe),
+                    report.rx_bytes.saturating_sub(rx_before_probe),
+                    ladder.len()
+                ),
+            );
+        }
+        // Число, которое видит человек, - это рукопожатие TCP до узла, а не
+        // длительность проверочного запроса.
+        //
+        // Раньше показывали `report.rtt_ms` - время всего GET через туннель:
+        // разрешение имени, три рукопожатия, ответ страницы. На холодном
+        // туннеле это 3814 мс, и окно честно писало «3814 мс» под словом
+        // «Защищено». Человек читает это как задержку до сервера и решает,
+        // что сервис никуда не годится, хотя настоящая задержка до узла в
+        // десятки раз меньше.
+        //
+        // Модуль `ping` для этого и написан, и он же знает, что у hysteria
+        // рукопожатия TCP не бывает: там ответ - «не применимо», и число не
+        // показывается вовсе. Это честнее выдуманной цифры.
+        let shown_rtt = if verdict == ProbeVerdict::Passed {
+            match ping::tcp_ping_async().await {
+                Ok(ms) => Some(ms),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
         {
             let mut s = self.session.lock().await;
             s.meter = meter;
             s.gate.mark(now_ms());
-            s.absorb_metric(report.metric());
+            let mut metric = report.metric();
+            metric.rtt_ms = shown_rtt;
+            metric.quality = Some(match shown_rtt {
+                Some(ms) => LinkQuality::from_rtt_ms(ms),
+                None => LinkQuality::Unknown,
+            });
+            s.absorb_metric(metric);
             if verdict == ProbeVerdict::Passed {
                 s.rx_stalled_since = None;
+                // Вот теперь узел действительно рабочий, и его стоит помнить.
                 if let Some(index) = s.current {
-                    if let (Some(id), Some(rtt)) = (s.id_of(index), report.rtt_ms) {
+                    s.last_good = s.id_of(index);
+                }
+                if let Some(index) = s.current {
+                    if let (Some(id), Some(rtt)) = (s.id_of(index), shown_rtt) {
                         // The one number we trust: measured through the tunnel
                         // we are actually using, so it is comparable with
                         // itself and with nothing else.
@@ -1319,6 +1537,53 @@ impl Core {
         }
         self.emit_metric().await;
         Some(verdict)
+    }
+
+    /// Померить рукопожатие TCP до каждого узла и запомнить.
+    ///
+    /// Нужно двоим: списку стран (там числа видит человек) и автовыбору (там
+    /// они решают, за какую страну браться). Ходит параллельно - двенадцать
+    /// узлов по очереди сложились бы в двенадцать секунд.
+    ///
+    /// Ни одного запроса к нашим сайтам и ни одного байта в туннель: только
+    /// рукопожатие до узла и сразу разрыв. Поэтому это можно делать и в фоне,
+    /// не боясь ни нагрузки на витрину, ни узнаваемого ритма в сети.
+    async fn measure_all_rtt(&self) {
+        // Снимок того, что меряем: держать замок сессии через сеть нельзя.
+        let targets: Vec<(String, String, u16, String)> = {
+            let s = self.session.lock().await;
+            s.locations()
+                .into_iter()
+                .zip(s.servers.iter())
+                .map(|(entry, server)| {
+                    (
+                        entry.id,
+                        server.host().to_string(),
+                        server.port(),
+                        server.proto().to_string(),
+                    )
+                })
+                .collect()
+        };
+        if targets.is_empty() {
+            return;
+        }
+
+        let mut jobs = tokio::task::JoinSet::new();
+        for (id, host, port, proto) in targets {
+            // Рукопожатие блокирующее, поэтому уходит в отдельный поток.
+            jobs.spawn_blocking(move || (id, ping::rtt_of(&host, port, &proto)));
+        }
+        let mut measured: HashMap<String, u32> = HashMap::new();
+        while let Some(done) = jobs.join_next().await {
+            if let Ok((id, Some(ms))) = done {
+                measured.insert(id, ms);
+            }
+        }
+
+        // Заменяем целиком: узел, переставший отвечать, обязан ПОТЕРЯТЬ прежнее
+        // число, а не показывать вчерашнее как сегодняшнее.
+        self.session.lock().await.rtt = measured;
     }
 
     /// Platform correction for a verdict built from interface counters.
@@ -1513,8 +1778,19 @@ impl Core {
             s.rx_stalled_since
                 .is_some_and(|since| since.elapsed() >= RX_STALL)
         };
+        // Туннель встал, но первая проба его не подтвердила. Пока попытки
+        // прогрева не исчерпаны, переспрашиваем через секунды: иначе один
+        // холодный промах прибивает окно к «Подтвердить не удалось» на пять
+        // минут поверх работающей защиты.
+        let settling = {
+            let s = self.session.lock().await;
+            s.phase == VpnPhase::Unconfirmed
+                && s.settling_until.is_some_and(|until| Instant::now() < until)
+        };
         let reason = if woke {
             ProbeReason::Woke
+        } else if settling {
+            ProbeReason::Settling
         } else if stalled {
             ProbeReason::Suspicion
         } else if self.window_visible() {
@@ -1876,6 +2152,68 @@ async fn list_locations(core: tauri::State<'_, Arc<Core>>) -> Cmd<Vec<LocationEn
     Ok(list)
 }
 
+/// Померить рукопожатие TCP до КАЖДОЙ локации и вернуть список с числами.
+///
+/// Отдельной командой, а не внутри `list_locations`: список должен открыться
+/// мгновенно, со словами, а числа приезжают следом. Замер идёт параллельно -
+/// последовательно двенадцать узлов по секунде складывались бы в двенадцать
+/// секунд ожидания.
+///
+/// У локаций на hysteria числа не будет никогда: там порт UDP, и рукопожатию
+/// TCP стучать некуда. Это не поломка, и рисовать вместо него ноль или
+/// «ошибка» нельзя - именно так когда-то и родился вечный спиннер.
+/// Настройки туннеля, как они сейчас записаны.
+#[tauri::command]
+async fn tunnel_prefs_get() -> Cmd<tunnel_prefs::TunnelPrefs> {
+    Ok(tunnel_prefs::load())
+}
+
+/// Записать настройки туннеля и, если туннель поднят, ПРИМЕНИТЬ их.
+///
+/// Применяем сразу, а не «при следующем подключении». Настройка, которая
+/// молча ничего не делает до перезапуска, - это половина правды: человек
+/// щёлкнул тумблер, увидел его включённым и вправе считать, что он работает.
+///
+/// Переподключение честно показывается окном: оно и так умеет рисовать
+/// «Включаем...».
+#[tauri::command]
+async fn tunnel_prefs_set(
+    core: tauri::State<'_, Arc<Core>>,
+    prefs: tunnel_prefs::TunnelPrefs,
+) -> Cmd<bool> {
+    if !tunnel_prefs::store(&prefs) {
+        return Err(AppError::new(ErrorCode::Unknown).to_payload());
+    }
+    let core = core.inner().clone();
+    let live = {
+        let s = core.session.lock().await;
+        matches!(s.phase, VpnPhase::On | VpnPhase::Unconfirmed | VpnPhase::Healing)
+    };
+    if live {
+        logger::log("info", "app", "настройки туннеля изменены, переподключаемся");
+        // Переподключение в фоне: команда не должна ждать весь подъём, иначе
+        // окно замрёт на тумблере.
+        tauri::async_runtime::spawn(async move {
+            core.disconnect().await;
+            let _ = core.connect().await;
+        });
+    }
+    Ok(live)
+}
+
+#[tauri::command]
+async fn measure_locations(core: tauri::State<'_, Arc<Core>>) -> Cmd<Vec<LocationEntry>> {
+    let core = core.inner().clone();
+    core.measure_all_rtt().await;
+    // Список берём в отдельной области: иначе заимствование доживает до
+    // возврата и компилятор справедливо ругается.
+    let list = {
+        let s = core.session.lock().await;
+        s.locations()
+    };
+    Ok(list)
+}
+
 #[tauri::command]
 async fn select_location(core: tauri::State<'_, Arc<Core>>, id: Option<String>) -> Cmd<()> {
     let core = core.inner().clone();
@@ -1954,6 +2292,8 @@ async fn sub_set(core: tauri::State<'_, Arc<Core>>, link: String) -> Cmd<()> {
     s.recents.clear();
     s.demoted.clear();
     s.quality.clear();
+    s.rtt.clear();
+    s.last_good = None;
     s.sub_fetched_at = None;
     Ok(())
 }
@@ -2097,16 +2437,62 @@ fn logs_page(offset: Option<usize>, limit: Option<usize>) -> Vec<LogLineOut> {
 
 #[tauri::command]
 async fn pair_start() -> Cmd<PairSession> {
-    start_pairing().await.map_err(|e| e.to_payload())
+    // Сопряжение не писало в журнал НИ СТРОЧКИ, и 22.09.2026 это стоило часа:
+    // телефон отчитался «отправлено», окно ждало вечно, а посмотреть было не на
+    // что. Теперь виден каждый шаг.
+    match start_pairing().await {
+        Ok(session) => {
+            logger::log(
+                "info",
+                "pair",
+                &format!("code issued, valid for {} ms", session.expires_at.saturating_sub(now_ms())),
+            );
+            Ok(session)
+        }
+        Err(e) => {
+            logger::log("error", "pair", &format!("code request failed: {e}"));
+            Err(e.to_payload())
+        }
+    }
 }
 
 #[tauri::command]
 async fn pair_poll(core: tauri::State<'_, Arc<Core>>, token: String) -> Cmd<PairStatus> {
     let core = core.inner().clone();
-    let outcome = poll_pairing(&token).await.map_err(|e| e.to_payload())?;
+    let outcome = match poll_pairing(&token).await {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            // Окно глотает ошибку опроса молча — «одна неудачная проба не
+            // новость». Если она неудачная КАЖДЫЙ раз, человек смотрит на код
+            // до бесконечности. В журнале это теперь видно.
+            logger::log("error", "pair", &format!("poll failed: {e}"));
+            return Err(e.to_payload());
+        }
+    };
+    logger::log(
+        "info",
+        "pair",
+        match outcome {
+            PairOutcome::Waiting => "server says: still waiting",
+            PairOutcome::Linked(_) => "server says: link arrived",
+            PairOutcome::Expired => "server says: code spent or expired",
+        },
+    );
     if let PairOutcome::Linked(link) = outcome {
-        let link = validate_link(&link).map_err(|e| e.to_payload())?;
-        store_link(&link).map_err(|e| e.to_payload())?;
+        let link = match validate_link(&link) {
+            Ok(link) => link,
+            Err(e) => {
+                // Токен уже погашен сервером: ссылка потеряна навсегда, и
+                // человеку придётся просить новый код. Молчать тут нельзя.
+                logger::log("error", "pair", &format!("link rejected: {e}"));
+                return Err(e.to_payload());
+            }
+        };
+        if let Err(e) = store_link(&link) {
+            logger::log("error", "pair", &format!("link not stored: {e}"));
+            return Err(e.to_payload());
+        }
+        logger::log("info", "pair", "link stored");
         let mut s = core.session.lock().await;
         s.servers.clear();
         s.sub_fetched_at = None;
@@ -2482,7 +2868,14 @@ async fn ladder_get(path: &str) -> Result<(String, String), AppError> {
             Ok(response) if response.status() == 404 => {
                 return Err(AppError::new(ErrorCode::SubEmpty));
             }
-            Ok(_) | Err(_) => last = AppError::new(ErrorCode::SubUnreachable),
+            Ok(response) => {
+                logger::log("warn", "pair", &format!("{host} answered {}", response.status()));
+                last = AppError::new(ErrorCode::SubUnreachable);
+            }
+            Err(e) => {
+                logger::log("warn", "pair", &format!("{host} unreachable: {e}"));
+                last = AppError::new(ErrorCode::SubUnreachable);
+            }
         }
     }
     Err(last)
@@ -2974,24 +3367,38 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     sync_cleanup();
 
+    // ОДИН setup на всё приложение. Их было два, и это молча ломало macOS
+    // целиком: `Builder::setup` не добавляет обработчик, а ЗАМЕНЯЕТ его, и
+    // второй вызов (меню и трей) затирал первый — тот, где регистрируется
+    // ядро. `app.manage` не выполнялся никогда.
+    //
+    // Наружу это выглядело так: команды без состояния работали, а всё, что
+    // берёт `State<Arc<Core>>`, падало ещё до входа в тело — Tauri отвечал
+    // ошибкой «нет такого состояния», не нашей, поэтому окно видело только
+    // UNKNOWN, а в журнале ядра не появлялось ни строчки. Сопряжение
+    // показывало код и ждало вечно; подключение не запустилось бы тоже.
+    // Найдено 22.09.2026 живым прогоном — тесты такое не ловят, потому что
+    // собирают приложение без Builder.
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             let core = Core::new(app.handle().clone());
             app.manage(core);
+
+            #[cfg(target_os = "macos")]
+            {
+                let menu = build_menu(app.handle())?;
+                app.set_menu(menu)?;
+                build_tray(app.handle())?;
+                install_signal_handlers();
+            }
+
             Ok(())
         });
 
     #[cfg(target_os = "macos")]
     let builder = builder
-        .setup(|app| {
-            let menu = build_menu(app.handle())?;
-            app.set_menu(menu)?;
-            build_tray(app.handle())?;
-            install_signal_handlers();
-            Ok(())
-        })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 // Red-X / Cmd+W hides to the tray; the VPN keeps running.
@@ -3009,6 +3416,9 @@ pub fn run() {
             vpn_status,
             vpn_ping,
             list_locations,
+            measure_locations,
+            tunnel_prefs_get,
+            tunnel_prefs_set,
             select_location,
             sub_state,
             sub_set,
@@ -3058,6 +3468,64 @@ mod tests {
             spider_x: String::new(),
             remark: remark.into(),
         })
+    }
+
+    /// Автовыбор обязан брать САМЫЙ БЫСТРЫЙ из замеренных, а не первый в списке.
+    ///
+    /// До 22.09.2026 он брал первый живой, то есть выбор определялся порядком,
+    /// в котором подписка перечислила страны. У владельца первой шла Германия,
+    /// и приложение бралось за неё, хотя Амстердам отвечал вдвое быстрее.
+    #[test]
+    fn auto_pick_takes_the_fastest_measured_node() {
+        let mut s = Session::new();
+        s.servers = vec![vless("🇩🇪 Германия"), vless("🇳🇱 Амстердам"), vless("🇬🇧 Британия")];
+
+        // Без замеров - прежнее поведение: первый в списке.
+        assert_eq!(s.choose_server(), Some(0), "без замеров берём первый живой");
+
+        // С замерами - самый быстрый, где бы он ни стоял.
+        let ids: Vec<String> = (0..3).map(|i| s.id_of(i).expect("идентификатор есть")).collect();
+        s.rtt.insert(ids[0].clone(), 180);
+        s.rtt.insert(ids[1].clone(), 42);
+        s.rtt.insert(ids[2].clone(), 95);
+        assert_eq!(s.choose_server(), Some(1), "42 мс обязаны победить 180");
+
+        // Использование САМО ПО СЕБЕ ничего не значит: мы весь вечер бились
+        // об Германию, и она возглавляла список недавних, ни разу не
+        // подтвердившись. Выбор такое игнорирует.
+        s.remember_use(0);
+        assert_eq!(
+            s.choose_server(),
+            Some(1),
+            "попытка - не успех; самый быстрый по-прежнему побеждает"
+        );
+
+        // А вот ПОДТВЕРЖДЁННЫЙ узел главнее: это факт, а замер - оценка.
+        s.last_good = Some(ids[2].clone());
+        assert_eq!(
+            s.choose_server(),
+            Some(2),
+            "последний подтвердившийся узел важнее самого быстрого на бумаге"
+        );
+
+        // Но только пока он жив: наказанный узел уступает.
+        s.demoted.insert(ids[2].clone(), Instant::now() + Duration::from_secs(60));
+        assert_eq!(s.choose_server(), Some(1), "наказанный узел не выбирают");
+    }
+
+    /// Узел без замера не должен выигрывать вслепую у измеренного быстрого.
+    #[test]
+    fn an_unmeasured_node_does_not_outrank_a_measured_fast_one() {
+        let mut s = Session::new();
+        s.servers = vec![vless("🇩🇪 Германия"), vless("🇳🇱 Амстердам")];
+        let ids: Vec<String> = (0..2).map(|i| s.id_of(i).expect("идентификатор есть")).collect();
+        // Германию не мерили (или это Hysteria2, где рукопожатия TCP не бывает).
+        s.rtt.insert(ids[1].clone(), 60);
+        assert_eq!(
+            s.choose_server(),
+            Some(1),
+            "известное быстрое предпочтительнее неизвестного"
+        );
     }
 
     fn hy2(remark: &str) -> ServerConfig {
@@ -3177,8 +3645,20 @@ mod tests {
     #[test]
     fn the_last_working_country_is_tried_first() {
         let mut s = session_with(vec![vless("A"), vless("B"), vless("C")]);
+        // РАБОТАВШИЙ, а не просто использованный. Тест назывался так с самого
+        // начала, но проверял `remember_use` - то есть сам факт попытки. Из-за
+        // этого расхождения приложение весь вечер 22.09.2026 бралось за узел,
+        // который ни разу не подтвердился: он просто чаще других оказывался в
+        // недавних, потому что об него и бились.
         s.remember_use(2);
-        assert_eq!(s.choose_server(), Some(2));
+        assert_eq!(
+            s.choose_server(),
+            Some(0),
+            "одной попытки мало: узел ещё ничего не доказал"
+        );
+
+        s.last_good = s.id_of(2);
+        assert_eq!(s.choose_server(), Some(2), "подтвердившийся узел берут первым");
     }
 
     #[test]

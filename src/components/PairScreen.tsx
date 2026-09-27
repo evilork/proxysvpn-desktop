@@ -39,6 +39,11 @@ export default function PairScreen({
   const [session, setSession] = useState<PairSession | null>(null);
   const [qr, setQr] = useState<string>("");
   const [notice, setNotice] = useState<string | null>(null);
+  // Счётчик проб. Видно только в разработке: 22.09.2026 приложение показывало
+  // код, телефон отчитывался «отправлено», а ядро не получало НИ ОДНОГО
+  // опроса, и понять, крутится ли интервал вообще, было нечем.
+  const [polls, setPolls] = useState(0);
+  const [lastPoll, setLastPoll] = useState<string>("—");
   const started = useRef(false);
   const doneRef = useLatest(onDone);
 
@@ -76,10 +81,12 @@ export default function PairScreen({
     if (phase !== "waiting" || !session) return;
     let stopped = false;
     const id = window.setInterval(() => {
+      setPolls((n) => n + 1);
       void bridge
         .pairPoll(session.token)
         .then((status) => {
           if (stopped) return;
+          setLastPoll(status);
           if (status === "linked") {
             setPhase("linked");
             window.setTimeout(() => doneRef.current(), DONE_PAUSE_MS);
@@ -87,9 +94,12 @@ export default function PairScreen({
             setPhase("expired");
           }
         })
-        .catch(() => {
+        .catch((err: unknown) => {
           // A single failed poll is not news: the ladder retries on its own
-          // and the code is still valid.
+          // and the code is still valid. It is recorded for the dev readout
+          // all the same — "fails every time" and "blinked once" look the
+          // same to the person and must not look the same to us.
+          setLastPoll(`ошибка: ${String(err).slice(0, 60)}`);
         });
     }, POLL_MS);
     return () => {
@@ -154,6 +164,11 @@ export default function PairScreen({
               <p className="small dim" style={{ marginTop: 4 }}>
                 {t("pair.waiting")}
               </p>
+              {import.meta.env.DEV ? (
+                <p className="small faint" style={{ marginTop: 4 }}>
+                  опрошено {polls} · последний ответ: {lastPoll}
+                </p>
+              ) : null}
             </>
           ) : null}
           {phase === "preparing" ? (

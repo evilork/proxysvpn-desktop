@@ -32,6 +32,7 @@ export default function MoreScreen({
   onClose,
   onSubscription,
   onWhere,
+  onTunnel,
   onTimeline,
   onUnlinked,
   onOpenCabinet,
@@ -44,6 +45,8 @@ export default function MoreScreen({
   onClose: () => void;
   onSubscription: () => void;
   onWhere: () => void;
+  /** Настройки самого соединения: дробление, тип адресов, резолвер. */
+  onTunnel: () => void;
   onTimeline: () => void;
   /** The link was removed from this device; the app returns to [1]. */
   onUnlinked: () => void;
@@ -122,6 +125,15 @@ export default function MoreScreen({
         <button type="button" className="row" onClick={onWhere}>
           <span className="row-main">
             <span className="row-title">{t("more.where", { value: whereValue })}</span>
+          </span>
+          <span className="row-side">
+            <IconChevron />
+          </span>
+        </button>
+
+        <button type="button" className="row" onClick={onTunnel}>
+          <span className="row-main">
+            <span className="row-title">{t("tun.title")}</span>
           </span>
           <span className="row-side">
             <IconChevron />

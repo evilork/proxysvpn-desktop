@@ -375,6 +375,26 @@ pub async fn measure_async() -> PingPayload {
 /// Replace the call site with `measure_async` when lib.rs is next touched:
 /// this shim throws away `cached`, and the window has no way to tell a fresh
 /// measurement from a reused one.
+/// Рукопожатие TCP до ПРОИЗВОЛЬНОГО узла, мимо глобальной цели.
+///
+/// Нужно для списка стран: там меряют все узлы сразу, и подменять ради этого
+/// цель текущего соединения нельзя - она принадлежит подключённому узлу.
+///
+/// `None` означает «числа не будет», и у этого две разные причины, которые
+/// вызывающему различать незачем: у hysteria рукопожатия TCP не бывает вовсе
+/// (порт UDP, стучать некуда), а живой узел мог просто не ответить в срок.
+/// Обе честно рисуются отсутствием числа, а не нулём и не прочерком-ошибкой.
+pub fn rtt_of(host: &str, port: u16, proto: &str) -> Option<u32> {
+    if kind_of_proto(proto) == TargetKind::Udp {
+        return None;
+    }
+    let addr = resolve(host, port).ok()?;
+    match one_attempt(addr) {
+        Attempt::Ok(ms) => Some(ms),
+        Attempt::Refused | Attempt::Silent => None,
+    }
+}
+
 pub fn tcp_ping() -> Result<u32> {
     match measure().outcome {
         PingOutcome::Measured { rtt_ms } => Ok(rtt_ms),
