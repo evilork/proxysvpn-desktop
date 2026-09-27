@@ -80,7 +80,21 @@ fn hy2_outbound(cfg: &Hy2Config) -> Value {
 }
 
 /// Full sing-box config for the PacketTunnel extension.
-pub fn build_config(server: &ServerConfig) -> Value {
+/// Refuses an XHTTP entry: sing-box has no such transport, and an outbound
+/// built without it would go out as plain TCP and never connect. The
+/// subscription already leaves such entries out on this build
+/// (subscription::engine_supports_on); this is the second lock, so no other
+/// path can hand one in by mistake.
+pub fn build_config(server: &ServerConfig) -> anyhow::Result<Value> {
+    if let ServerConfig::Vless(cfg) = server {
+        if cfg.transport != crate::subscription::VlessTransport::Tcp {
+            anyhow::bail!("sing-box cannot run this entry's transport (XHTTP)");
+        }
+    }
+    Ok(build_config_unchecked(server))
+}
+
+fn build_config_unchecked(server: &ServerConfig) -> Value {
     let outbound = match server {
         ServerConfig::Vless(cfg) => vless_outbound(cfg),
         ServerConfig::Hy2(cfg) => hy2_outbound(cfg),
@@ -179,7 +193,7 @@ mod tests {
 
     #[test]
     fn vless_config_has_reality_and_quic_block() {
-        let cfg = build_config(&vless_fixture());
+        let cfg = build_config(&vless_fixture()).expect("builds");
         let outbound = &cfg["outbounds"][0];
         assert_eq!(outbound["type"], "vless");
         assert_eq!(outbound["flow"], "xtls-rprx-vision");
@@ -193,7 +207,7 @@ mod tests {
 
     #[test]
     fn hy2_config_no_quic_block_and_pin_implies_insecure() {
-        let cfg = build_config(&hy2_fixture(false, "sha256/abc"));
+        let cfg = build_config(&hy2_fixture(false, "sha256/abc")).expect("builds");
         let outbound = &cfg["outbounds"][0];
         assert_eq!(outbound["type"], "hysteria2");
         assert_eq!(outbound["password"], "secret");
@@ -205,7 +219,7 @@ mod tests {
 
     #[test]
     fn tun_inbound_and_final_proxy() {
-        let cfg = build_config(&hy2_fixture(false, ""));
+        let cfg = build_config(&hy2_fixture(false, "")).expect("builds");
         assert_eq!(cfg["inbounds"][0]["type"], "tun");
         assert_eq!(cfg["inbounds"][0]["auto_route"], true);
         assert_eq!(cfg["route"]["final"], "proxy");
@@ -215,7 +229,7 @@ mod tests {
 
     #[test]
     fn ru_domains_routed_direct() {
-        let cfg = build_config(&vless_fixture());
+        let cfg = build_config(&vless_fixture()).expect("builds");
         let rules = cfg["route"]["rules"].as_array().unwrap();
         let direct_domains = rules
             .iter()
@@ -227,5 +241,17 @@ mod tests {
             .unwrap()
             .iter()
             .any(|d| d == "yandex.ru"));
+    }
+    #[test]
+    fn an_xhttp_entry_is_refused_not_built_as_tcp() {
+        let mut server = vless_fixture();
+        if let ServerConfig::Vless(cfg) = &mut server {
+            cfg.transport = crate::subscription::VlessTransport::Xhttp {
+                path: "/p".into(),
+                mode: crate::subscription::XhttpMode::StreamOne,
+                host: None,
+            };
+        }
+        assert!(build_config(&server).is_err());
     }
 }

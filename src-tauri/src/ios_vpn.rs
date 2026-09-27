@@ -76,7 +76,7 @@ pub async fn is_connected_wait() -> bool {
 
 /// Starts the tunnel for `server` and waits until NE reports "connected".
 pub async fn connect(server: &ServerConfig) -> Result<()> {
-    let config = crate::singbox::build_config(server);
+    let config = crate::singbox::build_config(server)?;
     let config_str = serde_json::to_string(&config)?;
     let config_c = CString::new(config_str)
         .map_err(|_| anyhow!("config contains interior NUL byte"))?;

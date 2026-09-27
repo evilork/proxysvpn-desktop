@@ -203,11 +203,6 @@ impl ServerConfig {
     }
 }
 
-/// Whether this build's engine can run the entry.
-pub fn engine_supports(server: &ServerConfig) -> bool {
-    engine_supports_on(server, cfg!(target_os = "ios"))
-}
-
 /// `sing_box`: the iOS build runs sing-box (`singbox.rs`), which has no XHTTP
 /// transport — `transport/` of SagerNet/sing-box has none as of 27.09.2026.
 /// Built there, an XHTTP entry would go out as plain TCP and fail every time
@@ -708,6 +703,18 @@ fn interpret_response(
     body: &str,
     now: u64,
 ) -> Result<Subscription, AppError> {
+    interpret_response_on(host, status, headers, body, now, cfg!(target_os = "ios"))
+}
+
+/// The same, with the engine named: `sing_box` as in engine_supports_on.
+fn interpret_response_on(
+    host: &str,
+    status: u16,
+    headers: &Headers,
+    body: &str,
+    now: u64,
+    sing_box: bool,
+) -> Result<Subscription, AppError> {
     let meta = parse_meta(headers);
 
     if status != 200 {
@@ -722,6 +729,7 @@ fn interpret_response(
     let mut servers: Vec<ServerConfig> = Vec::new();
     let mut routing: Option<RoutingRules> = None;
     let mut unreadable = 0usize;
+    let mut engine_skipped = 0usize;
     let mut stub_remark: Option<String> = None;
     let mut link_lines = 0usize;
 
@@ -750,7 +758,7 @@ fn interpret_response(
         match parse_server_line(line) {
             // Left out, not counted as unreadable: the line is fine, this
             // build's engine just cannot run it (see engine_supports).
-            Ok(cfg) if !engine_supports(&cfg) => {}
+            Ok(cfg) if !engine_supports_on(&cfg, sing_box) => engine_skipped += 1,
             Ok(cfg) => servers.push(cfg),
             // The line is not lost: the count travels to the window, which
             // says "одну локацию не удалось прочитать" instead of quietly
@@ -762,6 +770,12 @@ fn interpret_response(
     if servers.is_empty() {
         if let Some(remark) = stub_remark {
             return Err(refusal_error(&meta, &remark, now));
+        }
+        if engine_skipped > 0 {
+            // Lines were read fine; this build cannot run any of them. Not
+            // SubInvalid: that one triggers a second request, which would
+            // bring the same list back.
+            return Err(AppError::new(ErrorCode::EngineUnsupported));
         }
         if link_lines == 0 {
             // A 200 with a body that holds no links at all: a captive portal,
@@ -2541,6 +2555,30 @@ mod tests {
         let out = std::env::var("WATAFAST_LIVE_OUT").expect("WATAFAST_LIVE_OUT");
         let cfg = build_xray_config_with_routing(&parse_vless_url(&link).expect("link parses"), None);
         std::fs::write(&out, serde_json::to_string_pretty(&cfg).expect("serializes")).expect("written");
+    }
+
+    #[test]
+    fn a_sing_box_build_with_only_xhttp_entries_says_so_and_does_not_retry() {
+        let body = b64(XHTTP_LINE);
+        let err = interpret_response_on("proxysvpn.com", 200, &working_headers(), &body, 0, true)
+            .expect_err("nothing this engine can run");
+        assert_eq!(err.code, ErrorCode::EngineUnsupported);
+        assert!(!retry_without_inline(&err), "asking again brings the same list");
+
+        // The same body on the xray build is a normal one-server list.
+        let sub = interpret_response_on("proxysvpn.com", 200, &working_headers(), &body, 0, false)
+            .expect("xray runs it");
+        assert_eq!(sub.servers.len(), 1);
+    }
+
+    #[test]
+    fn a_sing_box_build_keeps_its_tcp_entries_and_counts_nothing_unreadable() {
+        let body = b64(&format!("{VLESS_LINE}\n{XHTTP_LINE}"));
+        let sub = interpret_response_on("proxysvpn.com", 200, &working_headers(), &body, 0, true)
+            .expect("the TCP entry remains");
+        assert_eq!(sub.servers.len(), 1);
+        assert_eq!(sub.servers[0].remark(), "Германия");
+        assert_eq!(sub.unreadable_lines, 0, "a skipped entry is not an unreadable one");
     }
 
     #[test]

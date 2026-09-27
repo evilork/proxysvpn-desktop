@@ -265,6 +265,9 @@ const ru = {
   "err.SUB_EMPTY.title": "В подписке нет ни одной локации",
   "err.SUB_EMPTY.body":
     "Сервис ответил пустым списком. Посмотрите состояние подписки в кабинете — обычно ответ там.",
+  "err.ENGINE_UNSUPPORTED.title": "Эта версия приложения пока не умеет ваши локации",
+  "err.ENGINE_UNSUPPORTED.body":
+    "Подписка в порядке, но все её локации работают на способе подключения, которого в этой версии ещё нет. Напишите в поддержку — подскажем, как подключиться сейчас.",
   "err.BALANCE_EMPTY.title": "Закончились средства",
   "err.BALANCE_EMPTY.body": "Доступ включится сразу после пополнения.",
   "err.EXPIRED.title": "Срок доступа закончился",
@@ -639,6 +642,9 @@ const en: Partial<Record<MsgKey, string>> = {
   "err.SUB_EMPTY.title": "The subscription has no locations",
   "err.SUB_EMPTY.body":
     "The service answered with an empty list. Check the subscription in your account — that is usually where the answer is.",
+  "err.ENGINE_UNSUPPORTED.title": "This version of the app cannot use your locations yet",
+  "err.ENGINE_UNSUPPORTED.body":
+    "Your subscription is fine, but all of its locations use a connection method this version does not have yet. Contact support and we will tell you how to connect now.",
   "err.BALANCE_EMPTY.title": "Out of funds",
   "err.BALANCE_EMPTY.body": "Access resumes right after a top-up.",
   "err.EXPIRED.title": "Your access has expired",

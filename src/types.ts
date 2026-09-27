@@ -45,6 +45,9 @@ export type ErrorCode =
   | "SUB_UNREACHABLE"
   | "SUB_INVALID"
   | "SUB_EMPTY"
+  // Readable settings, but every location needs a transport this build's
+  // engine lacks (iOS: sing-box has no XHTTP). The app is behind, not the link.
+  | "ENGINE_UNSUPPORTED"
   | "BALANCE_EMPTY"
   | "EXPIRED"
   | "DEVICE_TAKEN"
@@ -176,6 +179,8 @@ export const ERROR_ACTION: Record<ErrorCode, ErrorAction> = {
   SUB_UNREACHABLE: "retry",
   SUB_INVALID: "contactSupport",
   SUB_EMPTY: "openCabinet",
+  // Nothing on the person's side fixes it; support knows when the update lands.
+  ENGINE_UNSUPPORTED: "contactSupport",
 
   BALANCE_EMPTY: "topUp",
   EXPIRED: "topUp",
