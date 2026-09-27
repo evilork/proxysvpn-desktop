@@ -37,6 +37,8 @@ mod tunnel_prefs;
 #[cfg(target_os = "macos")]
 mod hysteria_manager;
 #[cfg(target_os = "macos")]
+mod sysdns;
+#[cfg(target_os = "macos")]
 mod tun;
 #[cfg(target_os = "macos")]
 mod xray_manager;

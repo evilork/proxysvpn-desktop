@@ -59,6 +59,9 @@ pub struct TunState {
     /// How the machine really reaches the internet, as of the last time we
     /// looked. A change here means the network changed under us.
     physical: Option<PhysicalRoute>,
+    /// The system resolver pointed into the tunnel (sysdns.rs). Dropping it
+    /// hands DNS back to the real network; so does our death.
+    dns: Option<crate::sysdns::TunnelDns>,
 }
 
 pub type SharedTunState = Arc<Mutex<TunState>>;
@@ -343,6 +346,23 @@ pub async fn start(
 
     guard.server_ip = Some(server_ip);
     guard.physical = Some(physical);
+
+    // DNS last: only a tunnel that carries traffic may be the system's
+    // resolver. A failure here is logged, not fatal — the tunnel works, and
+    // most networks resolve through it anyway; only a Mac with encrypted DNS
+    // bound to Wi-Fi (27.09.2026) needs this to see names at all.
+    guard.dns = None;
+    match crate::sysdns::TunnelDns::install(TUN_NAME, TUN_ADDR) {
+        Ok(dns) => {
+            guard.dns = Some(dns);
+            crate::logger::log(
+                "info",
+                "tun",
+                &format!("DNS системы: через туннель ({})", crate::sysdns::TUNNEL_DNS),
+            );
+        }
+        Err(e) => crate::logger::log("warn", "tun", &format!("DNS системы не переключён: {e}")),
+    }
     Ok(())
 }
 
@@ -602,6 +622,9 @@ pub async fn restart_engine(
 
 pub async fn stop(state: &SharedTunState) -> Result<(), AppError> {
     let mut guard = state.lock().await;
+    // DNS back to the real network FIRST, while the tunnel still carries
+    // queries: the system never spends a moment with a resolver it cannot reach.
+    guard.dns = None;
     let server_ip = guard.server_ip.take();
 
     let _ = run_cmd("/sbin/route", &["-n", "delete", "-net", "0.0.0.0/1"]).await;

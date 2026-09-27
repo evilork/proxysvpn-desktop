@@ -1540,6 +1540,11 @@ pub const RU_DIRECT_DOMAINS: &[&str] = &[
     "proxysvpn.com",
 ];
 
+/// The DNS server the system is given while the tunnel is up (sysdns.rs):
+/// inside the tunnel's reach (128.0.0.0/1 goes to utun), outside every real
+/// network, and routed to `dns-out` by a rule placed before the private one.
+pub const TUNNEL_DNS: &str = "198.18.0.2";
+
 /// Networks routed around the tunnel when the service told us nothing.
 #[cfg(any(target_os = "macos", test))]
 const SEED_DIRECT_IPS: &[&str] = &["geoip:private", "geoip:ru"];
@@ -1634,6 +1639,14 @@ pub fn build_xray_config_with_routing_and_prefs(
         "type": "field",
         "inboundTag": ["dns-in"],
         "outboundTag": "proxy"
+    }));
+    // 2a. The system's own resolver while the tunnel is up (sysdns.rs). BEFORE
+    //     the private-network rule: 198.18.0.0/15 is special-use space, and
+    //     sent "direct" the query would go nowhere and every name would hang.
+    rules.push(json!({
+        "type": "field",
+        "outboundTag": "dns-out",
+        "ip": [TUNNEL_DNS]
     }));
     // 3. LAN always direct, whatever the profile says: a printer and a router
     //    admin page have no business crossing a border.
@@ -2596,6 +2609,22 @@ mod tests {
         let out = std::env::var("WATAFAST_LIVE_OUT").expect("WATAFAST_LIVE_OUT");
         let cfg = build_xray_config_with_routing(&parse_vless_url(&link).expect("link parses"), None);
         std::fs::write(&out, serde_json::to_string_pretty(&cfg).expect("serializes")).expect("written");
+    }
+
+    #[test]
+    fn the_system_resolver_inside_the_tunnel_is_answered_not_sent_direct() {
+        let built = build_xray_config_with_routing(&vless_fixture(), None);
+        let rules = built["routing"]["rules"].as_array().expect("rules");
+        let ours = rules
+            .iter()
+            .position(|r| r["ip"].as_array().is_some_and(|a| a.iter().any(|v| v == TUNNEL_DNS)))
+            .expect("a rule for the tunnel resolver");
+        let private = rules
+            .iter()
+            .position(|r| r["ip"].as_array().is_some_and(|a| a.iter().any(|v| v == "geoip:private")))
+            .expect("the private-network rule");
+        assert_eq!(rules[ours]["outboundTag"], "dns-out");
+        assert!(ours < private, "sent direct, the resolver would go nowhere");
     }
 
     #[test]
