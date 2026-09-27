@@ -753,6 +753,7 @@ async fn fetch_manifest_servers(sub_url: &str) -> Option<(Vec<ServerConfig>, Str
     let highest = manifest::highest_known_version(&token_hash);
 
     let fresh = fetch_fresh_manifest(sub_url, &extra_hosts, &token, &token_hash, highest, now_ms).await;
+    let from_cache = fresh.is_none() && cached.is_some();
 
     let (verified, host) = fresh.or(cached)?;
     if !verified.account_active {
@@ -768,6 +769,20 @@ async fn fetch_manifest_servers(sub_url: &str) -> Option<(Vec<ServerConfig>, Str
     if servers.is_empty() {
         return None;
     }
+    // Which list the app is about to use, and from where: the one line that
+    // tells support (and the owner's own test) that the signed path worked.
+    // Only the version, counts and the site's host — never a node or a token.
+    crate::logger::log(
+        "info",
+        "watafast-manifest",
+        &format!(
+            "{} манифест v{}: {} локаций, {}",
+            if from_cache { "сохранённый" } else { "проверенный" },
+            verified.manifest_version,
+            servers.len(),
+            host
+        ),
+    );
     Some((servers, host))
 }
 
