@@ -56,18 +56,24 @@ use crate::subscription::{self, Hy2Config, ServerConfig, Subscription, VlessConf
 
 /// `kid → 32-byte Ed25519 public key`.
 ///
-/// EMPTY IN PRODUCTION. The owner has not generated the Watafast manifest key
-/// yet — see `ops/watafast-manifest-key/gen-key.mjs`, which is meant to write
-/// the public half here (as a second tuple entry, keyed by its `kid`) and the
-/// private half to Vercel as `WATAFAST_MANIFEST_KEY`/`WATAFAST_MANIFEST_KID`.
+/// `wf1`: generated 27.09.2026 by `ops/watafast-manifest-key/gen-key.mjs` on the
+/// owner's Mac; public key `wq2wAT6NwZZpsyz8LmW7wUkTYOR/Eg6hpzKX9h/M2/w=`. The
+/// private half lives only in Vercel (`WATAFAST_MANIFEST_KEY`, kid in
+/// `WATAFAST_MANIFEST_KID`) and a 0600 backup on the owner's Mac.
 /// Rotation keeps the old entry alongside the new one for two releases —
 /// MANIFEST-v1.md "Keys" — an unknown `kid` is rejected, never guessed.
-pub(crate) const MANIFEST_KEYS: &[(&str, [u8; 32])] = &[];
+pub(crate) const MANIFEST_KEYS: &[(&str, [u8; 32])] = &[(
+    "wf1",
+    [
+        0xc2, 0xad, 0xb0, 0x01, 0x3e, 0x8d, 0xc1, 0x96, 0x69, 0xb3, 0x2c, 0xfc, 0x2e, 0x65, 0xbb, 0xc1,
+        0x49, 0x13, 0x60, 0xe4, 0x7f, 0x12, 0x0e, 0xa1, 0xa7, 0x32, 0x97, 0xf6, 0x1f, 0xcc, 0xdb, 0xfc,
+    ],
+)];
 
-/// Whether the manifest path is switched on at all. `false` today, and every
-/// other function in this module is unreachable while it is: the caller in
-/// `subscription.rs` checks this before doing any I/O, so a disabled table
-/// costs nothing — not a request, not a disk read.
+/// Whether the manifest path is switched on at all: true while a key is
+/// compiled in. With an empty table every other function in this module is
+/// unreachable: the caller in `subscription.rs` checks this before doing any
+/// I/O, so a disabled table costs nothing — not a request, not a disk read.
 pub(crate) fn manifest_enabled() -> bool {
     !MANIFEST_KEYS.is_empty()
 }
@@ -1313,12 +1319,23 @@ mod tests {
     }
 
     #[test]
-    fn the_key_table_is_empty_so_the_manifest_path_is_disabled() {
-        // The one assertion that ties this whole module to "off by default":
-        // every other test above exercises functions this predicate gates in
-        // `subscription.rs`. If this ever turns true by accident, that call
-        // site starts making network requests nobody asked for.
-        assert!(!manifest_enabled());
-        assert!(MANIFEST_KEYS.is_empty());
+    fn the_production_key_table_holds_wf1_as_a_valid_ed25519_key() {
+        // The path is on exactly while a key is compiled in. Every kid is
+        // unique (a duplicate would make the lookup order decide which key
+        // verifies) and every entry is a real curve point, so a typo in the
+        // bytes fails here and not as "every manifest rejected" in the field.
+        assert!(manifest_enabled());
+        let kids: std::collections::HashSet<&str> = MANIFEST_KEYS.iter().map(|(kid, _)| *kid).collect();
+        assert_eq!(kids.len(), MANIFEST_KEYS.len(), "duplicate kid");
+        assert!(kids.contains("wf1"));
+        for (kid, key) in MANIFEST_KEYS {
+            assert!(VerifyingKey::from_bytes(key).is_ok(), "{kid} is not a valid Ed25519 public key");
+        }
+        let wf1 = MANIFEST_KEYS.iter().find(|(kid, _)| *kid == "wf1").map(|(_, k)| *k).expect("wf1");
+        use base64::Engine;
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(wf1),
+            "wq2wAT6NwZZpsyz8LmW7wUkTYOR/Eg6hpzKX9h/M2/w="
+        );
     }
 }
