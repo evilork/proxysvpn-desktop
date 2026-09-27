@@ -206,15 +206,35 @@ impl ServerConfig {
     /// for VLESS, what runs inside REALITY. Names of technologies, the same in
     /// every language. Without it two «Британия» rows — Vision and XHTTP —
     /// looked identical (owner, 27.09.2026).
+    ///
+    /// XHTTP over REALITY is shown as «Watafast»: our stack under our name,
+    /// the way NordLynx is WireGuard under NordVPN's (owner's decision,
+    /// 27.09.2026). What it is technically is written here and in
+    /// ~/vpn-project/watafast/DESIGN.md, and support answers truthfully.
     pub fn protocol_label(&self) -> &'static str {
         match self {
             ServerConfig::Vless(c) => match c.transport {
-                VlessTransport::Xhttp { .. } => "VLESS · XHTTP",
+                VlessTransport::Xhttp { .. } => WATAFAST_NAME,
                 VlessTransport::Tcp if c.flow.starts_with("xtls-rprx-vision") => "VLESS · Vision",
                 VlessTransport::Tcp => "VLESS · TCP",
             },
             ServerConfig::Hy2(_) => "Hysteria2",
         }
+    }
+}
+
+/// The name our XHTTP-over-REALITY stack carries in the app.
+pub const WATAFAST_NAME: &str = "Watafast";
+
+/// The badge a location shows after «·». The service names its XHTTP entries
+/// «… · XHTTP»; in our app that stack is Watafast, so that badge reads so.
+/// Any other badge («резерв», «12,4 из 50 ГБ», «TCP») is the service's word
+/// and passes through untouched.
+pub fn display_note(server: &ServerConfig, note: Option<String>) -> Option<String> {
+    let is_xhttp = matches!(server, ServerConfig::Vless(c) if matches!(c.transport, VlessTransport::Xhttp { .. }));
+    match note {
+        Some(n) if is_xhttp && n.trim().eq_ignore_ascii_case("xhttp") => Some(WATAFAST_NAME.to_string()),
+        other => other,
     }
 }
 
@@ -2649,9 +2669,22 @@ mod tests {
     }
 
     #[test]
+    fn the_xhttp_badge_reads_watafast_and_other_badges_pass_through() {
+        let x = ServerConfig::Vless(xhttp_fixture());
+        let v = ServerConfig::Vless(vless_fixture());
+        assert_eq!(display_note(&x, Some("XHTTP".into())).as_deref(), Some("Watafast"));
+        assert_eq!(display_note(&x, Some("резерв".into())).as_deref(), Some("резерв"));
+        assert_eq!(display_note(&x, None), None);
+        // Only an XHTTP entry is renamed: a Vision row badged "XHTTP" by some
+        // mistake keeps the service's word rather than a false name.
+        assert_eq!(display_note(&v, Some("XHTTP".into())).as_deref(), Some("XHTTP"));
+        assert_eq!(display_note(&v, Some("TCP".into())).as_deref(), Some("TCP"));
+    }
+
+    #[test]
     fn every_kind_of_entry_names_its_protocol() {
         assert_eq!(ServerConfig::Vless(vless_fixture()).protocol_label(), "VLESS · Vision");
-        assert_eq!(ServerConfig::Vless(xhttp_fixture()).protocol_label(), "VLESS · XHTTP");
+        assert_eq!(ServerConfig::Vless(xhttp_fixture()).protocol_label(), "Watafast");
         let plain = parse_vless_url(&VLESS_LINE.replace("&flow=xtls-rprx-vision", "")).expect("parses");
         assert_eq!(ServerConfig::Vless(plain).protocol_label(), "VLESS · TCP");
         let hy2 = parse_hy2_url("hysteria2://secret@nl.example.net:443?sni=www.bing.com&insecure=1#NL")

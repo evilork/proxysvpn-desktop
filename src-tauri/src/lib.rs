@@ -926,6 +926,7 @@ impl Session {
             } else {
                 split_label(remark)
             };
+            let note = subscription::display_note(server, note);
             let label = if label.is_empty() {
                 fallback_label(index)
             } else {
@@ -1690,6 +1691,7 @@ impl Core {
         };
 
         let (_, parsed_label, note) = split_label(server.remark());
+        let note = subscription::display_note(&server, note);
         let label = if parsed_label.is_empty() {
             fallback_label(index)
         } else {
