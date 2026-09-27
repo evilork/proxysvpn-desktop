@@ -97,6 +97,10 @@ const FIRST_PROBE_DELAY: Duration = Duration::from_millis(1200);
 /// 12 секунд - потолок на случай, когда узел не отвечает вовсе. Дальше
 /// начинает работать обычный разбор: проба, лечение, следующий узел.
 const WARM_BUDGET: Duration = Duration::from_secs(12);
+
+/// When the second warm-up racer starts: late enough not to double every
+/// handshake on a healthy path, early enough to cut a lost-SYN tail.
+const WARM_SECOND_RACER_AFTER: Duration = Duration::from_millis(700);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(2500);
 
 /// Терпение для пробы по ХОЛОДНОМУ туннелю.
@@ -1289,39 +1293,79 @@ impl Core {
         // за ним идёт уже по тёплому пути.
         let (warm_host, warm_port) = probe::warm_target();
 
-        // Прогрев в ДВА захода, потому что путей тоже два.
+        // Прогрев: первый настоящий обмен байтами с той стороной через узел.
         //
-        // Первый - через SOCKS самого xray: будит его резолвер DoH и сессию до
-        // узла. Второй - через маршрут по умолчанию, то есть через tun2socks и
-        // СИСТЕМНЫЙ резолвер: именно так пойдут и проба, и браузер.
-        //
-        // Одного первого мало, и это замерено: 22.09.2026 он прошёл за 1871 мс,
-        // а проба следом не соединилась за шесть секунд - по открытому порту
-        // тоже, значит упиралась не в TLS, а в холодную вторую половину пути.
-        let engine_started = Instant::now();
+        // До 27.09.2026 он шёл в два захода ДРУГ ЗА ДРУГОМ и ПО ИМЕНИ: сперва
+        // через SOCKS движка, потом через туннель. Имя xray разрешал через DoH
+        // на узле прямо на критическом пути, и прогрев занимал от 2,2 до 7 с
+        // из 8 до щита. Теперь - по адресу, снятому до подъёма туннеля, и
+        // гонкой (ниже); резолвер прогревается отдельно, в фоне, когда щит уже
+        // зелёный.
+        let warm_ip = probe::pinned_ip(warm_host);
+        // Гонка, а не очередь: щит ждёт ПЕРВОГО ответа, а не всех. Первое
+        // соединение до узла обычно ~1,3 с, но изредка 6 с и больше (потеря
+        // пакета на рукопожатии; замер 27.09.2026 на XHTTP через Амстердам),
+        // и вторая попытка на своём соединении срезает такой хвост. Ответ
+        // через туннель доказывает весь путь; ответ через SOCKS движка -
+        // путь до узла, а туннель подтвердит надзиратель через секунды.
+        let warm_started = Instant::now();
+        let mut racers: tokio::task::JoinSet<(&'static str, bool)> = tokio::task::JoinSet::new();
+        racers.spawn(async move {
+            ("туннель", probe::warm_through_tunnel(warm_host, warm_ip, warm_port, WARM_BUDGET).await.is_some())
+        });
+        racers.spawn(async move {
+            tokio::time::sleep(WARM_SECOND_RACER_AFTER).await;
+            ("туннель, вторая попытка", probe::warm_through_tunnel(warm_host, warm_ip, warm_port, WARM_BUDGET).await.is_some())
+        });
         #[cfg(target_os = "macos")]
-        let engine_warm =
-            probe::warm_through_socks(tun::SOCKS_PORT, warm_host, warm_port, WARM_BUDGET).await;
-        // На iOS движок живёт в расширении и своего SOCKS наружу не открывает:
-        // греть там можно только маршрут по умолчанию, второй заход ниже.
-        #[cfg(not(target_os = "macos"))]
-        let engine_warm = true;
-        let engine_ms = engine_started.elapsed().as_millis();
+        racers.spawn(async move {
+            ("движок", probe::warm_through_socks(tun::SOCKS_PORT, warm_host, warm_ip, warm_port, WARM_BUDGET).await)
+        });
+        let mut winner: Option<&'static str> = None;
+        while let Some(done) = racers.join_next().await {
+            if let Ok((name, true)) = done {
+                winner = Some(name);
+                break;
+            }
+        }
+        // Проигравшие больше не нужны: их соединения закрываются вместе с задачами.
+        racers.abort_all();
+        let warm_ms = warm_started.elapsed().as_millis();
+        let warmed = winner.is_some();
 
-        let tunnel_ms = probe::warm_through_tunnel(warm_host, warm_port, WARM_BUDGET).await;
-        let warmed = engine_warm && tunnel_ms.is_some();
+        // Резолвер через узел - в фоне: первое имя, которое спросит человек,
+        // не должно платить за холодный DoH, но и щит этого ждать не должен.
+        #[cfg(target_os = "macos")]
+        if warm_ip.is_some() {
+            tauri::async_runtime::spawn(async move {
+                let started = Instant::now();
+                let ok = probe::warm_through_socks(
+                    tun::SOCKS_PORT,
+                    warm_host,
+                    None,
+                    warm_port,
+                    WARM_BUDGET,
+                )
+                .await;
+                logger::log(
+                    if ok { "info" } else { "warn" },
+                    "tun",
+                    &format!(
+                        "резолвер через узел прогрет в фоне: {} за {} мс",
+                        if ok { "ок" } else { "НЕ ПРОШЁЛ" },
+                        started.elapsed().as_millis()
+                    ),
+                );
+            });
+        }
 
         logger::log(
             if warmed { "info" } else { "warn" },
             "tun",
-            &format!(
-                "прогрев: движок {} за {engine_ms} мс, туннель {}",
-                if engine_warm { "ок" } else { "НЕ ПРОШЁЛ" },
-                match tunnel_ms {
-                    Some(ms) => format!("ок за {ms} мс"),
-                    None => "НЕ ПРОШЁЛ".to_string(),
-                }
-            ),
+            &match winner {
+                Some(name) => format!("прогрев: первым ответил {name} за {warm_ms} мс"),
+                None => format!("прогрев: НЕ ПРОШЁЛ ни один путь за {warm_ms} мс"),
+            },
         );
         if warmed {
             // Прогрев через туннель - это уже настоящий обмен байтами с той

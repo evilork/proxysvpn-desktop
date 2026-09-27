@@ -627,6 +627,31 @@ pub async fn pin_ladder_addresses() {
 }
 
 /// Забыть снятые адреса: подписка сменилась или туннель опущен.
+/// The address of `host` taken before the tunnel came up, if any.
+pub fn pinned_ip(host: &str) -> Option<IpAddr> {
+    pinned()
+        .into_iter()
+        .find(|(h, _)| h.eq_ignore_ascii_case(host))
+        .map(|(_, ip)| ip)
+}
+
+/// The warm-up request.
+///
+/// By address (`by_address`): no Host header, on purpose. xray sniffs the
+/// Host of plain HTTP and, with `IPIfNonMatch`, resolves a sniffed name
+/// through its own DoH before it picks a route — putting DNS through the node
+/// back on the critical path. Measured 27.09.2026: 6.96 s for the warm-up that
+/// way. Any answer byte proves the path, and a 400 without Host is an answer.
+fn warm_request(host: &str, by_address: bool) -> String {
+    if by_address {
+        "HEAD / HTTP/1.0\r\nUser-Agent: ProxysVPN (warm)\r\nConnection: close\r\n\r\n".to_string()
+    } else {
+        format!(
+            "HEAD / HTTP/1.0\r\nHost: {host}\r\nUser-Agent: ProxysVPN (warm)\r\nConnection: close\r\n\r\n"
+        )
+    }
+}
+
 pub fn forget_pinned_addresses() {
     if let Ok(mut g) = PINNED.lock() {
         g.clear();
@@ -722,11 +747,13 @@ pub fn warm_target() -> (&'static str, u16) {
 pub async fn warm_through_socks(
     socks_port: u16,
     host: &str,
+    ip: Option<IpAddr>,
     port: u16,
     budget: Duration,
 ) -> bool {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    let ask = warm_request(host, matches!(ip, Some(IpAddr::V4(_))));
     let host = host.as_bytes();
     // SOCKS5 разрешает не более 255 байт на имя.
     if host.is_empty() || host.len() > 255 {
@@ -744,9 +771,21 @@ pub async fn warm_through_socks(
         if hello != [0x05, 0x00] {
             return None;
         }
-        // Запрос CONNECT по ИМЕНИ (тип 0x03), чтобы имя разрешал xray.
-        let mut req = vec![0x05, 0x01, 0x00, 0x03, host.len() as u8];
-        req.extend_from_slice(host);
+        // CONNECT по адресу (0x01), если он снят заранее: тогда xray ведёт
+        // соединение по IP, не спрашивая DoH. По ИМЕНИ (0x03) - только когда
+        // греть нужно именно резолвер (фоновый прогрев после щита).
+        let mut req = match ip {
+            Some(IpAddr::V4(v4)) => {
+                let mut r = vec![0x05, 0x01, 0x00, 0x01];
+                r.extend_from_slice(&v4.octets());
+                r
+            }
+            _ => {
+                let mut r = vec![0x05, 0x01, 0x00, 0x03, host.len() as u8];
+                r.extend_from_slice(host);
+                r
+            }
+        };
         req.extend_from_slice(&port.to_be_bytes());
         sock.write_all(&req).await.ok()?;
         // Ответ: версия, код, резерв, тип адреса - и дальше сам адрес.
@@ -780,10 +819,6 @@ pub async fn warm_through_socks(
         // Поэтому ждём БАЙТА С ТОЙ СТОРОНЫ. Он приходит, только когда имя
         // разрешено, сессия до узла открыта и запрос дошёл до сервера, - то
         // есть когда холодный старт действительно оплачен.
-        let ask = format!(
-            "HEAD / HTTP/1.0\r\nHost: {}\r\nUser-Agent: ProxysVPN (warm)\r\nConnection: close\r\n\r\n",
-            std::str::from_utf8(host).ok()?
-        );
         sock.write_all(ask.as_bytes()).await.ok()?;
         let mut first = [0u8; 1];
         sock.read_exact(&mut first).await.ok()?;
@@ -810,17 +845,26 @@ pub async fn warm_through_socks(
 /// сторона и тем же способом, поэтому к пробе всё уже тёплое.
 ///
 /// Возвращает время в миллисекундах, если прошло.
-pub async fn warm_through_tunnel(host: &str, port: u16, budget: Duration) -> Option<u128> {
+pub async fn warm_through_tunnel(
+    host: &str,
+    ip: Option<IpAddr>,
+    port: u16,
+    budget: Duration,
+) -> Option<u128> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let started = Instant::now();
     let work = async {
-        // Разрешение имени тут не отделено намеренно: у пробы оно тоже внутри
-        // установки соединения, и греть надо ровно то, что она потратит.
-        let mut sock = tokio::net::TcpStream::connect((host, port)).await.ok()?;
-        let ask = format!(
-            "HEAD / HTTP/1.0\r\nHost: {host}\r\nUser-Agent: ProxysVPN (warm)\r\nConnection: close\r\n\r\n"
-        );
+        // По адресу, когда он снят заранее. Прежде имя разрешалось здесь
+        // намеренно - «у пробы оно тоже внутри соединения». С 27.09.2026 щит
+        // зеленеет по этому прогреву, а системный резолвер сразу после
+        // подъёма туннеля может перестраиваться (macOS с зашифрованным DNS
+        // висла на этом до 30 с): этот шаг меряет путь, а не резолвер.
+        let mut sock = match ip {
+            Some(ip) => tokio::net::TcpStream::connect((ip, port)).await.ok()?,
+            None => tokio::net::TcpStream::connect((host, port)).await.ok()?,
+        };
+        let ask = warm_request(host, ip.is_some());
         sock.write_all(ask.as_bytes()).await.ok()?;
         // Ждём БАЙТ С ТОЙ СТОРОНЫ. tun2socks отвечает на SYN сам, не дожидаясь
         // ничего, поэтому успешный connect ещё ничего не доказывает - на этом
@@ -1310,6 +1354,15 @@ mod sys {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_warm_up_by_address_names_no_host_so_xray_does_not_resolve_it() {
+        let by_ip = warm_request("proxysvpn.store", true);
+        assert!(!by_ip.contains("Host:"), "a sniffed Host puts DoH back on the critical path");
+        assert!(by_ip.starts_with("HEAD / HTTP/1.0\r\n") && by_ip.ends_with("\r\n\r\n"));
+        let by_name = warm_request("proxysvpn.store", false);
+        assert!(by_name.contains("Host: proxysvpn.store\r\n"));
+    }
     use super::*;
 
     fn inputs(link_up: bool, http_ok: bool, tx: u64, rx: u64) -> ProbeInputs {
