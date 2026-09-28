@@ -24,6 +24,7 @@ import QRCode from "qrcode";
 import { bridge, toAppError, type PairSession } from "../bridge";
 import { IS_APPSTORE } from "../dist";
 import { formatCountdown, type MsgKey } from "../i18n";
+import { privacyUrl } from "../legal";
 import { Screen, Spinner, useLatest, useNow, useUi } from "./ui";
 
 const POLL_MS = 2000;
@@ -51,13 +52,16 @@ const COPY: Record<"title" | "body" | "paste" | "notOurLink" | "done", MsgKey> =
 export default function PairScreen({
   onDone,
   onClose,
+  onSupport,
 }: {
   /** Called once a link is stored; the app connects straight away. */
   onDone: () => void;
   /** Absent while this screen is the only thing the person can do. */
   onClose?: () => void;
+  /** Opens the build's support address (App.tsx `supportUrl`). */
+  onSupport: () => void;
 }) {
-  const { t } = useUi();
+  const { t, lang, openExternal } = useUi();
   const now = useNow(1000);
   const [phase, setPhase] = useState<Phase>("preparing");
   const [session, setSession] = useState<PairSession | null>(null);
@@ -202,6 +206,25 @@ export default function PairScreen({
           ) : null}
           {phase === "expired" ? <p className="body">{t("pair.expired")}</p> : null}
           {notice ? <p className="body danger">{notice}</p> : null}
+        </div>
+
+        {/* Before there is a link this screen is the whole app, and More,
+            where support and the policy live, is out of reach. Someone who
+            cannot sign in still needs a way to ask (guideline 1.5), and the
+            policy must stay reachable in the app (5.1.1(i)). At the end of
+            the scrolling body rather than in the pinned footer: at 200 %
+            text on a 667 pt phone the footer would have left the code 84 pt. */}
+        <div className="link-row link-row--end">
+          <button type="button" className="btn btn-quiet" onClick={onSupport}>
+            {t("about.support")}
+          </button>
+          <button
+            type="button"
+            className="btn btn-quiet"
+            onClick={() => openExternal(privacyUrl(lang))}
+          >
+            {t("notice.privacy")}
+          </button>
         </div>
       </>
     );

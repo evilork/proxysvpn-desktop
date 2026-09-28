@@ -449,10 +449,12 @@ export default function App() {
     if (onboarding === null) return null;
 
     // No link: [1] is the whole app until there is one. It has no close
-    // button, because there is nowhere to close it to.
+    // button, because there is nowhere to close it to; support and the
+    // privacy policy are reachable from its footer instead.
     if (sub !== null && !hasLink && top !== "pair") {
       return (
         <PairScreen
+          onSupport={() => openExternal(supportUrl)}
           onDone={() => {
             // Claim the one auto-connect attempt BEFORE `refreshSubState`
             // resolves, not after: its `setSub` below is what turns
@@ -474,6 +476,7 @@ export default function App() {
         return (
           <PairScreen
             onClose={pop}
+            onSupport={() => openExternal(supportUrl)}
             onDone={() => {
               pop();
               // Same race as [1]'s pairing screen above, guarded the same way.

@@ -477,6 +477,29 @@ summary,
   gap: 10px;
 }
 
+/* Secondary links (the sign-in screen's support and policy): side by side
+   while they fit, one under the other at large text sizes rather than each
+   name broken over lines. Still 44 pt targets. */
+.link-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  column-gap: 8px;
+}
+
+.link-row .btn {
+  width: auto;
+  padding: 10px 12px;
+  font-size: calc(13 * var(--type-px));
+}
+
+/* Last in a scrolling body: down at its bottom while there is room, right
+   after the content once it overflows (auto margins collapse to zero, see
+   .screen-body--center). */
+.link-row--end {
+  margin-top: auto;
+}
+
 /* An icon-only control still has to be a 44 pt target. */
 .icon-btn {
   display: inline-flex;
