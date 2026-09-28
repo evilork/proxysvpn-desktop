@@ -17,6 +17,16 @@
 // отсчёт идёт от базового угла, снятого при первом же показании, а сам базовый
 // угол очень медленно подтягивается к текущему (постоянная времени около 20 с).
 // Быстрый наклон глаз отрабатывает, смену позы - нет.
+//
+// Разрешение на датчики - только по явному касанию эмблемы (Shield.tsx), и
+// никогда само по себе. Раньше вопрос висел на ЛЮБОМ первом жесте, и система
+// спрашивала про движение и ориентацию в ответ на кнопку «Разрешить VPN» или
+// «Продолжить» - ради украшения, посреди настройки (пункт 5.1.1 правил Apple: просить
+// только то, что нужно для дела). В сборках для App Store вопроса нет вовсе:
+// датчик не слушается и не запрашивается, зрачок следит за касанием и
+// указателем.
+
+import { IS_APPSTORE } from "./dist";
 
 /**
  * Насколько зрачок отходит от центра, в единицах холста марки (1720x1804).
@@ -101,8 +111,12 @@ function motionGate(): MotionGate | null {
   return DeviceOrientationEvent as MotionGate;
 }
 
-/** Нужно ли вообще спрашивать. False - датчик или уже открыт, или его нет. */
+/**
+ * Нужно ли вообще спрашивать. False - датчик или уже открыт, или его нет, или
+ * это сборка для App Store, где его не спрашивают никогда.
+ */
 export function motionNeedsPermission(): boolean {
+  if (IS_APPSTORE) return false;
   const gate = motionGate();
   return typeof gate?.requestPermission === "function";
 }
@@ -116,6 +130,7 @@ export function motionNeedsPermission(): boolean {
  * указателе.
  */
 export async function requestMotionAccess(): Promise<boolean> {
+  if (IS_APPSTORE) return false;
   const gate = motionGate();
   if (typeof gate?.requestPermission !== "function") return false;
   try {
@@ -131,15 +146,15 @@ let asked = false;
 let granted: boolean | null = null;
 
 /**
- * Разбудить датчик при первом жесте.
+ * Спросить про датчик - из касания эмблемы, и только оттуда.
  *
- * Спрашивать разрешение можно только изнутри жеста. Раньше это висело на
- * касании эмблемы - и зря: человек может начать с кнопки «Включить», с
- * шестерёнки, с чего угодно, и тогда вопрос не задавался вовсе, а глаз молча
- * не работал. Теперь на ЛЮБОЙ первый жест.
+ * Спрашивать разрешение можно только изнутри жеста, поэтому вызывать это
+ * вправе лишь обработчик касания эмблемы (Shield.tsx): там человек сам
+ * тронул глаз. Любой другой жест - кнопка настройки, «Продолжить», шестерёнка
+ * - о датчиках не спрашивает; глаз тогда просто следит за касанием.
  *
  * Вызов однократный, ничего не ждёт и ничего не ломает: отказ означает лишь,
- * что взгляд останется неподвижным.
+ * что взгляд останется на указателе. В сборках для App Store ничего не делает.
  */
 export function primeGaze(): void {
   if (asked || !motionNeedsPermission()) return;
@@ -313,13 +328,11 @@ class GazeSource {
   private bind(): void {
     if (this.bound || typeof window === "undefined") return;
     this.bound = true;
-    window.addEventListener("deviceorientation", this.onTilt);
+    // App Store: датчик не слушаем вовсе - только касание и указатель.
+    if (!IS_APPSTORE) window.addEventListener("deviceorientation", this.onTilt);
     window.addEventListener("pointermove", this.onPointer, { passive: true });
     window.addEventListener("pointerout", this.onPointerOut, { passive: true });
     document.addEventListener("visibilitychange", this.onVisibility);
-    // Первый жест где угодно - и сразу спрашиваем про датчик.
-    window.addEventListener("pointerdown", primeGaze, { once: true, capture: true });
-    window.addEventListener("touchend", primeGaze, { once: true, capture: true });
   }
 
   private unbind(): void {
@@ -329,8 +342,6 @@ class GazeSource {
     window.removeEventListener("pointermove", this.onPointer);
     window.removeEventListener("pointerout", this.onPointerOut);
     document.removeEventListener("visibilitychange", this.onVisibility);
-    window.removeEventListener("pointerdown", primeGaze, { capture: true });
-    window.removeEventListener("touchend", primeGaze, { capture: true });
     if (this.frame) cancelAnimationFrame(this.frame);
     this.frame = 0;
     this.target = { x: 0, y: 0 };
