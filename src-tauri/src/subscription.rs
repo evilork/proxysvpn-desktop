@@ -1818,9 +1818,10 @@ pub fn last_routing() -> Option<RoutingRules> {
 /// Russian domains routed around the tunnel when the service told us nothing.
 ///
 /// A SEED, not a source of truth. It is used on a first run that could not
-/// reach the subscription, and by the iOS sing-box builder until that file is
-/// rewritten to take `RoutingRules`. Do not extend it: a domain added here and
-/// not to `scripts/build-ru-direct.mjs` recreates the two-lists problem.
+/// reach the subscription, on the Mac and in the iOS extension alike (both
+/// build from `build_xray_config_around`). Do not extend it: a domain added
+/// here and not to `scripts/build-ru-direct.mjs` recreates the two-lists
+/// problem.
 pub const RU_DIRECT_DOMAINS: &[&str] = &[
     "yandex.ru", "yandex.com", "yandex.net",
     "ya.ru",
@@ -1850,7 +1851,7 @@ pub const RU_DIRECT_DOMAINS: &[&str] = &[
 pub const TUNNEL_DNS: &str = "198.18.0.2";
 
 /// Networks routed around the tunnel when the service told us nothing.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 const SEED_DIRECT_IPS: &[&str] = &["geoip:private", "geoip:ru"];
 
 /// Build the xray runtime config for a VLESS node, using the routing rules the
@@ -1872,7 +1873,7 @@ pub fn build_xray_config_with_routing(cfg: &VlessConfig, routing: Option<&Routin
 }
 
 /// То же, но с настройками туннеля. Всё проверяемое живёт здесь.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub fn build_xray_config_with_routing_and_prefs(
     cfg: &VlessConfig,
     routing: Option<&RoutingRules>,
@@ -1882,10 +1883,10 @@ pub fn build_xray_config_with_routing_and_prefs(
 }
 
 /// Everything around the node's own outbound (`proxy`): DNS, routing and the
-/// helper outbounds. Split from the VLESS part so that another engine's
-/// config (a Hysteria2 node run by Xray) can be built under the very same
-/// rules. `block_quic`: rule 1 below, for a `proxy` that cannot carry UDP.
-#[cfg(any(target_os = "macos", test))]
+/// helper outbounds. Split from the VLESS part so the Apple engine
+/// (xray_apple.rs) runs Hysteria2 under the very same rules. `block_quic`:
+/// rule 1 below, for a `proxy` that cannot carry UDP.
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) fn build_xray_config_around(
     proxy: Value,
     block_quic: bool,
@@ -2077,8 +2078,8 @@ pub(crate) fn build_xray_config_around(
 }
 
 /// The node itself: VLESS + REALITY, over TCP (Vision) or XHTTP, tagged
-/// `proxy`.
-#[cfg(any(target_os = "macos", test))]
+/// `proxy`. Shared with the Apple engine (xray_apple.rs).
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) fn vless_outbound(cfg: &VlessConfig, prefs: &crate::tunnel_prefs::TunnelPrefs) -> Value {
     use serde_json::json;
 
@@ -2147,7 +2148,7 @@ pub(crate) fn vless_outbound(cfg: &VlessConfig, prefs: &crate::tunnel_prefs::Tun
 /// Вынесено отдельной функцией, потому что дробление вставляет ЛИШНИЙ
 /// исходящий и меняет настройки сокета у основного: собирать это вперемешку с
 /// маршрутизацией в одном литерале стало нечитаемо.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 fn build_outbounds(proxy: Value, prefs: &crate::tunnel_prefs::TunnelPrefs) -> Vec<Value> {
     use serde_json::json;
 

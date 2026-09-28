@@ -51,7 +51,7 @@ mod xray_manager;
 #[cfg(target_os = "ios")]
 mod ios_vpn;
 #[cfg(any(target_os = "ios", test))]
-mod singbox;
+mod xray_apple;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
