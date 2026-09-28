@@ -65,6 +65,9 @@ pub enum ErrorCode {
     PortBusy,
     /// Routes or the utun device could not be set up.
     TunFailed,
+    /// iOS Simulator build: Network Extensions do not run there at all, so
+    /// "press again" would be a lie. Seen only by developers.
+    SimulatorNoVpn,
 
     // ── The tunnel is up but the internet is not ───────────────────────────
     /// Machine has no network at all — not our fault, and saying so saves a

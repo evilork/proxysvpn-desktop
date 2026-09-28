@@ -374,6 +374,10 @@ const ru = {
   "err.PING_NOT_APPLICABLE.title": "Отклик не измеряется",
   "err.PING_NOT_APPLICABLE.body":
     "На этом способе связи время отклика измерить нельзя. Это не поломка: защита работает, просто числа для неё не будет.",
+  // Developers only: the iOS Simulator never runs the tunnel.
+  "err.SIMULATOR_NO_VPN.title": "В симуляторе VPN не запускается",
+  "err.SIMULATOR_NO_VPN.body":
+    "Симулятор iPhone не умеет запускать VPN — это ограничение Apple. Подключение проверяется на настоящем iPhone или iPad.",
   "err.UNKNOWN.title": "Что-то пошло не так",
   "err.UNKNOWN.body":
     "Мы не смогли назвать причину. Пришлите отчёт — в нём есть всё, что нужно, чтобы разобраться.",
@@ -887,6 +891,9 @@ const en: Partial<Record<MsgKey, string>> = {
   "err.PING_NOT_APPLICABLE.title": "Latency is not measured",
   "err.PING_NOT_APPLICABLE.body":
     "This way of connecting gives no round-trip figure. Nothing is broken: protection works, there simply is no number for it.",
+  "err.SIMULATOR_NO_VPN.title": "VPN does not run in the Simulator",
+  "err.SIMULATOR_NO_VPN.body":
+    "The iOS Simulator cannot run a VPN — an Apple limitation. Test the connection on a real iPhone or iPad.",
   "err.UNKNOWN.title": "Something went wrong",
   "err.UNKNOWN.body":
     "We could not name the cause. Send the report — it has everything needed to work it out.",

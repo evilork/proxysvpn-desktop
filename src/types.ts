@@ -62,6 +62,8 @@ export type ErrorCode =
   | "ENGINE_DIED"
   | "PORT_BUSY"
   | "TUN_FAILED"
+  // iOS Simulator only: Network Extensions do not run there. Developers see it.
+  | "SIMULATOR_NO_VPN"
   | "NETWORK_OFFLINE"
   | "NO_ROUTE"
   | "BLOCKED"
@@ -210,6 +212,8 @@ const DIRECT_ERROR_ACTION: Record<ErrorCode, ErrorAction> = {
   ENGINE_DIED: "waitAndSee",
   PORT_BUSY: "retry",
   TUN_FAILED: "diagnose",
+  // Nothing to press: only a real device runs the tunnel.
+  SIMULATOR_NO_VPN: "waitAndSee",
 
   NETWORK_OFFLINE: "waitAndSee",
   NO_ROUTE: "diagnose",

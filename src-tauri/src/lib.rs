@@ -1418,6 +1418,23 @@ impl Core {
     }
 }
 
+/// The iOS Simulator cannot run Network Extensions at all: the connect below
+/// could only fail there, with a phrase promising that a retry helps. Say
+/// what it really is (28.09.2026, the owner saw exactly that on an iPad
+/// simulator).
+#[cfg(all(target_os = "ios", target_abi = "sim"))]
+async fn ios_engine_start(_server: &ServerConfig) -> Result<(), AppError> {
+    Err(AppError::new(ErrorCode::SimulatorNoVpn))
+}
+
+#[cfg(all(target_os = "ios", not(target_abi = "sim")))]
+async fn ios_engine_start(server: &ServerConfig) -> Result<(), AppError> {
+    ios_vpn::connect(server).await.map_err(|e| {
+        logger::log("error", "ios-vpn", &format!("connect failed: {e}"));
+        AppError::new(ErrorCode::EngineStartFailed)
+    })
+}
+
 #[cfg(target_os = "ios")]
 impl Core {
     /// There is no second half on iOS: the extension owns the device, the
@@ -1428,10 +1445,7 @@ impl Core {
         _partner: Option<&ServerConfig>,
         _race_creds: Option<&RaceCredentials>,
     ) -> Result<(), AppError> {
-        ios_vpn::connect(server).await.map_err(|e| {
-            logger::log("error", "ios-vpn", &format!("connect failed: {e}"));
-            AppError::new(ErrorCode::EngineStartFailed)
-        })
+        ios_engine_start(server).await
     }
 
     async fn tunnel_up(&self, _server: &ServerConfig, _keep: bool) -> Result<(), AppError> {
