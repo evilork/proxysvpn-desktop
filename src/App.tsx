@@ -27,6 +27,7 @@ import {
 import { IS_APPSTORE, purchaseLinksAllowed } from "./dist";
 import { isAllowedExternal } from "./externalUrl";
 import { makeT, type Lang } from "./i18n";
+import { detectLang } from "./lang";
 import {
   AUTO_CONNECT_KEY,
   LANG_KEY,
@@ -92,7 +93,14 @@ const HEAL_SHEET_AT_MS = 8000;
 function initialLang(): Lang {
   const stored = readStored(LANG_KEY);
   if (stored === "ru" || stored === "en") return stored;
-  return typeof navigator !== "undefined" && navigator.language.startsWith("en") ? "en" : "ru";
+  if (typeof navigator === "undefined") return detectLang([]);
+  // Some web views hand back an empty `languages`; the single `language` is
+  // still the system's first choice then.
+  const preferred: readonly (string | undefined)[] =
+    navigator.languages && navigator.languages.length > 0
+      ? navigator.languages
+      : [navigator.language];
+  return detectLang(preferred.filter((tag): tag is string => typeof tag === "string"));
 }
 
 function initialAutoConnect(): boolean {
