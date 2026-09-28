@@ -9,13 +9,14 @@ configs:
   release: release
 settings:
   base:
-    # The one line to change for another bundle id: the app is
-    # $(PVPN_BUNDLE_ID), the tunnel extension $(PVPN_BUNDLE_ID).PacketTunnel,
-    # and VpnBridge.swift derives the provider id from the running app.
+    # The App Store bundle id, set once: the app is $(PVPN_BUNDLE_ID), the
+    # tunnel extension $(PVPN_BUNDLE_ID).PacketTunnel, and the Swift sources
+    # derive the provider id and their log subsystems from the running bundle.
     # `tauri ios build/dev` rewrites the app target's PRODUCT_BUNDLE_IDENTIFIER
-    # from the tauri config, so a new value also goes into "identifier" of
+    # from the Tauri config, so the same value is "identifier" in
     # src-tauri/tauri.ios.conf.json; scripts/setup-ios.sh refuses a mismatch.
-    PVPN_BUNDLE_ID: com.proxysvpn.desktop
+    # The macOS DMG keeps com.proxysvpn.desktop (src-tauri/tauri.conf.json).
+    PVPN_BUNDLE_ID: com.proxysvpn.app
     # App and extension must carry the same versions or App Store Connect
     # warns on upload. MARKETING_VERSION follows "version" in tauri.conf.json
     # (setup-ios.sh checks); `tauri ios build` overwrites

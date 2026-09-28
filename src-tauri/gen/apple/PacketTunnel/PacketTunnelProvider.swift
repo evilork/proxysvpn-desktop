@@ -20,7 +20,10 @@ import Network
 import NetworkExtension
 import os.log
 
-private let tunnelLog = OSLog(subsystem: "com.proxysvpn.desktop.PacketTunnel", category: "Tunnel")
+// The extension's own bundle id (the app's id + ".PacketTunnel", project.yml)
+// rather than a literal, so Console.app filters by the id the build carries.
+private let extensionBundleId = Bundle.main.bundleIdentifier ?? "PacketTunnel"
+private let tunnelLog = OSLog(subsystem: extensionBundleId, category: "Tunnel")
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
     private var boxService: LibboxBoxService?
@@ -277,7 +280,7 @@ private final class PlatformInterface: NSObject, LibboxPlatformInterfaceProtocol
                 isConstrained: path.isConstrained
             )
         }
-        monitor.start(queue: DispatchQueue(label: "com.proxysvpn.desktop.interface-monitor"))
+        monitor.start(queue: DispatchQueue(label: extensionBundleId + ".interface-monitor"))
         networkMonitor = monitor
     }
 

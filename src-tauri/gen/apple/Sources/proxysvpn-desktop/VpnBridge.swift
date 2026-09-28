@@ -17,7 +17,9 @@ import Foundation
 import NetworkExtension
 import os.log
 
-private let bridgeLog = OSLog(subsystem: "com.proxysvpn.desktop", category: "VpnBridge")
+// Subsystem = the running app's bundle id, as for providerBundleId below, so
+// no bundle id literal in Swift can drift from project.yml.
+private let bridgeLog = OSLog(subsystem: Bundle.main.bundleIdentifier ?? "ProxysVPN", category: "VpnBridge")
 
 final class VpnController {
     static let shared = VpnController()
