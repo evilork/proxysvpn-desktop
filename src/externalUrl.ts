@@ -3,7 +3,7 @@
 // Which addresses the app may hand to the system browser.
 //
 // Direct builds: the same four schemes the opener plugin's default scope lets
-// through (`opener:default` in capabilities/default.json). The plugin stays the
+// through (`opener:default` in capabilities/desktop.json). The plugin stays the
 // gate there; this only mirrors it, so asking "would this open?" has one answer.
 //
 // App Store builds: a short allowlist, and nothing else. The app ships without
