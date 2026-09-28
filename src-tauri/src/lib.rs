@@ -26,6 +26,7 @@
 // window renders both. Where a platform genuinely cannot answer, it answers
 // "we do not know" rather than growing a command the other one lacks.
 
+mod consent;
 mod errors;
 mod events;
 mod logger;
@@ -3692,7 +3693,36 @@ fn is_pair_token(token: &str) -> bool {
 // ───────────────────────────────────────────────────────────────────────────
 
 fn pending_onboarding() -> Vec<&'static str> {
+    onboarding_steps(&consent_paths())
+}
+
+/// Where the data-notice record lives: beside the subscription link, in each
+/// of the same directories (`link_paths`) and read in the same order - on iOS
+/// that is the app's own container, on macOS the shared directory first.
+fn consent_paths() -> Vec<std::path::PathBuf> {
+    link_paths()
+        .into_iter()
+        .filter_map(|link| link.parent().map(|dir| dir.join(consent::FILE_NAME)))
+        .collect()
+}
+
+/// The first-run steps, given where the data-notice record would be.
+///
+/// The data notice goes first on every platform (guideline 5.4: the
+/// declaration comes before any use of the service). The window shows nothing
+/// else - pairing included, and with it the first request to the service -
+/// until every step here is done.
+///
+/// macOS caveat: a record written by the first, non-root run lands under that
+/// user's `HOME`. When the launcher then restarts the app as root with root's
+/// own `HOME` (the osascript path, see device_id.rs), that run cannot see it
+/// and shows the notice once more; its own record goes to the shared
+/// directory, and the question does not come back after that.
+fn onboarding_steps(consent_paths: &[std::path::PathBuf]) -> Vec<&'static str> {
     let mut steps = Vec::new();
+    if consent::is_pending(consent_paths) {
+        steps.push("dataNotice");
+    }
     #[cfg(target_os = "macos")]
     {
         if !running_from_applications() {
@@ -3737,6 +3767,7 @@ fn bundle_path() -> Option<std::path::PathBuf> {
 
 async fn run_onboarding(step: &str) -> Result<(), AppError> {
     match step {
+        "dataNotice" => record_data_notice(),
         #[cfg(target_os = "macos")]
         "moveToApplications" => move_to_applications().await,
         #[cfg(target_os = "macos")]
@@ -3746,6 +3777,29 @@ async fn run_onboarding(step: &str) -> Result<(), AppError> {
         // be worse than no button.
         "iosPermission" => Ok(()),
         _ => Err(AppError::new(ErrorCode::Unknown)),
+    }
+}
+
+/// "Continue" on the data notice: remember that this version was shown.
+fn record_data_notice() -> Result<(), AppError> {
+    let now_ms = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    match consent::record(&consent_paths(), now_ms) {
+        Ok(()) => {
+            logger::log(
+                "info",
+                "app",
+                &format!("data notice v{} accepted", consent::DATA_NOTICE_VERSION),
+            );
+            Ok(())
+        }
+        Err(err) => {
+            // The io error alone: the path would carry the user's name.
+            logger::log("error", "app", &format!("could not record the data notice: {err}"));
+            Err(AppError::new(ErrorCode::Unknown))
+        }
     }
 }
 
@@ -4921,5 +4975,60 @@ mod tests {
         .expect("json");
         assert!(json.contains(r#""canFix":true"#), "{json}");
         assert!(!json.contains("can_fix"), "{json}");
+    }
+
+    fn consent_temp_dir(tag: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("proxysvpn-onboarding-{tag}-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    /// Guideline 5.4: the data notice comes before everything else on the
+    /// first run, and once accepted it does not come back.
+    #[test]
+    fn the_data_notice_is_the_first_step_until_it_is_accepted() {
+        let dir = consent_temp_dir("first");
+        let paths = vec![dir.join(consent::FILE_NAME)];
+
+        let before = onboarding_steps(&paths);
+        assert_eq!(before.first(), Some(&"dataNotice"), "{before:?}");
+
+        consent::record(&paths, 1_700_000_000_000).expect("record");
+        let after = onboarding_steps(&paths);
+        assert!(!after.contains(&"dataNotice"), "{after:?}");
+        // Only the notice changed; any platform step is still there.
+        assert_eq!(after.len(), before.len() - 1, "{before:?} -> {after:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_older_or_damaged_record_brings_the_notice_back() {
+        let dir = consent_temp_dir("again");
+        let path = dir.join(consent::FILE_NAME);
+        let paths = vec![path.clone()];
+
+        std::fs::write(&path, br#"{"v":0,"at":1}"#).expect("write");
+        assert_eq!(onboarding_steps(&paths).first(), Some(&"dataNotice"));
+
+        std::fs::write(&path, b"{\"v\":1,").expect("write");
+        assert_eq!(onboarding_steps(&paths).first(), Some(&"dataNotice"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The record sits beside the subscription link, in every place the link
+    /// may live, so it survives exactly as long as the link's directory does.
+    #[test]
+    fn the_record_lives_beside_the_subscription_link() {
+        let links = link_paths();
+        let records = consent_paths();
+        assert_eq!(links.len(), records.len());
+        for (link, record) in links.iter().zip(&records) {
+            assert_eq!(link.parent(), record.parent());
+            assert_eq!(record.file_name().and_then(|n| n.to_str()), Some(consent::FILE_NAME));
+        }
     }
 }
