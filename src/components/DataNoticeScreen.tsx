@@ -17,9 +17,11 @@
 // NO_ACTIVITY_LOGS_CONFIRMED (src/legal.ts).
 //
 // The resolvers differ by engine, so the DNS line does too: the Apple engine
-// asks Cloudflare over HTTPS through the server and sends Russian names that
-// go directly to Yandex's public DNS; the desktop engine asks Cloudflare and
-// Google through the server, or whatever the person set in Tunnel settings.
+// (xray_apple.rs) asks Cloudflare over HTTPS through the server, sends every
+// name routed direct (Russian ones, the person's "Всегда напрямую") to
+// Yandex's public DNS, and looks up the server's own name with the network's
+// resolver; the desktop engine asks Cloudflare and Google through the server,
+// or whatever the person set in Tunnel settings.
 
 import { useEffect, useRef } from "react";
 

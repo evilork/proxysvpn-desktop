@@ -537,9 +537,11 @@ const ru = {
   // ── Privacy & legal ───────────────────────────────────────────────────────
   // The data notice (guideline 5.4, DataNoticeScreen.tsx) and More → О
   // приложении. Each line of the notice is backed by code; the DNS lines
-  // follow the engine configs (singbox.rs / the Apple Xray config for
-  // "apple", subscription.rs + tunnel_prefs.rs for "desktop"). "We do not
-  // record sites" is shown only once NO_ACTIVITY_LOGS_CONFIRMED (legal.ts).
+  // follow the engine configs (xray_apple.rs `dns_section` for "apple": DoH
+  // through the node, Yandex for every name routed direct, the system
+  // resolver for the node's own name; subscription.rs + tunnel_prefs.rs for
+  // "desktop"). "We do not record sites" is shown only once
+  // NO_ACTIVITY_LOGS_CONFIRMED (legal.ts).
   "notice.title": "Какие данные мы используем",
   "notice.intro": "Только то, без чего VPN не работает. Всё, без мелкого шрифта:",
   "notice.token": "Токен подписки — по нему сервис узнаёт ваш аккаунт.",
@@ -550,7 +552,7 @@ const ru = {
     "IP-адрес: его видит наш сайт, когда приложение загружает подписку, и VPN-сервер, пока вы подключены.",
   "notice.traffic": "Сколько трафика прошло через ваш аккаунт.",
   "notice.dns.apple":
-    "Имена сайтов разрешает Cloudflare по DNS-over-HTTPS — через VPN-сервер. Имена российских сайтов, которые открываются напрямую, разрешает публичный DNS Яндекса, мимо VPN.",
+    "Имена сайтов разрешает Cloudflare по DNS-over-HTTPS — через VPN-сервер. Имена сайтов, которые открываются напрямую (российских и тех, что вы внесли в «Всегда напрямую»), разрешает публичный DNS Яндекса, мимо VPN. Адрес самого VPN-сервера приложение узнаёт через DNS вашей сети.",
   "notice.dns.desktop":
     "Имена сайтов разрешают Cloudflare и Google — запросы к ним идут через VPN-сервер. В настройках туннеля можно выбрать системный или свой резолвер.",
   "notice.noActivityLogs": "Мы не записываем, какие сайты вы открываете.",
@@ -1030,7 +1032,7 @@ const en: Partial<Record<MsgKey, string>> = {
     "Your IP address: our site sees it when the app loads your subscription, and the VPN server sees it while you are connected.",
   "notice.traffic": "How much traffic your account used.",
   "notice.dns.apple":
-    "Site names are resolved by Cloudflare over DNS-over-HTTPS, through the VPN server. Names of Russian sites that open directly are resolved by Yandex public DNS, outside the VPN.",
+    "Site names are resolved by Cloudflare over DNS-over-HTTPS, through the VPN server. Names of sites that open directly (Russian ones and those on your “Always direct” list) are resolved by Yandex public DNS, outside the VPN. The app looks up the VPN server's own address through your network's DNS.",
   "notice.dns.desktop":
     "Site names are resolved by Cloudflare and Google, asked through the VPN server. Tunnel settings let you pick the system resolver or one of your own.",
   "notice.noActivityLogs": "We do not record which sites you open.",
