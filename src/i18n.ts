@@ -156,7 +156,10 @@ const ru = {
   "pair.clipboardEmpty": "В буфере обмена нет ссылки",
   "pair.clipboardFailed": "Не удалось прочитать буфер обмена",
   "pair.done": "Готово. Ссылка добавлена",
-  "pair.keychain": "Ссылка хранится в защищённом хранилище системы",
+  // Where it really is: a 0600 file in the app's data folder (lib.rs
+  // store_link), not the Keychain - that move is still to come.
+  "pair.keychain": "Ссылка хранится в папке приложения на этом устройстве",
+  "pair.qrAlt": "Код привязки",
   "pair.scan": "Навести камеру",
   // App Store builds: signing in to an existing ProxysVPN account, never
   // entering a key and never the bot (it sells top-ups).
@@ -178,7 +181,10 @@ const ru = {
   "details.appstore.accessUntil": "Доступ до {date} · осталось {days}",
   "details.expiryUnknown": "Срок неизвестен — не удалось получить данные",
   "details.split": "Куда идёт трафик: через VPN {via} · напрямую {direct}",
-  "details.splitNote":
+  // What this device counts, and only that. The server-side promise is
+  // `.noLogs`, shown once NO_ACTIVITY_LOGS_CONFIRMED (legal.ts).
+  "details.splitNote": "Это счёт соединений на этом устройстве — без адресов сайтов.",
+  "details.splitNote.noLogs":
     "Мы не записываем, какие сайты вы открываете. Только сколько соединений куда ушло.",
   "details.checkNow": "Проверить сейчас",
   "details.checkOk": "Всё работает. Данные идут. Текущий сервер — {location}",
@@ -220,13 +226,16 @@ const ru = {
   "tun.ip.v6": "IPv6",
   "tun.ip.both": "Оба",
   "tun.dns": "Резолвер",
-  "tun.dnsHint": "Кто разрешает имена. Свой идёт через узел и не даёт запросам утекать мимо туннеля.",
-  "tun.dns.internal": "Свой",
+  // Named for what it is (tunnel_prefs.rs DnsChoice::Internal): DoH to
+  // Cloudflare and TCP to Google, both through the node - not a resolver of ours.
+  "tun.dnsHint":
+    "Кто разрешает имена. Cloudflare и Google спрашиваются через VPN-сервер, поэтому запросы не уходят мимо туннеля.",
+  "tun.dns.internal": "Cloudflare и Google",
   "tun.dns.system": "Системный",
   "tun.dns.custom": "Указать",
   "tun.dnsPlaceholder": "9.9.9.9 или https://dns.example/dns-query",
   "tun.dnsOwnHint": "Без схемы адрес берётся как TCP: обычный UDP через этот выход не проходит.",
-  "tun.dnsMissing": "Адрес не введён — пока работает свой резолвер.",
+  "tun.dnsMissing": "Адрес не введён — пока работают Cloudflare и Google.",
   "tun.transport": "Способ подключения",
   "tun.transportHint":
     "Watafast сам берёт то, что умеет. Локация без выбранного способа не пропадает — подключится тем, что есть, и это видно в её строке.",
@@ -672,7 +681,8 @@ const en: Partial<Record<MsgKey, string>> = {
   "pair.clipboardEmpty": "There is no link in the clipboard",
   "pair.clipboardFailed": "Could not read the clipboard",
   "pair.done": "Done. Link added",
-  "pair.keychain": "The link is kept in the system's secure storage",
+  "pair.keychain": "The link is stored in the app's folder on this device",
+  "pair.qrAlt": "Pairing code",
   "pair.scan": "Point the camera",
   "pair.appstore.title": "Sign in to your ProxysVPN account",
   "pair.appstore.body":
@@ -691,7 +701,8 @@ const en: Partial<Record<MsgKey, string>> = {
   "details.appstore.accessUntil": "Access until {date} · {days} left",
   "details.expiryUnknown": "Expiry unknown — could not get the data",
   "details.split": "Where traffic goes: through the VPN {via} · directly {direct}",
-  "details.splitNote":
+  "details.splitNote": "A count of connections on this device, without site addresses.",
+  "details.splitNote.noLogs":
     "We do not record which sites you open. Only how many connections went where.",
   "details.checkNow": "Check now",
   "details.checkOk": "Everything works. Data is flowing. Current server — {location}",
@@ -729,13 +740,14 @@ const en: Partial<Record<MsgKey, string>> = {
   "tun.ip.v6": "IPv6",
   "tun.ip.both": "Both",
   "tun.dns": "Resolver",
-  "tun.dnsHint": "Who resolves names. Ours goes through the node, so queries cannot leak past the tunnel.",
-  "tun.dns.internal": "Ours",
+  "tun.dnsHint":
+    "Who resolves names. Cloudflare and Google are asked through the VPN server, so queries cannot leak past the tunnel.",
+  "tun.dns.internal": "Cloudflare & Google",
   "tun.dns.system": "System",
   "tun.dns.custom": "Set one",
   "tun.dnsPlaceholder": "9.9.9.9 or https://dns.example/dns-query",
   "tun.dnsOwnHint": "Without a scheme the address is taken as TCP: plain UDP does not pass this exit.",
-  "tun.dnsMissing": "No address yet — ours is in use.",
+  "tun.dnsMissing": "No address yet — Cloudflare and Google are in use.",
   "tun.transport": "How to connect",
   "tun.transportHint":
     "Watafast picks whatever it supports. A location without the chosen way is not dropped — it connects with what it has, and the row says so.",

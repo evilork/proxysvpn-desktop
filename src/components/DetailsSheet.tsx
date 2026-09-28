@@ -5,12 +5,15 @@
 //
 // "Куда идёт трафик" is two numbers and one sentence of explanation. That is
 // the only honest form of a transparency promise: counts without addresses.
+// The sentence speaks for this device only; "we do not record sites" would
+// speak for the servers too, and waits for NO_ACTIVITY_LOGS_CONFIRMED.
 
 import { useCallback, useEffect, useState } from "react";
 
 import { bridge, type RoutingState, type TrafficSplit } from "../bridge";
 import { IS_APPSTORE } from "../dist";
 import { daysLeft, formatDate, formatNumber } from "../i18n";
+import { NO_ACTIVITY_LOGS_CONFIRMED } from "../legal";
 import type { StatePayload, SubMeta } from "../types";
 import { IconChevron, Sheet, Spinner, useUi } from "./ui";
 
@@ -138,7 +141,9 @@ export default function DetailsSheet({
                   direct: formatNumber(lang, split.direct),
                 })}
               </span>
-              <span className="row-sub">{t("details.splitNote")}</span>
+              <span className="row-sub">
+                {t(NO_ACTIVITY_LOGS_CONFIRMED ? "details.splitNote.noLogs" : "details.splitNote")}
+              </span>
             </span>
           </div>
         ) : null}

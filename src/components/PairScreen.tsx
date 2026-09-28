@@ -171,7 +171,7 @@ export default function PairScreen({
             layout does not jump under the person's eyes. */}
         <div className="qr-card">
           {qr ? (
-            <img src={qr} alt="" width={220} height={220} />
+            <img src={qr} alt={t("pair.qrAlt")} width={220} height={220} />
           ) : (
             <span className="small" style={{ color: "#5b6672" }}>
               {phase === "failed" ? "—" : t("pair.preparing")}
