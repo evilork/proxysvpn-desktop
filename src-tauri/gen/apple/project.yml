@@ -85,6 +85,9 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDevelopmentRegion: en
         CFBundleLocalizations: [en, ru]
+        # The base value of the name under the icon; {en,ru}.lproj/
+        # InfoPlist.strings localize it.
+        CFBundleDisplayName: ProxysVPN
         # Documents/app.log is reachable through Finder file sharing. The logs
         # are sanitized by logger.rs and named in the in-app data notice.
         UIFileSharingEnabled: true
