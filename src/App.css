@@ -197,6 +197,27 @@ button {
   cursor: pointer;
 }
 
+/* Pinch-zoom is allowed now, and with it iOS would also zoom on a double
+   tap - which is what an impatient thumb does to the emblem or a button.
+   `manipulation` keeps pinch and drops the double-tap zoom. */
+button,
+label,
+summary,
+[role="button"] {
+  touch-action: manipulation;
+}
+
+/* iOS zooms the page into any text field under 16 px the moment it takes
+   focus, and with zoom no longer forbidden nothing stops it. The domain lists
+   in "Свои правила" are 15 px. `-webkit-touch-callout` is iOS-only. */
+@supports (-webkit-touch-callout: none) {
+  input,
+  textarea,
+  select {
+    font-size: max(16px, 1em);
+  }
+}
+
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

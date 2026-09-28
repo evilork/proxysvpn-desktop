@@ -9,10 +9,10 @@
       type="image/svg+xml"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 132'%3E%3Cpath d='M60 6 L108 26 V68 C108 98 88 118 60 126 C32 118 12 98 12 68 V26 Z' fill='none' stroke='%234ade80' stroke-width='12' stroke-linejoin='round'/%3E%3C/svg%3E"
     />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
-    />
+    <!-- No maximum-scale and no user-scalable=no: pinch-zoom is how a person
+         with low vision reads a line the text size setting did not reach, and
+         WKWebView honours a ban on it even where Safari would not. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <!-- Both themes are supported, so the browser paints its own chrome and
          the very first frame in the right one instead of flashing white. -->
     <meta name="color-scheme" content="dark light" />
