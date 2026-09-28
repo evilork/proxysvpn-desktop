@@ -11,7 +11,7 @@
     "tauri": "tauri",
     "ios:setup": "bash scripts/setup-ios.sh",
     "ios:dev": "tauri ios dev",
-    "ios:build": "tauri ios build"
+    "ios:build": "tauri ios build --export-method app-store-connect"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
