@@ -11,13 +11,28 @@
 // несовместим. Спрятать его было бы проще, но тогда вопрос «а почему у вас
 // нет mux» остался бы без ответа.
 //
+// App Store builds (src/dist.ts) drop it entirely: there a switch that is
+// off forever is a non-working feature under guideline 2.1, explanation or
+// not. For the same reason iOS does not offer "XHTTP only": the iOS engine
+// cannot run XHTTP yet (ENGINE_UNSUPPORTED), and a choice after which nothing
+// connects is worse than no choice. It comes back with the move of iOS to
+// Xray-core.
+//
 // Каждая правка применяется СРАЗУ. Если туннель поднят, ядро переподключается
 // само - иначе настройка молчала бы до следующего включения, и человек об этом
 // не узнал бы.
 
 import { useCallback, useEffect, useState } from "react";
 
-import { bridge, type DnsChoice, type IpKind, type TransportPref, type TunnelPrefs } from "../bridge";
+import {
+  bridge,
+  type AppInfo,
+  type DnsChoice,
+  type IpKind,
+  type TransportPref,
+  type TunnelPrefs,
+} from "../bridge";
+import { IS_APPSTORE } from "../dist";
 import type { MsgKey } from "../i18n";
 import { Screen, Spinner, useUi } from "./ui";
 
@@ -39,7 +54,14 @@ const TRANSPORTS: [TransportPref, MsgKey][] = [
   ["visionOnly", "tun.transport.vision"],
 ];
 
-export default function TunnelScreen({ onClose }: { onClose: () => void }) {
+export default function TunnelScreen({
+  onClose,
+  platform,
+}: {
+  onClose: () => void;
+  /** Unknown until `app_info` answers; treated as "not iOS" meanwhile. */
+  platform?: AppInfo["platform"];
+}) {
   const { t } = useUi();
   const [prefs, setPrefs] = useState<TunnelPrefs | null>(null);
   const [busy, setBusy] = useState(false);
@@ -103,6 +125,11 @@ export default function TunnelScreen({ onClose }: { onClose: () => void }) {
   }
 
   const customMissing = prefs.dns === "custom" && prefs.customDns.trim() === "";
+  // A choice saved before this rule stays visible, so the person can see it
+  // and move off it; it is just no longer offered.
+  const transports = TRANSPORTS.filter(
+    ([value]) => !(platform === "ios" && value === "xhttpOnly" && prefs.transport !== value),
+  );
 
   return (
     <Screen
@@ -129,6 +156,8 @@ export default function TunnelScreen({ onClose }: { onClose: () => void }) {
           <span className="row-side">
             <input
               type="checkbox"
+              role="switch"
+              aria-checked={prefs.fragment}
               checked={prefs.fragment}
               disabled={busy}
               onChange={(e) => void apply({ ...prefs, fragment: e.target.checked })}
@@ -136,16 +165,26 @@ export default function TunnelScreen({ onClose }: { onClose: () => void }) {
           </span>
         </label>
 
-        {/* Показан, но недоступен - и причина написана рядом, а не спрятана. */}
-        <div className="row" aria-disabled="true">
-          <span className="row-main">
-            <span className="row-title dim">{t("tun.mux")}</span>
-            <span className="row-sub">{t("tun.muxWhy")}</span>
-          </span>
-          <span className="row-side">
-            <input type="checkbox" checked={false} disabled readOnly />
-          </span>
-        </div>
+        {/* Показан, но недоступен - и причина написана рядом, а не спрятана.
+            Not in App Store builds: there it is a non-working feature (2.1). */}
+        {IS_APPSTORE ? null : (
+          <div className="row" aria-disabled="true">
+            <span className="row-main">
+              <span className="row-title dim">{t("tun.mux")}</span>
+              <span className="row-sub">{t("tun.muxWhy")}</span>
+            </span>
+            <span className="row-side">
+              <input
+                type="checkbox"
+                role="switch"
+                aria-checked={false}
+                checked={false}
+                disabled
+                readOnly
+              />
+            </span>
+          </div>
+        )}
 
         <div className="row">
           <span className="row-main">
@@ -155,7 +194,7 @@ export default function TunnelScreen({ onClose }: { onClose: () => void }) {
         </div>
         <div className="row">
           <span className="segmented">
-            {TRANSPORTS.map(([value, key]) => (
+            {transports.map(([value, key]) => (
               <button
                 key={value}
                 type="button"

@@ -486,7 +486,7 @@ export default function App() {
           />
         );
       case "tunnel":
-        return <TunnelScreen onClose={pop} />;
+        return <TunnelScreen onClose={pop} platform={info?.platform} />;
       case "rules":
         return <RulesScreen onClose={pop} />;
       case "more":
