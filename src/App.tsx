@@ -65,6 +65,7 @@ import SubscriptionScreen from "./components/SubscriptionScreen";
 import TimelineScreen from "./components/TimelineScreen";
 import WhereScreen from "./components/WhereScreen";
 import { Toast, UiProvider, type ThemePref, type UiContextValue } from "./components/ui";
+import { supportUrl as supportPageUrl } from "./legal";
 
 type Route =
   | "pair"
@@ -81,15 +82,6 @@ type Route =
   | "rules";
 
 const TOAST_MS = 4000;
-/**
- * Where support lives in an App Store build when the service names nothing
- * allowed. Not the bot: it sells top-ups, and the app ships without in-app
- * purchases (guideline 3.1.1).
- */
-const APPSTORE_SUPPORT_URL: Record<Lang, string> = {
-  ru: "https://proxysvpn.com/support",
-  en: "https://proxysvpn.com/en/support",
-};
 /** Recovery is silent below this; past it the sheet may be opened. */
 const HEAL_SHEET_AT_MS = 8000;
 
@@ -406,12 +398,13 @@ export default function App() {
   // address is only the fallback for a subscription that never answered.
   const botUrl = meta.supportUrl ?? info?.botUrl ?? cabinetUrl;
   // App Store builds: the service's address only when the allowlist passes
-  // it (it can change after review), the bundled support page otherwise —
-  // never the bot, which `info.botUrl` falls back to.
+  // it (it can change after review), the public support page otherwise
+  // (legal.ts) — never the bot, which `info.botUrl` falls back to: it sells
+  // top-ups, and the app ships without in-app purchases (guideline 3.1.1).
   const supportUrl = IS_APPSTORE
     ? meta.supportUrl && isAllowedExternal(meta.supportUrl, true)
       ? meta.supportUrl
-      : APPSTORE_SUPPORT_URL[lang]
+      : supportPageUrl(lang)
     : botUrl;
 
   // ── render ───────────────────────────────────────────────────────────────
