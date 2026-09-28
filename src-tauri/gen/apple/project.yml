@@ -19,8 +19,10 @@ settings:
     PVPN_BUNDLE_ID: com.proxysvpn.app
     # App and extension must carry the same versions or App Store Connect
     # warns on upload. MARKETING_VERSION follows "version" in tauri.conf.json
-    # (setup-ios.sh checks); `tauri ios build` overwrites
-    # CURRENT_PROJECT_VERSION in both targets through agvtool (docs/IOS.md).
+    # (setup-ios.sh checks). `tauri ios build --build-number N` overwrites
+    # CURRENT_PROJECT_VERSION in both targets through agvtool with
+    # bundle.iOS.bundleVersion of tauri.ios.conf.json + ".N", i.e. 1.N
+    # (docs/IOS.md).
     MARKETING_VERSION: 0.3.1
     CURRENT_PROJECT_VERSION: 1
     # Expanded by xcodegen from the environment; empty is fine for the
