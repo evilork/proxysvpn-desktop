@@ -37,6 +37,7 @@ src-tauri/gen/apple/Sources/*
 !src-tauri/gen/apple/Sources/proxysvpn-desktop/
 src-tauri/gen/apple/Sources/proxysvpn-desktop/*
 !src-tauri/gen/apple/Sources/proxysvpn-desktop/VpnBridge.swift
+!src-tauri/gen/apple/Sources/proxysvpn-desktop/MotionBridge.swift
 # `tauri ios init` would otherwise put its own logo here on a fresh clone
 # (it only writes files that are missing).
 !src-tauri/gen/apple/Assets.xcassets/
