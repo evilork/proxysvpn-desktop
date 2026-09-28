@@ -279,10 +279,12 @@ pub(crate) fn matches_transport_pref(server: &ServerConfig, pref: crate::tunnel_
     }
 }
 
-/// `sing_box`: the iOS build runs sing-box (`singbox.rs`), which has no XHTTP
-/// transport — `transport/` of SagerNet/sing-box has none as of 27.09.2026.
+/// `sing_box`: an engine without XHTTP (sing-box has none as of 27.09.2026).
 /// Built there, an XHTTP entry would go out as plain TCP and fail every time
-/// while looking like a dead node, so that build does not list it at all.
+/// while looking like a dead node, so such a build does not list it at all.
+/// No build passes `true` since 28.09.2026: the iOS extension runs Xray-core
+/// too (xray_apple.rs). The switch and its error code stay until a cleanup
+/// removes them together with their tests.
 ///
 /// `pub(crate)`: the Watafast manifest applies the exact same rule when it
 /// picks which candidate of a location this build can actually run.
@@ -806,10 +808,10 @@ async fn fetch_manifest_servers(sub_url: &str, lang_en: bool) -> Option<(Vec<Ser
         // speak for a non-active account, never a manifest.
         return None;
     }
-    // iOS runs sing-box, which has no XHTTP transport — the exact split
-    // `engine_supports_on` already draws for the subscription list.
+    // Every build runs Xray-core now (iOS too, xray_apple.rs), so no engine
+    // leaves XHTTP out: see `engine_supports_on`.
     let transport = crate::tunnel_prefs::load().transport;
-    let servers = manifest::build_servers(&verified, cfg!(target_os = "ios"), transport, lang_en);
+    let servers = manifest::build_servers(&verified, false, transport, lang_en);
     if servers.is_empty() {
         return None;
     }
@@ -1019,7 +1021,8 @@ fn interpret_response(
     body: &str,
     now: u64,
 ) -> Result<Subscription, AppError> {
-    interpret_response_on(host, status, headers, body, now, cfg!(target_os = "ios"))
+    // `false`: no build runs sing-box any more (see `engine_supports_on`).
+    interpret_response_on(host, status, headers, body, now, false)
 }
 
 /// The same, with the engine named: `sing_box` as in engine_supports_on.
