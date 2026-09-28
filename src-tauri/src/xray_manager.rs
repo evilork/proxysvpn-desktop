@@ -43,11 +43,12 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::sync::Mutex;
 
 use crate::errors::{AppError, ErrorCode};
 use crate::hysteria_manager::HY2_SOCKS_PORT;
+use crate::pidfile::Engine;
 use crate::subscription::{build_xray_config, ServerConfig, VlessConfig};
 
 /// The one port tun2socks ever talks to. Mirrors `tun::SOCKS_PORT`, and
@@ -64,7 +65,7 @@ const START_SETTLE_MS: u64 = 500;
 
 #[derive(Default)]
 pub struct XrayState {
-    child: Option<Child>,
+    child: Option<Engine>,
 }
 
 pub type SharedXrayState = Arc<Mutex<XrayState>>;
@@ -430,24 +431,24 @@ pub async fn start(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
-    let mut child = cmd.spawn().map_err(|e| {
+    let mut child = Engine::spawn("xray", &mut cmd, bin).map_err(|e| {
         crate::logger::log("error", "xray", &format!("spawn failed: {e}"));
         AppError::new(ErrorCode::EngineStartFailed)
     })?;
 
     {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| config_bug("xray stdin was not captured"))?;
+        let Some(mut stdin) = child.child().stdin.take() else {
+            child.stop().await;
+            return Err(config_bug("xray stdin was not captured"));
+        };
         if let Err(e) = stdin.write_all(config_str.as_bytes()).await {
             crate::logger::log("error", "xray", &format!("config write failed: {e}"));
-            let _ = child.kill().await;
+            child.stop().await;
             return Err(AppError::new(ErrorCode::EngineStartFailed));
         }
         if let Err(e) = stdin.shutdown().await {
             crate::logger::log("error", "xray", &format!("config close failed: {e}"));
-            let _ = child.kill().await;
+            child.stop().await;
             return Err(AppError::new(ErrorCode::EngineStartFailed));
         }
     }
@@ -455,8 +456,8 @@ pub async fn start(
     // "info" is a DEFAULT here, not a verdict: logger::log lets a line that
     // names its own level keep it. Passing "warn" for stderr — what this file
     // used to do — is what painted the log window orange from end to end.
-    pump(child.stdout.take(), "info");
-    pump(child.stderr.take(), "info");
+    pump(child.child().stdout.take(), "info");
+    pump(child.child().stderr.take(), "info");
 
     tokio::time::sleep(std::time::Duration::from_millis(START_SETTLE_MS)).await;
     match child.try_wait() {
@@ -475,7 +476,7 @@ pub async fn start(
         Ok(None) => {}
         Err(e) => {
             crate::logger::log("error", "xray", &format!("try_wait failed: {e}"));
-            let _ = child.kill().await;
+            child.stop().await;
             return Err(AppError::new(ErrorCode::EngineStartFailed));
         }
     }
@@ -499,17 +500,14 @@ where
 
 pub async fn stop(state: &SharedXrayState) -> Result<(), AppError> {
     let mut guard = state.lock().await;
-    if let Some(mut child) = guard.child.take() {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
+    if let Some(child) = guard.child.take() {
+        child.stop().await;
     }
-    // A run that ended without us — a crash during a previous session, a
-    // `kill -9` from the outside — leaves a process holding 10808, and the
-    // next start then fails with "port busy" for no reason the user can see.
-    let _ = Command::new("/usr/bin/pkill")
-        .args(["-x", "xray"])
-        .status()
-        .await;
+    // An xray we lost the handle to keeps holding 10808, and the next start
+    // then fails with "port busy" for no reason the user can see. Only one WE
+    // started is swept: the `pkill -x xray` that stood here until 28.09.2026
+    // also took down any other VPN client's xray on the Mac.
+    crate::pidfile::sweep("xray").await;
     Ok(())
 }
 

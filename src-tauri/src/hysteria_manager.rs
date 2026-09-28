@@ -24,6 +24,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
 use crate::errors::{AppError, ErrorCode};
+use crate::pidfile::Engine;
 use crate::subscription::Hy2Config;
 
 /// SOCKS port for hysteria — distinct from xray's 10808 because both now run
@@ -52,7 +53,7 @@ const LISTEN_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Default)]
 pub struct HysteriaState {
-    child: Option<Child>,
+    child: Option<Engine>,
 }
 
 pub type SharedHysteriaState = Arc<Mutex<HysteriaState>>;
@@ -192,7 +193,7 @@ pub async fn start(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
-    let mut child = cmd.spawn().map_err(|e| {
+    let mut child = Engine::spawn("hysteria", &mut cmd, &bin).map_err(|e| {
         crate::logger::log("error", "hysteria", &format!("spawn failed: {e}"));
         AppError::new(ErrorCode::EngineStartFailed)
     })?;
@@ -200,20 +201,19 @@ pub async fn start(
     // "info" as the DEFAULT level, not as a verdict: hysteria colours its own
     // level word and logger::log honours it. Labelling this stream `warn` is
     // what used to turn the log window into an orange wall.
-    pump(child.stdout.take());
-    pump(child.stderr.take());
+    pump(child.child().stdout.take());
+    pump(child.child().stderr.take());
 
     // Success means "the port answers", not "the process was spawned". A bad
     // password or a burnt address makes hysteria exit within a moment, and the
     // old code reported that as a working tunnel.
-    match await_listener(&mut child).await {
+    match await_listener(child.child()).await {
         Ok(()) => {
             guard.child = Some(child);
             Ok(())
         }
         Err(err) => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            child.stop().await;
             Err(err)
         }
     }
@@ -261,16 +261,13 @@ async fn await_listener(child: &mut Child) -> Result<(), AppError> {
 
 pub async fn stop(state: &SharedHysteriaState) -> Result<(), AppError> {
     let mut guard = state.lock().await;
-    if let Some(mut child) = guard.child.take() {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
+    if let Some(child) = guard.child.take() {
+        child.stop().await;
     }
-    // A hysteria from a previous run holds 10809 and makes the next connect
-    // fail for a reason nobody can see, so the sweep is unconditional.
-    let _ = Command::new("/usr/bin/pkill")
-        .args(["-x", "hysteria"])
-        .status()
-        .await;
+    // A hysteria we lost the handle to holds 10809 and makes the next connect
+    // fail for a reason nobody can see, so the sweep is unconditional — over
+    // the hysterias WE started, not every process of that name on the Mac.
+    crate::pidfile::sweep("hysteria").await;
     let _ = std::fs::remove_file(Path::new(CONFIG_PATH));
     Ok(())
 }

@@ -33,10 +33,11 @@ use std::time::Duration;
 
 use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::sync::Mutex;
 
 use crate::errors::{AppError, ErrorCode};
+use crate::pidfile::Engine;
 
 pub const TUN_NAME: &str = "utun225";
 pub const TUN_ADDR: &str = "198.18.0.1";
@@ -52,7 +53,7 @@ const DEVICE_POLL: Duration = Duration::from_millis(100);
 
 #[derive(Default)]
 pub struct TunState {
-    child: Option<Child>,
+    child: Option<Engine>,
     /// Resolved address of the node the host route points at. Never logged,
     /// never shown, never serialised.
     server_ip: Option<String>,
@@ -336,9 +337,8 @@ pub async fn start(
     guard.child = Some(child);
 
     if let Err(err) = configure_device().await {
-        if let Some(mut child) = guard.child.take() {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+        if let Some(child) = guard.child.take() {
+            child.stop().await;
         }
         delete_host_route(&server_ip).await;
         return Err(err);
@@ -367,7 +367,7 @@ pub async fn start(
 }
 
 /// Spawn tun2socks and wait for the device to exist.
-async fn spawn_tun2socks(bin: &std::path::Path) -> Result<Child, AppError> {
+async fn spawn_tun2socks(bin: &std::path::Path) -> Result<Engine, AppError> {
     let mut cmd = Command::new(bin);
     cmd.args([
         "-device",
@@ -392,14 +392,14 @@ async fn spawn_tun2socks(bin: &std::path::Path) -> Result<Child, AppError> {
     .stderr(Stdio::piped())
     .kill_on_drop(true);
 
-    let mut child = cmd.spawn().map_err(|e| {
+    let mut child = Engine::spawn("tun2socks", &mut cmd, bin).map_err(|e| {
         crate::logger::log("error", "tun", &format!("spawn tun2socks: {e}"));
         AppError::new(ErrorCode::EngineStartFailed)
     })?;
 
     // "info" as a default only: a line that names its own level keeps it.
-    pump(child.stdout.take());
-    pump(child.stderr.take());
+    pump(child.child().stdout.take());
+    pump(child.child().stderr.take());
 
     let deadline = tokio::time::Instant::now() + DEVICE_TIMEOUT;
     loop {
@@ -411,8 +411,7 @@ async fn spawn_tun2socks(bin: &std::path::Path) -> Result<Child, AppError> {
             return Err(AppError::new(ErrorCode::EngineStartFailed));
         }
         if tokio::time::Instant::now() >= deadline {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            child.stop().await;
             crate::logger::log("error", "tun", "device did not appear in time");
             return Err(AppError::new(ErrorCode::TunFailed));
         }
@@ -600,16 +599,13 @@ pub async fn restart_engine(
     let tun2socks = tun2socks_path(app)?;
 
     let mut guard = state.lock().await;
-    if let Some(mut child) = guard.child.take() {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
+    if let Some(child) = guard.child.take() {
+        child.stop().await;
     }
     // A process we lost the handle to still holds the device, and the new one
-    // then fails to create it.
-    let _ = Command::new("/usr/bin/pkill")
-        .args(["-x", "tun2socks"])
-        .status()
-        .await;
+    // then fails to create it. Only a tun2socks WE started is swept; another
+    // VPN client's one is none of our business.
+    crate::pidfile::sweep("tun2socks").await;
 
     let child = spawn_tun2socks(&tun2socks).await?;
     guard.child = Some(child);
@@ -644,14 +640,10 @@ pub async fn stop(state: &SharedTunState) -> Result<(), AppError> {
         let _ = run_cmd("/sbin/ifconfig", &[TUN_NAME, "down"]).await;
     }
 
-    if let Some(mut child) = guard.child.take() {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
+    if let Some(child) = guard.child.take() {
+        child.stop().await;
     }
-    let _ = Command::new("/usr/bin/pkill")
-        .args(["-x", "tun2socks"])
-        .status()
-        .await;
+    crate::pidfile::sweep("tun2socks").await;
 
     guard.physical = None;
     forget_route_hint();

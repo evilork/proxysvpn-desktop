@@ -40,6 +40,8 @@ mod notify_prefs;
 #[cfg(target_os = "macos")]
 mod hysteria_manager;
 #[cfg(target_os = "macos")]
+mod pidfile;
+#[cfg(target_os = "macos")]
 mod sysdns;
 #[cfg(target_os = "macos")]
 mod tun;
@@ -3880,19 +3882,18 @@ fn device_name() -> String {
 // Desktop chrome: signals, menu, tray
 // ───────────────────────────────────────────────────────────────────────────
 
-/// Kill anything of ours that outlived a previous run.
+/// Stop anything of ours that outlived a previous run, and its routes.
 ///
-/// hysteria is the reason this list grew: the tray's "disconnect" and this
-/// sweep used to stop tun2socks and xray only, so hysteria kept port 10809 and
-/// the next connect failed for a reason nobody could see. sing-box is here for
-/// the same reason before it can happen: today it only runs inside the iOS
-/// extension, and a desktop build that ever spawns one must not repeat this.
+/// "Ours" means written down in `engine.pids` when we spawned it, and still
+/// running that very binary out of our own Contents/MacOS (pidfile.rs). This
+/// used to be `pkill -9 -x` over tun2socks, xray, hysteria and sing-box —
+/// every process on the Mac with those names, so launching or quitting
+/// ProxysVPN also killed another VPN client's engine. Every engine is spawned
+/// through `pidfile::Engine`, which is why there is no list of names here to
+/// keep in step any more.
 #[cfg(target_os = "macos")]
 fn sync_cleanup() {
-    use std::process::Command;
-    for engine in ["tun2socks", "xray", "hysteria", "sing-box"] {
-        let _ = Command::new("/usr/bin/pkill").args(["-9", "-x", engine]).status();
-    }
+    pidfile::reap_all();
     tun::purge_stale_routes();
 }
 
