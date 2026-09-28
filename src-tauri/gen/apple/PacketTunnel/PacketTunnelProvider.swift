@@ -57,8 +57,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let iface = PlatformInterface(provider: self)
         platformInterface = iface
 
+        // A C function with NSError** is not imported as `throws`.
+        var serviceError: NSError?
+        guard let service = LibboxNewService(config, iface, &serviceError) else {
+            let failure = serviceError ?? NSError(
+                domain: "ProxysVPN", code: 6,
+                userInfo: [NSLocalizedDescriptionKey: "sing-box service was not created"]
+            )
+            os_log("sing-box start failed: %{public}@", log: tunnelLog, type: .error,
+                   failure.localizedDescription)
+            completionHandler(failure)
+            return
+        }
         do {
-            let service = try LibboxNewService(config, iface)
             try service.start()
             boxService = service
             os_log("sing-box started", log: tunnelLog, type: .info)
@@ -122,7 +133,7 @@ private final class PlatformInterface: NSObject, LibboxPlatformInterfaceProtocol
         settings.mtu = NSNumber(value: options.getMTU())
 
         if let dnsServer = try? options.getDNSServerAddress() {
-            let dns = NEDNSSettings(servers: [dnsServer])
+            let dns = NEDNSSettings(servers: [dnsServer.value])
             dns.matchDomains = [""]
             settings.dnsSettings = dns
         }
@@ -206,34 +217,22 @@ private final class PlatformInterface: NSObject, LibboxPlatformInterfaceProtocol
         ret0_?.pointee = fd
     }
 
-    /// The utun fd owned by packetFlow — standard WireGuardKit/sing-box trick:
-    /// scan fds for the com.apple.net.utun_control kernel control socket.
+    /// The utun fd behind packetFlow, which sing-box reads and writes
+    /// directly. NetworkExtension does not expose it, so scan the open fds for
+    /// a kernel-control socket whose interface name is utunN. The headers
+    /// that define these two constants (<sys/sys_domain.h>, <net/if_utun.h>)
+    /// are not visible to Swift on iOS, hence the literals.
     private var tunnelFileDescriptor: Int32? {
-        var ctlInfo = ctl_info()
-        withUnsafeMutablePointer(to: &ctlInfo.ctl_name) {
-            $0.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: $0.pointee)) {
-                _ = strcpy($0, "com.apple.net.utun_control")
-            }
-        }
+        let sysprotoControl: Int32 = 2 // SYSPROTO_CONTROL
+        let utunOptIfname: Int32 = 2 // UTUN_OPT_IFNAME
+        var name = [CChar](repeating: 0, count: Int(IFNAMSIZ))
         for fd: Int32 in 0...1024 {
-            var addr = sockaddr_ctl()
-            var ret: Int32 = -1
-            var len = socklen_t(MemoryLayout.size(ofValue: addr))
-            withUnsafeMutablePointer(to: &addr) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    ret = getpeername(fd, $0, &len)
-                }
-            }
-            if ret != 0 || addr.sc_family != AF_SYSTEM {
+            var len = socklen_t(name.count)
+            guard getsockopt(fd, sysprotoControl, utunOptIfname, &name, &len) == 0 else {
                 continue
             }
-            if ctlInfo.ctl_id == 0 {
-                ret = ioctl(fd, CTLIOCGINFO, &ctlInfo)
-                if ret != 0 {
-                    continue
-                }
-            }
-            if addr.sc_id == ctlInfo.ctl_id {
+            let bytes = name.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+            if String(decoding: bytes, as: UTF8.self).hasPrefix("utun") {
                 return fd
             }
         }
@@ -242,11 +241,13 @@ private final class PlatformInterface: NSObject, LibboxPlatformInterfaceProtocol
 
     // MARK: Interface control
 
-    func usePlatformAutoDetectInterfaceControl() -> Bool {
+    // Swift imports gomobile's usePlatformAutoDetectInterfaceControl and
+    // autoDetectInterfaceControl:error: under these shortened names.
+    func usePlatformAutoDetectControl() -> Bool {
         true
     }
 
-    func autoDetectInterfaceControl(_: Int32) throws {
+    func autoDetectControl(_: Int32) throws {
         // No-op: the system routes the extension's own sockets around the
         // tunnel automatically, no explicit bind needed on iOS.
     }
@@ -306,9 +307,12 @@ private final class PlatformInterface: NSObject, LibboxPlatformInterfaceProtocol
                       userInfo: [NSLocalizedDescriptionKey: "findConnectionOwner not supported on iOS"])
     }
 
-    func packageName(byUid _: Int32) throws -> String {
-        throw NSError(domain: "ProxysVPN", code: 5,
-                      userInfo: [NSLocalizedDescriptionKey: "packageNameByUid not supported on iOS"])
+    // A _Nonnull NSString return with an NSError** is imported without
+    // `throws`, so the error goes out through the pointer.
+    func packageName(byUid _: Int32, error: NSErrorPointer) -> String {
+        error?.pointee = NSError(domain: "ProxysVPN", code: 5,
+                                 userInfo: [NSLocalizedDescriptionKey: "packageNameByUid not supported on iOS"])
+        return ""
     }
 
     func uid(byPackageName _: String?, ret0_: UnsafeMutablePointer<Int32>?) throws {
@@ -347,7 +351,7 @@ private final class PlatformInterface: NSObject, LibboxPlatformInterfaceProtocol
         os_log("%{public}@", log: tunnelLog, type: .info, message)
     }
 
-    func sendNotification(_: LibboxNotification?) throws {
+    func send(_: LibboxNotification?) throws {
         // The app UI reflects state via NEVPNStatus; no local notifications.
     }
 
