@@ -24,6 +24,8 @@ import {
   type OnboardingStep,
   type SubState,
 } from "./bridge";
+import { IS_APPSTORE, purchaseLinksAllowed } from "./dist";
+import { isAllowedExternal } from "./externalUrl";
 import { makeT, type Lang } from "./i18n";
 import {
   AUTO_CONNECT_KEY,
@@ -35,6 +37,7 @@ import {
   watchSystemTheme,
   writeStored,
 } from "./prefs";
+import { errorTitleKey } from "./storeCopy";
 import type {
   AppError,
   ErrorAction,
@@ -78,6 +81,15 @@ type Route =
   | "rules";
 
 const TOAST_MS = 4000;
+/**
+ * Where support lives in an App Store build when the service names nothing
+ * allowed. Not the bot: it sells top-ups, and the app ships without in-app
+ * purchases (guideline 3.1.1).
+ */
+const APPSTORE_SUPPORT_URL: Record<Lang, string> = {
+  ru: "https://proxysvpn.com/support",
+  en: "https://proxysvpn.com/en/support",
+};
 /** Recovery is silent below this; past it the sheet may be opened. */
 const HEAL_SHEET_AT_MS = 8000;
 
@@ -199,7 +211,7 @@ export default function App() {
       onEvent: (event) => {
         // `handled` means the core is already fixing it and the person is not
         // being asked for anything — those stay silent by design.
-        if (!event.handled) toast(t(`err.${event.error.code}.title`));
+        if (!event.handled) toast(t(errorTitleKey(event.error.code, IS_APPSTORE)));
       },
     });
     return unsubscribe;
@@ -342,20 +354,32 @@ export default function App() {
 
   const runAction = useCallback(
     (action: ErrorAction) => {
+      const retry = () => {
+        setForcedError(null);
+        reset();
+        void connect();
+      };
       switch (action) {
         case "addLink":
           reset();
           void refreshSubState();
           break;
         case "retry":
-          setForcedError(null);
-          reset();
-          void connect();
+          retry();
           break;
         case "openCabinet":
+          // App Store builds never open the cabinet. No screen offers this
+          // there (ERROR_ACTION maps it to "retry"); this is the backstop.
+          if (IS_APPSTORE) break;
           if (info) openExternal(info.cabinetUrl);
           break;
         case "topUp":
+          // No purchase link in App Store builds, on any storefront
+          // (distPolicy.ts): the same "check again" as the retry branch.
+          if (!purchaseLinksAllowed()) {
+            retry();
+            break;
+          }
           if (info) openExternal(info.cabinetUrl);
           break;
         case "diagnose":
@@ -381,6 +405,14 @@ export default function App() {
   // `support-url` is what the SERVICE says support is today; the bundled bot
   // address is only the fallback for a subscription that never answered.
   const botUrl = meta.supportUrl ?? info?.botUrl ?? cabinetUrl;
+  // App Store builds: the service's address only when the allowlist passes
+  // it (it can change after review), the bundled support page otherwise —
+  // never the bot, which `info.botUrl` falls back to.
+  const supportUrl = IS_APPSTORE
+    ? meta.supportUrl && isAllowedExternal(meta.supportUrl, true)
+      ? meta.supportUrl
+      : APPSTORE_SUPPORT_URL[lang]
+    : botUrl;
 
   // ── render ───────────────────────────────────────────────────────────────
 
@@ -482,7 +514,7 @@ export default function App() {
             sub={sub}
             onClose={pop}
             onOpenCabinet={() => openExternal(cabinetUrl)}
-            onOpenBot={() => openExternal(botUrl)}
+            onOpenBot={() => openExternal(supportUrl)}
           />
         );
       case "tunnel":
@@ -523,7 +555,7 @@ export default function App() {
       case "techlog":
         return <LogViewer onClose={pop} />;
       case "report":
-        return <ReportScreen onClose={pop} onOpenBot={() => openExternal(botUrl)} />;
+        return <ReportScreen onClose={pop} onOpenBot={() => openExternal(supportUrl)} />;
       case "where":
         return <WhereScreen onClose={pop} />;
       default:
@@ -581,7 +613,9 @@ export default function App() {
       {screen()}
 
       {toastText ? <Toast message={toastText} /> : null}
-      {IS_TAURI ? null : <DemoStrip />}
+      {/* IS_APPSTORE first: a build-time constant, so the App Store bundle
+          drops the demo strip and everything only it imports. */}
+      {IS_APPSTORE || IS_TAURI ? null : <DemoStrip />}
     </UiProvider>
   );
 }

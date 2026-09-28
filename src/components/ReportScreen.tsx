@@ -6,10 +6,14 @@
 // than what they are hiding from. So: the whole text on screen, its size as a
 // number so it is visibly not megabytes, and two buttons. There is no
 // automatic sending.
+//
+// App Store builds send the person to the support page instead of the bot
+// (the bot sells top-ups; App.tsx picks the address), and say so on the button.
 
 import { useCallback, useEffect, useState } from "react";
 
 import { bridge, type SupportReport } from "../bridge";
+import { IS_APPSTORE } from "../dist";
 import { formatSize } from "../i18n";
 import { Screen, Spinner, useUi } from "./ui";
 
@@ -63,7 +67,7 @@ export default function ReportScreen({
             {t("common.copy")}
           </button>
           <button type="button" className="btn btn-outline" onClick={onOpenBot}>
-            {t("report.openBot")}
+            {t(IS_APPSTORE ? "report.appstore.openSupport" : "report.openBot")}
           </button>
         </div>
       }

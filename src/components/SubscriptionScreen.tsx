@@ -17,8 +17,16 @@
 // The profile name comes from the `profile-title` header, where the service
 // deliberately puts the DOMAIN rather than a brand: weeks later that is how a
 // person works out where to renew.
+//
+// App Store builds (src/dist.ts) show the state and nothing about paying for
+// more: no "Пополнить на …" line, no cabinet or bot buttons (the app ships
+// without in-app purchases, guideline 3.1.1), "Доступ до" instead of
+// "оплачен до", and the service's title and info text only when they pass the
+// payment-word filter.
 
+import { IS_APPSTORE } from "../dist";
 import { daysLeft, formatDate, formatTime } from "../i18n";
+import { shownServerText } from "../storeCopy";
 import type { SubMeta } from "../types";
 import type { AppInfo, SubState } from "../bridge";
 import { Screen, useUi } from "./ui";
@@ -42,6 +50,9 @@ export default function SubscriptionScreen({
 
   const expiresMs = meta.expiresAt ? meta.expiresAt * 1000 : null;
   const host = info ? info.cabinetUrl.replace(/^https?:\/\//, "") : "proxysvpn.com";
+  // `??` as before: a direct build still prints an empty title as empty.
+  const title = IS_APPSTORE ? (shownServerText(meta.title, true) ?? host) : (meta.title ?? host);
+  const infoText = shownServerText(meta.infoText, IS_APPSTORE);
 
   return (
     <Screen
@@ -49,21 +60,23 @@ export default function SubscriptionScreen({
       onClose={onClose}
       closeKind="back"
       footer={
-        <>
-          <button type="button" className="btn btn-outline" onClick={onOpenCabinet}>
-            {t("sub.openCabinet")}
-          </button>
-          <button type="button" className="btn btn-quiet" onClick={onOpenBot}>
-            {t("sub.orBot")}
-          </button>
-        </>
+        IS_APPSTORE ? null : (
+          <>
+            <button type="button" className="btn btn-outline" onClick={onOpenCabinet}>
+              {t("sub.openCabinet")}
+            </button>
+            <button type="button" className="btn btn-quiet" onClick={onOpenBot}>
+              {t("sub.orBot")}
+            </button>
+          </>
+        )
       }
     >
       <div className="section">
-        <h2 className="h2">{meta.title ?? host}</h2>
+        <h2 className="h2">{title}</h2>
         {expiresMs ? (
           <p className="body">
-            {t("sub.paidUntil", {
+            {t(IS_APPSTORE ? "sub.appstore.accessUntil" : "sub.paidUntil", {
               date: formatDate(lang, expiresMs),
               days: t("time.days", { n: Math.max(0, daysLeft(expiresMs, Date.now())) }),
             })}
@@ -71,7 +84,7 @@ export default function SubscriptionScreen({
         ) : (
           <p className="body dim">{t("details.expiryUnknown")}</p>
         )}
-        {meta.infoText ? <p className="body dim">{meta.infoText}</p> : null}
+        {infoText ? <p className="body dim">{infoText}</p> : null}
         {/* "as of 14:20" instead of a zero: a zero reads as "no money left". */}
         {sub?.lastUpdatedAt ? (
           <p className="small faint">
@@ -92,10 +105,10 @@ export default function SubscriptionScreen({
               })
             : (info?.deviceName ?? "—")}
         </p>
-        <p className="small dim">{t("sub.oneLink")}</p>
+        <p className="small dim">{t(IS_APPSTORE ? "sub.appstore.oneLink" : "sub.oneLink")}</p>
       </div>
 
-      <p className="small faint">{t("sub.topUp", { host })}</p>
+      {IS_APPSTORE ? null : <p className="small faint">{t("sub.topUp", { host })}</p>}
     </Screen>
   );
 }

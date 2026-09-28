@@ -7,6 +7,9 @@
 // below is spelled out rather than inferred, and `ERROR_ACTION` is exhaustive
 // by construction (a missing code fails `tsc`).
 
+import { IS_APPSTORE } from "./dist";
+import { storeSafeActions } from "./storeCopy";
+
 /** Phase of the tunnel. Five, not three — see events.rs for why. */
 export type VpnPhase =
   | "off"
@@ -173,7 +176,7 @@ export type ErrorAction =
   | "waitAndSee" // we are already handling it; offer nothing
   | "contactSupport";
 
-export const ERROR_ACTION: Record<ErrorCode, ErrorAction> = {
+const DIRECT_ERROR_ACTION: Record<ErrorCode, ErrorAction> = {
   NO_SUBSCRIPTION: "addLink",
   SUB_MALFORMED: "addLink",
   SUB_UNREACHABLE: "retry",
@@ -206,6 +209,17 @@ export const ERROR_ACTION: Record<ErrorCode, ErrorAction> = {
   PING_NOT_APPLICABLE: "waitAndSee",
   UNKNOWN: "contactSupport",
 };
+
+/**
+ * The map this build uses. App Store builds carry no purchase link of any
+ * kind (src/distPolicy.ts), so "topUp" and "openCabinet" — both of which
+ * leave for the web cabinet — become "retry" there: BALANCE_EMPTY and EXPIRED
+ * offer "Проверить снова" instead of "Пополнить", and DEVICE_TAKEN no longer
+ * offers a cabinet the app may not open. The direct DMG keeps the map above.
+ */
+export const ERROR_ACTION: Record<ErrorCode, ErrorAction> = IS_APPSTORE
+  ? storeSafeActions(DIRECT_ERROR_ACTION)
+  : DIRECT_ERROR_ACTION;
 
 /**
  * Turn the string a Tauri command rejected with back into an `AppError`.

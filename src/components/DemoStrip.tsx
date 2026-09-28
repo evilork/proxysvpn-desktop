@@ -6,10 +6,15 @@
 //
 // It exists so the owner can click through every state without editing the
 // address bar by hand. `?mock=<name>` remains the actual switch.
+//
+// App Store builds never render it, even outside the app: demo content in a
+// reviewed bundle is what guideline 2.2 rules out, and App.tsx's gate alone
+// would leave that to one line elsewhere.
 
 import { useEffect, useState } from "react";
 
 import { MOCK_SCENARIOS, MOCK_SCENARIO, applyScenario, type MockScenario } from "../bridge";
+import { IS_APPSTORE } from "../dist";
 import { gazeSource, type GazeReport } from "../gaze";
 import { ERROR_ACTION, type ErrorCode } from "../types";
 import { useUi } from "./ui";
@@ -64,6 +69,11 @@ function GazeDetails({ report }: { report: GazeReport }) {
 }
 
 export default function DemoStrip() {
+  if (IS_APPSTORE) return null;
+  return <DemoStripBody />;
+}
+
+function DemoStripBody() {
   const { t } = useUi();
   const all: MockScenario[] = [...MOCK_SCENARIOS, ...CODES];
   const report = useGazeReport();

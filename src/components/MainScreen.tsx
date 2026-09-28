@@ -10,8 +10,18 @@
 // the quiet line under the button. Splitting them keeps either one from
 // pushing the other off the screen, and the outage is the only line allowed
 // to be loud.
+//
+// App Store builds (src/dist.ts) keep the same screen without a word about
+// paying: the urgent expiry line names the date instead of asking for a
+// top-up, the no-link state asks to sign in, and the service's notice shows
+// only when it passes the payment-word filter and is a link only when the
+// address is on the allowlist (src/externalUrl.ts) — the service can change
+// both after review.
 
-import { formatAge, daysLeft, type Translate } from "../i18n";
+import { IS_APPSTORE } from "../dist";
+import { isAllowedExternal } from "../externalUrl";
+import { formatAge, formatDate, daysLeft, type Translate } from "../i18n";
+import { errorBodyKey, errorTitleKey, shownServerText } from "../storeCopy";
 import type { MetricPayload, StatePayload, SubMeta, VpnStep } from "../types";
 import Shield, { type ShieldState } from "./Shield";
 import { IconGear, IconGlobe, IconStethoscope, useNow, useUi } from "./ui";
@@ -48,10 +58,16 @@ export interface MainScreenProps {
 }
 
 export default function MainScreen(props: MainScreenProps) {
-  const { t, openExternal } = useUi();
+  const { t, lang, openExternal } = useUi();
   const now = useNow(1000);
   const { state, metric, meta, hasLink } = props;
-  const announceUrl = meta.announceUrl ?? "";
+  const announce = shownServerText(meta.announce, IS_APPSTORE);
+  // Direct builds: clickable whenever the service sent an address, as before.
+  const announceUrl =
+    meta.announceUrl && (!IS_APPSTORE || isAllowedExternal(meta.announceUrl, true))
+      ? meta.announceUrl
+      : null;
+  const errorCode = state.error?.code ?? "UNKNOWN";
 
   const healingFor = state.healingForMs ?? 0;
   const healingIsLoud = state.phase === "healing" && healingFor >= HEAL_LOUD_AT_MS;
@@ -65,7 +81,7 @@ export default function MainScreen(props: MainScreenProps) {
   const shieldStateShown: ShieldState = healingIsWhisper ? "healing" : shieldState;
 
   const headline = (): string => {
-    if (!hasLink) return t("main.nolink.title");
+    if (!hasLink) return t(IS_APPSTORE ? "main.nolink.appstore.title" : "main.nolink.title");
     switch (state.phase) {
       case "off":
         return t("main.off.title");
@@ -78,12 +94,14 @@ export default function MainScreen(props: MainScreenProps) {
       case "healing":
         return healingIsLoud ? t("main.healing.title") : t("main.on.title");
       case "failed":
-        return t(`err.${state.error?.code ?? "UNKNOWN"}.title`);
+        return t(errorTitleKey(errorCode, IS_APPSTORE));
     }
   };
 
+  const nolinkHint = t(IS_APPSTORE ? "main.nolink.appstore.hint" : "main.nolink.hint");
+
   const hint = (): string | null => {
-    if (!hasLink) return t("main.nolink.hint");
+    if (!hasLink) return nolinkHint;
     switch (state.phase) {
       case "off":
         return t("main.off.hint");
@@ -94,7 +112,7 @@ export default function MainScreen(props: MainScreenProps) {
       case "healing":
         return healingIsLoud ? t("main.healing.hint") : null;
       case "failed":
-        return t(`err.${state.error?.code ?? "UNKNOWN"}.body`);
+        return t(errorBodyKey(errorCode, IS_APPSTORE));
       case "on":
         return null;
     }
@@ -102,7 +120,11 @@ export default function MainScreen(props: MainScreenProps) {
 
   const action = (): { label: string; onClick: () => void; primary: boolean } => {
     if (!hasLink) {
-      return { label: t("main.nolink.action"), onClick: props.onAddLink, primary: true };
+      return {
+        label: t(IS_APPSTORE ? "main.nolink.appstore.action" : "main.nolink.action"),
+        onClick: props.onAddLink,
+        primary: true,
+      };
     }
     switch (state.phase) {
       case "starting":
@@ -122,7 +144,7 @@ export default function MainScreen(props: MainScreenProps) {
   };
 
   const shieldLabel = (): string => {
-    if (!hasLink) return t("main.nolink.hint");
+    if (!hasLink) return nolinkHint;
     switch (state.phase) {
       case "off":
         return t("main.shield.off");
@@ -152,7 +174,13 @@ export default function MainScreen(props: MainScreenProps) {
     if (healingIsWhisper) return t("main.healing.quiet");
     if (expiryDays === null) return null;
     if (expiryDays <= 0) return t("bar.expired");
-    if (expiryDays <= EXPIRY_URGENT_DAYS) return t("bar.expirySoon", { n: expiryDays });
+    if (expiryDays <= EXPIRY_URGENT_DAYS) {
+      // `expiresAt` is set whenever `expiryDays` is; the date is the whole
+      // message in an App Store build, which may not ask for a top-up.
+      return IS_APPSTORE && meta.expiresAt
+        ? t("bar.accessUntil", { date: formatDate(lang, meta.expiresAt * 1000) })
+        : t("bar.expirySoon", { n: expiryDays });
+    }
     if (expiryDays <= EXPIRY_NOTICE_DAYS) return t("bar.expiry", { n: expiryDays });
     return null;
   };
@@ -181,19 +209,19 @@ export default function MainScreen(props: MainScreenProps) {
       {/* The outage notice is written by the service and printed verbatim —
           we never paraphrase an incident. It is the one line allowed to be
           loud, and it disappears entirely when there is nothing to say. */}
-      {meta.announce ? (
-        meta.announceUrl ? (
+      {announce ? (
+        announceUrl ? (
           <button
             type="button"
             className="servicebar"
             data-tone="warn"
             onClick={() => openExternal(announceUrl)}
           >
-            <span>{meta.announce}</span>
+            <span>{announce}</span>
           </button>
         ) : (
           <div className="servicebar" data-tone="warn" role="status">
-            <span>{meta.announce}</span>
+            <span>{announce}</span>
           </div>
         )
       ) : null}

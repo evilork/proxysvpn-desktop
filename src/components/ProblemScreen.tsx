@@ -16,8 +16,17 @@
 // Exactly one action is not a stylistic choice. A screen with five
 // suggestions reads as "everything is broken" and sends the person to support
 // just as reliably as saying nothing.
+//
+// App Store builds (src/dist.ts) say none of it with money in it: their own
+// title and paragraph for the codes that name a top-up, the cabinet or the
+// bot, "Проверить снова" where the direct build says "Пополнить", and the
+// server's text only when it passes the payment-word filter — a server line
+// saying "Пополните баланс" is exactly the purchase prompt guideline 3.1.1
+// rules out, and the service can send one after review.
 
-import { ERROR_ACTION, type AppError, type ErrorAction } from "../types";
+import { IS_APPSTORE } from "../dist";
+import { errorBodyKey, errorTitleKey, hasStoreCopy, shownServerText } from "../storeCopy";
+import { ERROR_ACTION, type AppError, type ErrorAction, type ErrorCode } from "../types";
 import type { MsgKey } from "../i18n";
 import { Screen, Spinner, useUi } from "./ui";
 
@@ -30,6 +39,18 @@ const ACTION_KEY: Record<ErrorAction, MsgKey> = {
   waitAndSee: "action.waitAndSee",
   contactSupport: "action.contactSupport",
 };
+
+/** The button's words for this build. */
+function actionLabelKey(code: ErrorCode, action: ErrorAction): MsgKey {
+  if (IS_APPSTORE) {
+    // Adding the link is signing in to the account, never entering a key.
+    if (action === "addLink") return "action.appstore.addLink";
+    // A remapped "topUp"/"openCabinet": the person fixes it elsewhere, then
+    // comes back — "Повторить" would read as "we failed, press again".
+    if (action === "retry" && hasStoreCopy(code)) return "action.checkAgain";
+  }
+  return ACTION_KEY[action];
+}
 
 export default function ProblemScreen({
   error,
@@ -49,6 +70,7 @@ export default function ProblemScreen({
 }) {
   const { t } = useUi();
   const action = ERROR_ACTION[error.code];
+  const detail = shownServerText(error.detail, IS_APPSTORE);
 
   return (
     <Screen
@@ -68,7 +90,7 @@ export default function ProblemScreen({
                 <Spinner /> {t("problem.working")}
               </>
             ) : (
-              t(ACTION_KEY[action])
+              t(actionLabelKey(error.code, action))
             )}
           </button>
           <div className="btn-row">
@@ -83,11 +105,11 @@ export default function ProblemScreen({
       }
     >
       <div className="section">
-        <h1 className="h1">{t(`err.${error.code}.title`)}</h1>
-        <p className="body dim">{t(`err.${error.code}.body`)}</p>
-        {error.detail ? (
+        <h1 className="h1">{t(errorTitleKey(error.code, IS_APPSTORE))}</h1>
+        <p className="body dim">{t(errorBodyKey(error.code, IS_APPSTORE))}</p>
+        {detail ? (
           <p className="body" style={{ whiteSpace: "pre-wrap" }}>
-            {error.detail}
+            {detail}
           </p>
         ) : null}
       </div>

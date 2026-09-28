@@ -14,10 +14,15 @@
 //
 // The two groups are stacked rather than set side by side: the window is
 // 480 pt wide, and two columns at that width turn every row into two lines.
+//
+// App Store builds do not open the cabinet (it sells top-ups, and the app
+// ships without in-app purchases), so there the line says the check is not
+// available yet and no button points anywhere.
 
 import { useCallback, useState } from "react";
 
 import { bridge, type CheckReport, type CheckRow, type CheckRowId } from "../bridge";
+import { IS_APPSTORE } from "../dist";
 import type { MsgKey } from "../i18n";
 import { Screen, Spinner, useUi } from "./ui";
 
@@ -193,12 +198,16 @@ export default function CheckScreen({
               <span>
                 {serviceFailed || service?.reason === "failed"
                   ? t("check.serviceFailed")
-                  : t("check.serviceInCabinet")}
+                  : IS_APPSTORE
+                    ? t("check.appstore.serviceUnavailable")
+                    : t("check.serviceInCabinet")}
               </span>
             </div>
-            <button type="button" className="btn btn-quiet" onClick={onOpenCabinet}>
-              {t("check.openCabinet")}
-            </button>
+            {IS_APPSTORE ? null : (
+              <button type="button" className="btn btn-quiet" onClick={onOpenCabinet}>
+                {t("check.openCabinet")}
+              </button>
+            )}
           </div>
         )}
       </div>

@@ -11,18 +11,42 @@
 //
 // The QR stays black on white in both themes. A dark-mode QR is a QR that
 // does not scan, and the phone camera is the whole point of this screen.
+//
+// App Store builds word the same steps as signing in to an account the
+// person already has: guideline 3.1.1 names QR codes and keys that unlock
+// paid features, and the app ships without in-app purchases, so the screen
+// must read as a sign-in, never as entering a key, and never mention the bot
+// (it sells top-ups). The mechanics do not change.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 import { bridge, toAppError, type PairSession } from "../bridge";
-import { formatCountdown } from "../i18n";
+import { IS_APPSTORE } from "../dist";
+import { formatCountdown, type MsgKey } from "../i18n";
 import { Screen, Spinner, useLatest, useNow, useUi } from "./ui";
 
 const POLL_MS = 2000;
 const DONE_PAUSE_MS = 600;
 
 type Phase = "preparing" | "waiting" | "expired" | "failed" | "linked";
+
+/** The lines that differ between the direct and the App Store build. */
+const COPY: Record<"title" | "body" | "paste" | "notOurLink" | "done", MsgKey> = IS_APPSTORE
+  ? {
+      title: "pair.appstore.title",
+      body: "pair.appstore.body",
+      paste: "pair.appstore.paste",
+      notOurLink: "pair.appstore.notOurLink",
+      done: "pair.appstore.done",
+    }
+  : {
+      title: "pair.title",
+      body: "pair.body",
+      paste: "pair.paste",
+      notOurLink: "pair.notOurLink",
+      done: "pair.done",
+    };
 
 export default function PairScreen({
   onDone,
@@ -118,7 +142,7 @@ export default function PairScreen({
     try {
       const text = (await bridge.readClipboard()).trim();
       if (!/^https?:\/\/\S+$/i.test(text)) {
-        setNotice(t("pair.notOurLink"));
+        setNotice(t(COPY.notOurLink));
         return;
       }
       await bridge.setSubscription(text);
@@ -126,7 +150,7 @@ export default function PairScreen({
       window.setTimeout(() => doneRef.current(), DONE_PAUSE_MS);
     } catch (err) {
       const app = toAppError(err);
-      setNotice(app.code === "SUB_MALFORMED" ? t("pair.notOurLink") : t("pair.clipboardFailed"));
+      setNotice(app.code === "SUB_MALFORMED" ? t(COPY.notOurLink) : t("pair.clipboardFailed"));
     }
   }, [doneRef, t]);
 
@@ -134,14 +158,14 @@ export default function PairScreen({
     if (phase === "linked") {
       return (
         <div className="section" style={{ alignItems: "center", textAlign: "center" }}>
-          <p className="h2 accent">{t("pair.done")}</p>
+          <p className="h2 accent">{t(COPY.done)}</p>
         </div>
       );
     }
 
     return (
       <>
-        <p className="body dim">{t("pair.body")}</p>
+        <p className="body dim">{t(COPY.body)}</p>
 
         {/* The card keeps its size while the code is being made, so the
             layout does not jump under the person's eyes. */}
@@ -185,7 +209,7 @@ export default function PairScreen({
 
   return (
     <Screen
-      title={t("pair.title")}
+      title={t(COPY.title)}
       onClose={onClose}
       closeKind="close"
       footer={
@@ -197,7 +221,7 @@ export default function PairScreen({
               </button>
             ) : null}
             <button type="button" className="btn btn-quiet" onClick={() => void paste()}>
-              {t("pair.paste")}
+              {t(COPY.paste)}
             </button>
             <p className="small faint" style={{ textAlign: "center" }}>
               {t("pair.keychain")}

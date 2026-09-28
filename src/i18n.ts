@@ -86,6 +86,11 @@ const ru = {
   "main.nolink.title": "Не настроено",
   "main.nolink.hint": "Добавьте ссылку — это одно действие",
   "main.nolink.action": "Добавить ссылку",
+  // App Store builds: the link is how a person signs in to an account they
+  // already have — never a key to type or a purchase to unlock (3.1.1).
+  "main.nolink.appstore.title": "Вы не вошли",
+  "main.nolink.appstore.hint": "Войдите в аккаунт ProxysVPN — это одно действие",
+  "main.nolink.appstore.action": "Войти",
   "main.shield.off": "Защита выключена. Нажмите, чтобы включить",
   "main.shield.starting": "Включаем защиту",
   "main.shield.on": "Защищено. Нажмите, чтобы выключить",
@@ -105,6 +110,9 @@ const ru = {
   "bar.expirySoon":
     "Осталось {n} день. Пополните, чтобы не прерывалось|Осталось {n} дня. Пополните, чтобы не прерывалось|Осталось {n} дней. Пополните, чтобы не прерывалось",
   "bar.expired": "Срок доступа закончился",
+  // App Store builds say when access ends and nothing about paying for more:
+  // no purchase prompt of any kind without in-app purchases (3.1.1).
+  "bar.accessUntil": "Доступ до {date}",
 
   // ── [0] First run ─────────────────────────────────────────────────────────
   "ob.step": "Шаг {n} из {total}",
@@ -145,6 +153,14 @@ const ru = {
   "pair.done": "Готово. Ссылка добавлена",
   "pair.keychain": "Ссылка хранится в защищённом хранилище системы",
   "pair.scan": "Навести камеру",
+  // App Store builds: signing in to an existing ProxysVPN account, never
+  // entering a key and never the bot (it sells top-ups).
+  "pair.appstore.title": "Войдите в аккаунт ProxysVPN",
+  "pair.appstore.body":
+    "Откройте свой аккаунт ProxysVPN на другом устройстве, нажмите значок кода рядом со ссылкой и наведите камеру на этот экран.",
+  "pair.appstore.paste": "Войти по скопированной ссылке",
+  "pair.appstore.notOurLink": "Это не ссылка ProxysVPN. Скопируйте её в своём аккаунте ProxysVPN",
+  "pair.appstore.done": "Готово, вы вошли",
 
   // ── [3] Details sheet ─────────────────────────────────────────────────────
   "details.title": "Подробности",
@@ -154,6 +170,7 @@ const ru = {
   "details.whereRu": "Вы в России — российские сайты идут напрямую",
   "details.whereAbroad": "Вы за границей — весь интернет идёт через нас",
   "details.paidUntil": "Оплачено до {date} · осталось {days}",
+  "details.appstore.accessUntil": "Доступ до {date} · осталось {days}",
   "details.expiryUnknown": "Срок неизвестен — не удалось получить данные",
   "details.split": "Куда идёт трафик: через VPN {via} · напрямую {direct}",
   "details.splitNote":
@@ -268,6 +285,9 @@ const ru = {
   "action.diagnose": "Проверить",
   "action.waitAndSee": "Понятно",
   "action.contactSupport": "Написать в поддержку",
+  // App Store builds: what "topUp" and "openCabinet" turn into (storeCopy.ts).
+  "action.checkAgain": "Проверить снова",
+  "action.appstore.addLink": "Войти в аккаунт",
 
   // One title and one paragraph for every code in ERROR_ACTION.
   // The server's own text, when it sent one, is printed under the paragraph —
@@ -336,6 +356,31 @@ const ru = {
   "err.UNKNOWN.body":
     "Мы не смогли назвать причину. Пришлите отчёт — в нём есть всё, что нужно, чтобы разобраться.",
 
+  // App Store builds (storeCopy.ts STORE_COPY_CODES): the same situations
+  // without a price, a top-up, the cabinet or the bot. The person manages the
+  // account wherever they do that; here they only check again.
+  "err.NO_SUBSCRIPTION.appstore.title": "Вы не вошли в аккаунт",
+  "err.NO_SUBSCRIPTION.appstore.body":
+    "Войдите в аккаунт ProxysVPN — без этого приложению нечего включать.",
+  "err.SUB_MALFORMED.appstore.title": "Эта ссылка не подходит",
+  "err.SUB_MALFORMED.appstore.body": "Похоже, скопировалась не та строка. Войдите в аккаунт ещё раз.",
+  "err.SUB_EMPTY.appstore.title": "В подписке нет ни одной локации",
+  "err.SUB_EMPTY.appstore.body": "Сервис ответил пустым списком. Проверьте ещё раз немного позже.",
+  "err.BALANCE_EMPTY.appstore.title": "Доступ по этой ссылке закончился",
+  "err.BALANCE_EMPTY.appstore.body":
+    "Когда доступ снова станет активным, проверьте ещё раз — защита включится.",
+  "err.EXPIRED.appstore.title": "Доступ по этой ссылке закончился",
+  "err.EXPIRED.appstore.body":
+    "Когда доступ снова станет активным, проверьте ещё раз — защита включится.",
+  "err.DEVICE_TAKEN.appstore.title": "Эта ссылка занята другим устройством",
+  "err.DEVICE_TAKEN.appstore.body":
+    "Одна ссылка работает на одном устройстве. Сбросьте привязку в своём аккаунте ProxysVPN и проверьте ещё раз.",
+  "err.NO_DEVICES.appstore.title": "К аккаунту не привязано ни одного устройства",
+  "err.NO_DEVICES.appstore.body":
+    "Устройство удалено из аккаунта или ссылка устарела. Привяжите устройство в своём аккаунте ProxysVPN и проверьте ещё раз.",
+  "err.SUB_NOTICE.appstore.title": "Сообщение от сервиса",
+  "err.SUB_NOTICE.appstore.body": "Сервис ответил сообщением вместо списка локаций.",
+
   // ── [8] Check ─────────────────────────────────────────────────────────────
   "check.title": "Проверка",
   "check.device": "На этом устройстве",
@@ -359,6 +404,8 @@ const ru = {
   "check.serviceInCabinet": "Проверить с нашей стороны можно в кабинете",
   "check.serviceFailed": "Проверить с нашей стороны не удалось",
   "check.openCabinet": "Открыть кабинет",
+  // App Store builds do not open the cabinet, so the line does not point there.
+  "check.appstore.serviceUnavailable": "Проверка на стороне сервиса в приложении пока недоступна",
   "check.verdict": "Главное: {text}",
   "check.allGood": "Всё, что можем проверить, в порядке",
   "check.allGoodNote":
@@ -386,6 +433,8 @@ const ru = {
     "В отчёте нет ссылки подписки, адресов серверов и сайтов, которые вы открывали.",
   "report.size": "Размер: {size}",
   "report.openBot": "Открыть бот",
+  // App Store builds send support to the support page, not the bot.
+  "report.appstore.openSupport": "Открыть поддержку",
   "report.failed": "Не удалось собрать отчёт",
 
   // ── [10] Subscription and this device ─────────────────────────────────────
@@ -400,6 +449,11 @@ const ru = {
   "sub.openCabinet": "Открыть кабинет",
   "sub.orBot": "или в боте",
   "sub.topUp": "Пополнить на {host}",
+  // App Store builds: the state of access without a word about paying for it;
+  // `sub.topUp` and the cabinet/bot footer are not shown there at all.
+  "sub.appstore.accessUntil": "Доступ до {date} · осталось {days}",
+  "sub.appstore.oneLink":
+    "Одна ссылка работает на одном устройстве. Чтобы перенести доступ на другое, сбросьте привязку в своём аккаунте ProxysVPN.",
 
   // ── [11] What happened ────────────────────────────────────────────────────
   "tl.title": "Что происходило",
@@ -504,6 +558,9 @@ const en: Partial<Record<MsgKey, string>> = {
   "main.nolink.title": "Not set up",
   "main.nolink.hint": "Add your link — it is one step",
   "main.nolink.action": "Add link",
+  "main.nolink.appstore.title": "Not signed in",
+  "main.nolink.appstore.hint": "Sign in to your ProxysVPN account — it is one step",
+  "main.nolink.appstore.action": "Sign in",
   "main.shield.off": "Protection is off. Tap to turn it on",
   "main.shield.starting": "Turning protection on",
   "main.shield.on": "Protected. Tap to turn it off",
@@ -522,6 +579,7 @@ const en: Partial<Record<MsgKey, string>> = {
   "bar.expirySoon":
     "{n} day left. Top up to avoid an interruption|{n} days left. Top up to avoid an interruption",
   "bar.expired": "Your access has expired",
+  "bar.accessUntil": "Access until {date}",
 
   "ob.step": "Step {n} of {total}",
   "ob.move.title": "Move ProxysVPN to Applications",
@@ -559,6 +617,12 @@ const en: Partial<Record<MsgKey, string>> = {
   "pair.done": "Done. Link added",
   "pair.keychain": "The link is kept in the system's secure storage",
   "pair.scan": "Point the camera",
+  "pair.appstore.title": "Sign in to your ProxysVPN account",
+  "pair.appstore.body":
+    "Open your ProxysVPN account on another device, tap the code icon next to the link and point the camera at this screen.",
+  "pair.appstore.paste": "Sign in with a copied link",
+  "pair.appstore.notOurLink": "This is not a ProxysVPN link. Copy it from your ProxysVPN account",
+  "pair.appstore.done": "Done, you are signed in",
 
   "details.title": "Details",
   "details.change": "Change",
@@ -567,6 +631,7 @@ const en: Partial<Record<MsgKey, string>> = {
   "details.whereRu": "You are in Russia — Russian sites go directly",
   "details.whereAbroad": "You are abroad — all traffic goes through us",
   "details.paidUntil": "Paid until {date} · {days} left",
+  "details.appstore.accessUntil": "Access until {date} · {days} left",
   "details.expiryUnknown": "Expiry unknown — could not get the data",
   "details.split": "Where traffic goes: through the VPN {via} · directly {direct}",
   "details.splitNote":
@@ -673,6 +738,8 @@ const en: Partial<Record<MsgKey, string>> = {
   "action.diagnose": "Run a check",
   "action.waitAndSee": "Got it",
   "action.contactSupport": "Message support",
+  "action.checkAgain": "Check again",
+  "action.appstore.addLink": "Sign in",
 
   "err.NO_SUBSCRIPTION.title": "No link added",
   "err.NO_SUBSCRIPTION.body": "Without it there is nothing to turn on. This is one step.",
@@ -735,6 +802,28 @@ const en: Partial<Record<MsgKey, string>> = {
   "err.UNKNOWN.body":
     "We could not name the cause. Send the report — it has everything needed to work it out.",
 
+  "err.NO_SUBSCRIPTION.appstore.title": "You are not signed in",
+  "err.NO_SUBSCRIPTION.appstore.body":
+    "Sign in to your ProxysVPN account — without it there is nothing to turn on.",
+  "err.SUB_MALFORMED.appstore.title": "This link does not fit",
+  "err.SUB_MALFORMED.appstore.body": "Looks like the wrong text was copied. Sign in again.",
+  "err.SUB_EMPTY.appstore.title": "The subscription has no locations",
+  "err.SUB_EMPTY.appstore.body": "The service answered with an empty list. Check again a little later.",
+  "err.BALANCE_EMPTY.appstore.title": "Access on this link has ended",
+  "err.BALANCE_EMPTY.appstore.body":
+    "Once access is active again, check again and protection turns on.",
+  "err.EXPIRED.appstore.title": "Access on this link has ended",
+  "err.EXPIRED.appstore.body":
+    "Once access is active again, check again and protection turns on.",
+  "err.DEVICE_TAKEN.appstore.title": "This link is taken by another device",
+  "err.DEVICE_TAKEN.appstore.body":
+    "One link works on one device. Reset the binding in your ProxysVPN account, then check again.",
+  "err.NO_DEVICES.appstore.title": "No devices on this account",
+  "err.NO_DEVICES.appstore.body":
+    "The device was removed from the account or the link is outdated. Bind the device in your ProxysVPN account, then check again.",
+  "err.SUB_NOTICE.appstore.title": "A message from the service",
+  "err.SUB_NOTICE.appstore.body": "The service sent a message instead of the list of locations.",
+
   "check.title": "Check",
   "check.device": "On this device",
   "check.service": "On the service side",
@@ -757,6 +846,7 @@ const en: Partial<Record<MsgKey, string>> = {
   "check.serviceInCabinet": "The service-side check lives in your account",
   "check.serviceFailed": "Could not check on our side",
   "check.openCabinet": "Open account",
+  "check.appstore.serviceUnavailable": "The service-side check is not available in the app yet",
   "check.verdict": "The main thing: {text}",
   "check.allGood": "Everything we can check is fine",
   "check.allGoodNote": "If sites still do not open — send the report and we will look together.",
@@ -781,6 +871,7 @@ const en: Partial<Record<MsgKey, string>> = {
     "The report contains no subscription link, no server addresses and none of the sites you opened.",
   "report.size": "Size: {size}",
   "report.openBot": "Open the bot",
+  "report.appstore.openSupport": "Open support",
   "report.failed": "Could not build the report",
 
   "sub.title": "Subscription and this device",
@@ -794,6 +885,9 @@ const en: Partial<Record<MsgKey, string>> = {
   "sub.openCabinet": "Open account",
   "sub.orBot": "or in the bot",
   "sub.topUp": "Top up at {host}",
+  "sub.appstore.accessUntil": "Access until {date} · {days} left",
+  "sub.appstore.oneLink":
+    "One link works on one device. To move access to another one, reset the binding in your ProxysVPN account.",
 
   "tl.title": "What happened",
   "tl.today": "Today",

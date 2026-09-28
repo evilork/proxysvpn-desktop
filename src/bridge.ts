@@ -55,6 +55,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
+import { IS_APPSTORE } from "./dist";
+import { isAllowedExternal } from "./externalUrl";
 import {
   ERROR_ACTION,
   EV,
@@ -354,6 +356,16 @@ export const IS_TAURI: boolean =
 
 // ── The real bridge ─────────────────────────────────────────────────────────
 
+/** Scheme and host of a URL for a log line — never its path or query. */
+function urlOrigin(url: string): { scheme: string; host: string } {
+  try {
+    const parsed = new URL(url);
+    return { scheme: parsed.protocol.replace(/:$/, ""), host: parsed.hostname };
+  } catch {
+    return { scheme: "unparsable", host: "" };
+  }
+}
+
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
     return await invoke<T>(command, args);
@@ -493,6 +505,16 @@ class TauriBridge implements CoreBridge {
     return call<AppInfo>("app_info");
   }
   async openExternal(url: string): Promise<void> {
+    // App Store builds open only the allowlisted pages (src/externalUrl.ts):
+    // announce-url and support-url come from the service and can change after
+    // review, and no reviewed button may end on a payment page. A refusal is
+    // silent for the person — no screen offers such a link on purpose — and
+    // logged without the path or query, which may carry a subscription token.
+    // Direct builds keep the opener plugin's own scope as the only gate.
+    if (IS_APPSTORE && !isAllowedExternal(url, true)) {
+      console.warn({ event: "external_url_blocked", dist: "appstore", ...urlOrigin(url) });
+      return;
+    }
     try {
       await openUrl(url);
     } catch (raw) {
@@ -1218,7 +1240,15 @@ class MockBridge implements CoreBridge {
   }
 }
 
-/** The scenario this page is playing; "off" and irrelevant inside the app. */
-export const MOCK_SCENARIO: MockScenario = IS_TAURI ? "off" : readScenario();
+/**
+ * The scenario this page is playing; "off" and irrelevant inside the app.
+ *
+ * App Store builds never pick the mock, even in a plain browser: `IS_APPSTORE`
+ * is a build-time constant, so it goes first and the bundler drops the mock
+ * and its demo data (fake notice, fake locations, the bot address) from the
+ * reviewed bundle altogether (guideline 2.2).
+ */
+export const MOCK_SCENARIO: MockScenario = IS_APPSTORE || IS_TAURI ? "off" : readScenario();
 
-export const bridge: CoreBridge = IS_TAURI ? new TauriBridge() : new MockBridge(MOCK_SCENARIO);
+export const bridge: CoreBridge =
+  IS_APPSTORE || IS_TAURI ? new TauriBridge() : new MockBridge(MOCK_SCENARIO);

@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { bridge, type RoutingState, type TrafficSplit } from "../bridge";
+import { IS_APPSTORE } from "../dist";
 import { daysLeft, formatDate, formatNumber } from "../i18n";
 import type { StatePayload, SubMeta } from "../types";
 import { IconChevron, Sheet, Spinner, useUi } from "./ui";
@@ -82,7 +83,8 @@ export default function DetailsSheet({
     if (!meta.expiresAt) return t("details.expiryUnknown");
     const ms = meta.expiresAt * 1000;
     const left = daysLeft(ms, Date.now());
-    return t("details.paidUntil", {
+    // App Store builds state when access ends, not that it was paid for.
+    return t(IS_APPSTORE ? "details.appstore.accessUntil" : "details.paidUntil", {
       date: formatDate(lang, ms),
       days: t("time.days", { n: Math.max(0, left) }),
     });
