@@ -27,9 +27,11 @@
 //     anyway (`?routing=inline`, subscription.rs);
 //   • Hysteria2 runs in Xray too (its built-in client), with the certificate
 //     pin enforced (`pinnedPeerCertSha256`), never "insecure";
-//   • nothing that Xray 26.9 refuses: no `proxySettings`, no `allowInsecure`.
+//   • nothing that Xray 26.9 refuses: no `proxySettings`, no `allowInsecure`;
+//   • a plan for a network without IPv4 (`Ipv6OnlyPlan`), which only the
+//     extension can recognise and apply.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 
 use anyhow::{anyhow, bail, Result};
 use base64::engine::general_purpose::STANDARD as B64;
@@ -144,18 +146,155 @@ pub fn tunnel_settings() -> TunnelSettings {
 }
 
 /// The string VpnBridge.swift stores as the provider configuration and the
-/// extension reads back: `{"version":1,"xray":{…},"tunnel":{…}}`.
+/// extension reads back:
+/// `{"version":1,"xray":{…},"tunnel":{…},"ipv6Only":{…}}`.
+///
+/// `ipv6Only` is optional for the extension: a profile saved by an earlier
+/// build has none, and then nothing changes on any network.
 pub fn provider_configuration(
     server: &ServerConfig,
     routing: Option<&RoutingRules>,
     prefs: &TunnelPrefs,
 ) -> Result<String> {
+    let xray = build_config(server, routing, prefs)?;
+    let ipv6_only = ipv6_only_plan(&xray);
     let envelope = json!({
         "version": 1,
-        "xray": build_config(server, routing, prefs)?,
+        "xray": xray,
         "tunnel": tunnel_settings(),
+        "ipv6Only": ipv6_only,
     });
     Ok(serde_json::to_string(&envelope)?)
+}
+
+/// A place in the Xray config, from its root: object keys and array indices.
+/// A list rather than a JSON Pointer string, so neither side has to escape.
+pub type JsonPath = Vec<Value>;
+
+macro_rules! path {
+    ($($step:expr),* $(,)?) => { vec![$(json!($step)),*] };
+}
+
+/// What the extension changes when the network it starts on has no IPv4: an
+/// IPv6-only network with NAT64, which is what App Review tests on
+/// (guideline 2.5.5) and what some carriers run.
+///
+/// Why anything has to change there: Go opens a socket to an IPv4 literal
+/// as AF_INET, which fails at once on such a network, and a literal, unlike a
+/// name, gets no synthesized address from DNS64. Only the extension can tell
+/// the network apart: getaddrinfo knows its NAT64 prefix and, asked about an
+/// IPv4 literal, answers with the synthesized IPv6 address there and with the
+/// literal itself wherever IPv4 works (PacketTunnel/Ipv6OnlyNetwork.swift).
+/// So the config carries the plan and the extension decides whether to use
+/// it, before the tunnel's own IPv4 address exists and hides the answer.
+///
+/// • `literals`: every IPv4 literal Xray dials itself — a node written as an
+///   address, the Yandex resolver — with the places it sits. The extension
+///   puts the synthesized address in `replace` and adds it to the address
+///   lists in `append` (the rule that lets the resolver's queries leave
+///   directly). The Yandex entry is always there, because its rule always is
+///   (`route_direct_dns`): with a named node and the global profile it is the
+///   one literal the extension can ask about.
+/// • `via_node`: the `outboundTag` of every rule that sends traffic direct,
+///   except the resolver's own and the ones naming only local networks. Apps
+///   are answered with IPv4 addresses (`dns_section`) and `freedom` cannot
+///   reach IPv4 from such a network, so those routes would be dead ends; the
+///   node can reach them, so they go through it there.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Ipv6OnlyPlan {
+    pub literals: Vec<Nat64Literal>,
+    pub via_node: Vec<JsonPath>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Nat64Literal {
+    pub ipv4: String,
+    /// String values equal to `ipv4`, replaced by the synthesized address.
+    pub replace: Vec<JsonPath>,
+    /// Address lists the synthesized address is added to, next to `ipv4`.
+    pub append: Vec<JsonPath>,
+}
+
+impl Ipv6OnlyPlan {
+    fn literal(&mut self, ipv4: &str) -> &mut Nat64Literal {
+        let at = match self.literals.iter().position(|l| l.ipv4 == ipv4) {
+            Some(at) => at,
+            None => {
+                self.literals.push(Nat64Literal { ipv4: ipv4.to_string(), replace: Vec::new(), append: Vec::new() });
+                self.literals.len() - 1
+            }
+        };
+        &mut self.literals[at]
+    }
+}
+
+/// Reads the plan off a finished config (`build_config`), so it names the
+/// places the config really has, whatever produced its rules.
+pub fn ipv6_only_plan(config: &Value) -> Ipv6OnlyPlan {
+    let mut plan = Ipv6OnlyPlan::default();
+
+    // The node: `vnext` for VLESS, a flat `address` for Hysteria2. Only the
+    // `proxy` outbound: `direct` and `block` dial nothing of their own, and
+    // the fragmenter dials whatever the node outbound asks it to.
+    for (i, outbound) in array_at(config, "/outbounds").iter().enumerate() {
+        if outbound.get("tag").and_then(Value::as_str) != Some("proxy") {
+            continue;
+        }
+        let settings = &outbound["settings"];
+        for (j, server) in array_at(settings, "/vnext").iter().enumerate() {
+            if let Some(ip) = ipv4_literal(&server["address"]) {
+                plan.literal(ip).replace.push(path!["outbounds", i, "settings", "vnext", j, "address"]);
+            }
+        }
+        if let Some(ip) = ipv4_literal(&settings["address"]) {
+            plan.literal(ip).replace.push(path!["outbounds", i, "settings", "address"]);
+        }
+    }
+
+    // Plain DNS servers, in either of the two forms Xray accepts.
+    for (k, server) in array_at(config, "/dns/servers").iter().enumerate() {
+        if let Some(ip) = ipv4_literal(server) {
+            plan.literal(ip).replace.push(path!["dns", "servers", k]);
+        } else if let Some(ip) = ipv4_literal(&server["address"]) {
+            plan.literal(ip).replace.push(path!["dns", "servers", k, "address"]);
+        }
+    }
+
+    for (r, rule) in array_at(config, "/routing/rules").iter().enumerate() {
+        if rule.get("outboundTag").and_then(Value::as_str) != Some("direct") {
+            continue;
+        }
+        if rule.get("inboundTag").is_some() {
+            // Xray's own traffic (the resolver's queries to Yandex): it keeps
+            // leaving directly, to the synthesized address as well.
+            for ip in array_at(rule, "/ip").iter().filter_map(ipv4_literal) {
+                plan.literal(ip).append.push(path!["routing", "rules", r, "ip"]);
+            }
+        } else if !names_only_local_networks(rule) {
+            plan.via_node.push(path!["routing", "rules", r, "outboundTag"]);
+        }
+    }
+    plan
+}
+
+/// The array at a JSON Pointer, or an empty slice when there is none.
+fn array_at<'a>(value: &'a Value, pointer: &str) -> &'a [Value] {
+    value.pointer(pointer).and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default()
+}
+
+/// A single IPv4 address: not a network, not a name.
+fn ipv4_literal(value: &Value) -> Option<&str> {
+    value.as_str().filter(|s| s.parse::<Ipv4Addr>().is_ok())
+}
+
+/// The LAN rule and its likes: they match local networks only, which stay
+/// direct on any network (and have no business reaching a node abroad).
+fn names_only_local_networks(rule: &Value) -> bool {
+    rule.get("domain").is_none()
+        && rule.get("ip").and_then(Value::as_array).is_some_and(|ips| {
+            !ips.is_empty() && ips.iter().all(|ip| ip.as_str().is_some_and(|ip| PRIVATE_NETWORKS.contains(&ip)))
+        })
 }
 
 /// The Xray config for `server`. Errors never name the node: they reach the
@@ -779,5 +918,202 @@ mod tests {
         assert_eq!(envelope["tunnel"]["ipv6Prefix"], TUN_IPV6_PREFIX);
         assert_eq!(envelope["tunnel"]["ipv4Excluded"][0]["mask"], "255.0.0.0");
         assert_eq!(envelope["tunnel"]["ipv6Excluded"][0]["prefix"], 7);
+    }
+
+    // ── IPv6-only networks (NAT64) ─────────────────────────────────────────
+
+    const NODE_IPV4: &str = "192.0.2.10";
+
+    fn at_address(server: ServerConfig, ip: &str) -> ServerConfig {
+        match server {
+            ServerConfig::Vless(mut cfg) => {
+                cfg.host = ip.into();
+                ServerConfig::Vless(cfg)
+            }
+            ServerConfig::Hy2(mut cfg) => {
+                cfg.host = ip.into();
+                ServerConfig::Hy2(cfg)
+            }
+        }
+    }
+
+    /// The shape of the service's Russian profile, with made-up networks.
+    fn russian_profile() -> RoutingRules {
+        RoutingRules {
+            direct_domains: vec!["domain:ya.ru".into(), "full:gosuslugi.ru".into()],
+            direct_ips: vec!["geoip:private".into(), "5.8.0.0/16".into()],
+            domain_strategy: "IPIfNonMatch".into(),
+        }
+    }
+
+    fn own_lists() -> TunnelPrefs {
+        TunnelPrefs {
+            direct_domains: vec!["domain:direct.example.com".into()],
+            proxy_domains: vec!["full:vpn.example.ru".into()],
+            fragment: true,
+            ..TunnelPrefs::default()
+        }
+    }
+
+    /// Where a plan path leads, walked the way the extension walks it.
+    fn at<'a>(config: &'a Value, path: &[Value]) -> Option<&'a Value> {
+        path.iter().try_fold(config, |node, step| match step {
+            Value::String(key) => node.get(key.as_str()),
+            Value::Number(n) => n.as_u64().and_then(|i| usize::try_from(i).ok()).and_then(|i| node.get(i)),
+            _ => None,
+        })
+    }
+
+    fn literal<'a>(plan: &'a Ipv6OnlyPlan, ip: &str) -> &'a Nat64Literal {
+        plan.literals.iter().find(|l| l.ipv4 == ip).expect("literal in the plan")
+    }
+
+    #[test]
+    fn a_node_written_as_an_address_is_left_for_nat64_to_map() {
+        for server in [vision(), xhttp(), hy2(PIN_HEX, true)] {
+            let config = build(&at_address(server, NODE_IPV4));
+            let plan = ipv6_only_plan(&config);
+            let node = literal(&plan, NODE_IPV4);
+            assert_eq!(node.replace.len(), 1, "{node:?}");
+            assert!(node.append.is_empty());
+            let place = &node.replace[0];
+            assert_eq!(at(&config, place), Some(&json!(NODE_IPV4)));
+            assert_eq!(place.last(), Some(&json!("address")));
+            assert_eq!(at(&config, &place[..2]).map(|o| &o["tag"]), Some(&json!("proxy")));
+        }
+    }
+
+    #[test]
+    fn a_node_with_a_name_is_left_to_the_system_resolver() {
+        for server in [vision(), xhttp(), hy2(PIN_HEX, true)] {
+            let plan = ipv6_only_plan(&build(&server));
+            assert!(
+                !plan.literals.iter().flat_map(|l| &l.replace).any(|p| p[0] == "outbounds"),
+                "{plan:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_yandex_resolver_is_mapped_and_its_queries_still_leave_directly() {
+        let config = build(&vision());
+        let plan = ipv6_only_plan(&config);
+        let yandex = literal(&plan, DIRECT_DNS);
+        assert_eq!(yandex.replace.len(), 1);
+        assert_eq!(at(&config, &yandex.replace[0]), Some(&json!(DIRECT_DNS)));
+        assert_eq!(yandex.replace[0][..2], [json!("dns"), json!("servers")]);
+        assert_eq!(yandex.append.len(), 1);
+        let rule = at(&config, &yandex.append[0][..3]).expect("the resolver's rule");
+        assert_eq!(rule["inboundTag"], json!(["dns-in"]));
+        assert_eq!(rule["outboundTag"], "direct");
+        assert_eq!(at(&config, &yandex.append[0]), Some(&json!([DIRECT_DNS])));
+    }
+
+    /// The extension recognises the network by asking about a literal. With a
+    /// named node and nothing resolved by Yandex there must still be one.
+    #[test]
+    fn there_is_always_a_literal_to_ask_the_network_about() {
+        let config = build_config(&vision(), Some(&RoutingRules::global()), &TunnelPrefs::default()).expect("builds");
+        let plan = ipv6_only_plan(&config);
+        let yandex = literal(&plan, DIRECT_DNS);
+        assert!(yandex.replace.is_empty(), "no Yandex server in the global profile");
+        assert_eq!(yandex.append.len(), 1);
+    }
+
+    #[test]
+    fn direct_routes_go_through_the_node_where_there_is_no_ipv4() {
+        let config = build_config(&vision(), Some(&russian_profile()), &own_lists()).expect("builds");
+        let plan = ipv6_only_plan(&config);
+        let rules = rules(&config);
+        let moved: Vec<&Value> = plan
+            .via_node
+            .iter()
+            .map(|p| {
+                assert_eq!(p.last(), Some(&json!("outboundTag")));
+                assert_eq!(at(&config, p), Some(&json!("direct")));
+                at(&config, &p[..3]).expect("rule")
+            })
+            .collect();
+        // The person's list, the service's names and its networks move...
+        for wanted in [
+            json!(["domain:direct.example.com"]),
+            json!(["domain:ya.ru", "full:gosuslugi.ru"]),
+        ] {
+            assert!(moved.iter().any(|r| r["domain"] == wanted), "{wanted}");
+        }
+        assert!(moved.iter().any(|r| r["ip"].as_array().is_some_and(|ips| ips.contains(&json!("5.8.0.0/16")))));
+        // ...the LAN and the resolver's own queries stay direct.
+        let lan = rules
+            .iter()
+            .find(|r| r["outboundTag"] == "direct" && r["ip"].as_array().is_some_and(|ips| ips.len() == PRIVATE_NETWORKS.len()))
+            .expect("LAN rule");
+        assert!(!moved.contains(&lan));
+        assert!(!moved.iter().any(|r| r.get("inboundTag").is_some()));
+        let direct = rules.iter().filter(|r| r["outboundTag"] == "direct").count();
+        assert_eq!(moved.len(), direct - 2, "all but the LAN and the resolver's rule");
+    }
+
+    /// The contract with PacketTunnel/Ipv6OnlyNetwork.swift, which changes a
+    /// place only if it holds what the plan says it does.
+    #[test]
+    fn every_place_in_the_plan_holds_what_the_extension_expects() {
+        let servers = [
+            vision(),
+            xhttp(),
+            hy2(PIN_HEX, true),
+            at_address(vision(), NODE_IPV4),
+            at_address(hy2(PIN_HEX, true), NODE_IPV4),
+        ];
+        let profiles = [None, Some(russian_profile()), Some(RoutingRules::global())];
+        for server in &servers {
+            for profile in &profiles {
+                for prefs in [TunnelPrefs::default(), own_lists()] {
+                    let config = build_config(server, profile.as_ref(), &prefs).expect("builds");
+                    let plan = ipv6_only_plan(&config);
+                    assert!(!plan.literals.is_empty());
+                    for lit in &plan.literals {
+                        for place in &lit.replace {
+                            assert_eq!(at(&config, place), Some(&json!(lit.ipv4)), "{place:?}");
+                        }
+                        for place in &lit.append {
+                            let list = at(&config, place).and_then(Value::as_array).expect("address list");
+                            assert!(list.contains(&json!(lit.ipv4)), "{place:?}");
+                        }
+                    }
+                    for place in &plan.via_node {
+                        assert_eq!(at(&config, place), Some(&json!("direct")), "{place:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Only what Xray dials is rewritten. A rule that happens to name the
+    /// node's address matches apps' traffic, which still carries IPv4.
+    #[test]
+    fn a_rule_naming_the_nodes_address_is_not_rewritten() {
+        let profile = RoutingRules { direct_ips: vec![NODE_IPV4.into()], ..russian_profile() };
+        let config = build_config(&at_address(vision(), NODE_IPV4), Some(&profile), &TunnelPrefs::default()).expect("builds");
+        let plan = ipv6_only_plan(&config);
+        let node = literal(&plan, NODE_IPV4);
+        assert!(node.append.is_empty());
+        assert!(node.replace.iter().all(|p| p[0] == "outbounds"), "{node:?}");
+    }
+
+    /// The exact form the extension decodes (tests/packet-tunnel/main.swift
+    /// holds the same literal).
+    #[test]
+    fn the_envelope_carries_the_plan_in_the_form_the_extension_reads() {
+        let server = at_address(vision(), NODE_IPV4);
+        let raw = provider_configuration(&server, None, &TunnelPrefs::default()).expect("envelope");
+        let envelope: Value = serde_json::from_str(&raw).expect("json");
+        let plan = &envelope["ipv6Only"];
+        assert_eq!(
+            plan["literals"][0],
+            json!({ "ipv4": NODE_IPV4, "replace": [["outbounds", 0, "settings", "vnext", 0, "address"]], "append": [] })
+        );
+        assert!(plan["literals"].as_array().expect("literals").iter().any(|l| l["ipv4"] == DIRECT_DNS));
+        assert!(!plan["viaNode"].as_array().expect("viaNode").is_empty());
+        assert_eq!(serde_json::to_value(ipv6_only_plan(&envelope["xray"])).expect("plan"), *plan);
     }
 }

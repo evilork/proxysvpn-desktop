@@ -79,14 +79,10 @@ pub async fn is_connected_wait() -> bool {
 ///
 /// The routing profile and the person's tunnel settings are read here, like
 /// the desktop's `build_xray_config` does, so the extension runs the same
-/// rules as the Mac.
+/// rules as the Mac. A node written as an IPv4 address needs nothing special
+/// here: on an IPv6-only network the extension maps it through NAT64
+/// (xray_apple.rs `Ipv6OnlyPlan`).
 pub async fn connect(server: &ServerConfig) -> Result<()> {
-    if server.host().parse::<std::net::Ipv4Addr>().is_ok() {
-        // Not an error: it works on every network with IPv4. On an IPv6-only
-        // one (NAT64, App Review's own) only a NAME gets a synthesized IPv6
-        // address, so say why that network would fail, without the address.
-        crate::logger::log("warn", "ios-vpn", "node is an IPv4 literal: unreachable on IPv6-only (NAT64) networks");
-    }
     let config_str = crate::xray_apple::provider_configuration(
         server,
         crate::subscription::last_routing().as_ref(),

@@ -8,7 +8,7 @@ src-tauri/Cargo.lock
 
 # The iOS project under src-tauri/gen is almost entirely generated - by
 # `tauri ios init`, by xcodegen out of project.yml, and by the build. Almost:
-# PacketTunnelProvider.swift and VpnBridge.swift are written by hand,
+# the PacketTunnel Swift files and VpnBridge.swift are written by hand,
 # project.yml is what xcodegen generates FROM, and without them
 # `scripts/setup-ios.sh` has nothing to work with on a fresh clone. So the
 # folder is ignored and those are excepted, rather than the whole thing being
@@ -22,6 +22,7 @@ src-tauri/gen/apple/*
 !src-tauri/gen/apple/PacketTunnel/
 src-tauri/gen/apple/PacketTunnel/*
 !src-tauri/gen/apple/PacketTunnel/PacketTunnelProvider.swift
+!src-tauri/gen/apple/PacketTunnel/Ipv6OnlyNetwork.swift
 !src-tauri/gen/apple/PacketTunnel/PrivacyInfo.xcprivacy
 !src-tauri/gen/apple/proxysvpn-desktop_iOS/
 src-tauri/gen/apple/proxysvpn-desktop_iOS/*

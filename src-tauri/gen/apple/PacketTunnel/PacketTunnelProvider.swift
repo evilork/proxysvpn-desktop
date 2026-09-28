@@ -7,9 +7,12 @@
 //
 // The Rust core builds everything this file needs (src-tauri/src/xray_apple.rs)
 // and it arrives as NETunnelProviderProtocol.providerConfiguration["config"]:
-//   {"version": 1, "xray": {Xray config}, "tunnel": {addresses, routes, DNS}}
-// This file only applies the tunnel half to the system, finds the utun file
-// descriptor, hands it to Xray as env["xray.tun.fd"] and starts the engine.
+//   {"version": 1, "xray": {Xray config}, "tunnel": {addresses, routes, DNS},
+//    "ipv6Only": {what changes on a network without IPv4}}
+// This file only adapts the Xray half to an IPv6-only network when it is on
+// one (Ipv6OnlyNetwork.swift), applies the tunnel half to the system, finds
+// the utun file descriptor, hands it to Xray as env["xray.tun.fd"] and starts
+// the engine.
 //
 // One Go runtime per process: LibXray is the only Go library this extension
 // may link. A second one (Libbox, a separate Hysteria build) crashes at load.
@@ -42,6 +45,22 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
 
+        // Now, while the process still sees only the physical network: once
+        // the tunnel's IPv4 address exists, an IPv6-only network no longer
+        // looks like one to getaddrinfo.
+        var startConfig = configuration.xray
+        if let outcome = Ipv6OnlyNetwork.adapt(startConfig, plan: configuration.ipv6Only,
+                                               synthesize: Nat64.synthesize) {
+            startConfig = outcome.xray
+            os_log("IPv6-only network: %{public}d addresses mapped through NAT64, %{public}d direct routes through the node",
+                   log: tunnelLog, type: .info, outcome.mapped, outcome.rerouted)
+            if outcome.skipped > 0 {
+                os_log("IPv6-only plan did not match the config at %{public}d places", log: tunnelLog, type: .fault,
+                       outcome.skipped)
+            }
+        }
+        let xrayConfig = startConfig
+
         setTunnelNetworkSettings(configuration.networkSettings()) { [weak self] error in
             guard let self else {
                 completionHandler(TunnelError.engine("provider released during start"))
@@ -56,7 +75,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             do {
                 // The utun exists only once the settings are applied.
                 guard let fd = Self.tunnelFileDescriptor() else { throw TunnelError.noTunnelDescriptor }
-                var xray = configuration.xray
+                var xray = xrayConfig
                 // Xray copies root "env" into the process environment before
                 // it builds the tun inbound, which then reads this descriptor
                 // instead of creating an interface (Xray-core proxy/tun).
@@ -174,6 +193,7 @@ private struct TunnelSettings: Decodable {
 private struct TunnelConfiguration {
     let xray: [String: Any]
     let tunnel: TunnelSettings
+    let ipv6Only: Ipv6OnlyPlan
 
     init(_ protocolConfiguration: NEVPNProtocol) throws {
         guard let proto = protocolConfiguration as? NETunnelProviderProtocol,
@@ -202,6 +222,19 @@ private struct TunnelConfiguration {
         }
         self.xray = xray
         tunnel = decoded
+        // Absent in a profile saved by an earlier build. A malformed one is a
+        // core/extension mismatch: the tunnel still starts, as it did before
+        // the plan existed, and says so.
+        if let raw = root["ipv6Only"] {
+            if let plan = Ipv6OnlyPlan(json: raw) {
+                ipv6Only = plan
+            } else {
+                os_log("malformed IPv6-only plan ignored", log: tunnelLog, type: .fault)
+                ipv6Only = .empty
+            }
+        } else {
+            ipv6Only = .empty
+        }
     }
 
     /// IPv4 and IPv6 both routed into the tunnel by default, the local
