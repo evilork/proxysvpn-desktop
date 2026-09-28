@@ -541,7 +541,11 @@ const ru = {
   // through the node, Yandex for every name routed direct, the system
   // resolver for the node's own name; subscription.rs + tunnel_prefs.rs for
   // "desktop"). "We do not record sites" is shown only once
-  // NO_ACTIVITY_LOGS_CONFIRMED (legal.ts).
+  // NO_ACTIVITY_LOGS_CONFIRMED (legal.ts). "notice.promise" makes no
+  // absolute "nobody else" claim: the service's own processors (hosting, the
+  // database, the AI support assistant, which is given the app's version and
+  // the device names) see these data too, and the privacy policy names them
+  // in the same terms — service providers acting only on our instructions.
   "notice.title": "Какие данные мы используем",
   "notice.intro": "Только то, без чего VPN не работает. Всё, без мелкого шрифта:",
   "notice.token": "Токен подписки — по нему сервис узнаёт ваш аккаунт.",
@@ -559,7 +563,7 @@ const ru = {
   "notice.log":
     "Технический журнал хранится только на этом устройстве. Отчёт для поддержки покидает его, только если вы отправите его сами.",
   "notice.promise":
-    "Кроме названных здесь DNS-сервисов, мы никому не передаём эти данные, не продаём их и не используем ни для чего, кроме работы VPN.",
+    "Мы не продаём эти данные и используем их только для работы сервиса и его защиты от злоупотреблений. Кроме названных здесь DNS-сервисов, их обрабатывают только наши подрядчики из Политики конфиденциальности — например, хостинг и ИИ-помощник поддержки, когда вы ему пишете, — по нашему поручению и только для работы сервиса.",
   "notice.privacy": "Политика конфиденциальности",
   "notice.terms": "Условия использования",
   "notice.continue": "Продолжить",
@@ -1039,7 +1043,7 @@ const en: Partial<Record<MsgKey, string>> = {
   "notice.log":
     "The technical log stays on this device. A support report leaves it only when you send it yourself.",
   "notice.promise":
-    "Apart from the DNS services named here, we never pass these data to anyone, never sell them and use them for nothing but running the VPN.",
+    "We never sell these data and use them only to run the service and protect it from abuse. Apart from the DNS services named here, only our service providers listed in the Privacy Policy process them — such as hosting, and the AI support assistant when you write to it — on our instructions and only to run the service.",
   "notice.privacy": "Privacy Policy",
   "notice.terms": "Terms of Use",
   "notice.continue": "Continue",
