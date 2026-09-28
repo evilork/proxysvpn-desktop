@@ -1,7 +1,8 @@
 name: proxysvpn-desktop
 options:
   deploymentTarget:
-    # Libbox (sing-box) requires iOS 15+.
+    # LibXray.xcframework is built for iOS 15.0+ (libXray's apple build,
+    # scripts/build-libxray.sh).
     iOS: 15.0
 fileGroups: [../../src]
 configs:
@@ -181,9 +182,15 @@ targets:
         ENABLE_BITCODE: false
         ARCHS: [arm64]
     dependencies:
-      # Libbox.xcframework is produced by scripts/build-libbox.sh (not in git).
-      - framework: Frameworks/Libbox.xcframework
+      # Xray-core as a static library, produced by scripts/build-libxray.sh
+      # (not in git). The only Go code this process may link: a second Go
+      # runtime (another Go framework) crashes the extension at load.
+      - framework: Frameworks/LibXray.xcframework
         embed: false
       - sdk: NetworkExtension.framework
-      # Go's DNS resolver in Libbox calls res_9_ninit/nsearch/nclose.
+      # The Go runtime inside LibXray calls into these system libraries
+      # (res_9_* for DNS; Security and CoreFoundation for certificates). A
+      # c-archive does not carry its link flags, so they are named here.
       - sdk: libresolv.tbd
+      - sdk: Security.framework
+      - sdk: CoreFoundation.framework

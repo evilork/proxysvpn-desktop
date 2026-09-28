@@ -3,7 +3,7 @@
 > 🇷🇺 [Русская версия](README_RU.md)
 >
 > 📱 **iPhone / iPad:** the same codebase builds an iOS app with a Network
-> Extension tunnel (sing-box engine) — see [docs/IOS.md](docs/IOS.md).
+> Extension tunnel (Xray-core engine via libXray) — see [docs/IOS.md](docs/IOS.md).
 
 Native macOS VPN client for the [ProxysVPN](https://proxysvpn.com) service. Routes **all** system traffic (browser, Telegram, Discord, games, App Store) through a VLESS Reality + ML-KEM tunnel — no manual proxy config required.
 

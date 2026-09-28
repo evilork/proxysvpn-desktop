@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Privacy manifest of PacketTunnel.appex. The engine (Go runtime and sing-box
-  in Libbox) calls these APIs; the data the service collects is declared once,
-  in the app's manifest.
+  Privacy manifest of PacketTunnel.appex. The engine (Go runtime and Xray-core
+  in LibXray) calls these APIs - checked with `nm -u` on the 28.09.2026 build:
+  stat, fstat, fstatat, lstat and mach_absolute_time; nothing from the disk
+  space or user defaults categories. The data the service collects is declared
+  once, in the app's manifest.
 -->
 <plist version="1.0">
 <dict>

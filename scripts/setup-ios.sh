@@ -3,7 +3,7 @@
 # fresh clone, and again after pulling changes to project.yml.
 #
 # Usage:
-#   bash scripts/build-libbox.sh                 # once, the tunnel engine
+#   bash scripts/build-libxray.sh                # once, the tunnel engine
 #   PVPN_TEAM_ID=<team id> bash scripts/setup-ios.sh
 #
 # PVPN_TEAM_ID is the paid Apple Developer team (developer.apple.com ->
@@ -92,8 +92,13 @@ fi
 
 [ -f "$APPLE_DIR/Sources/proxysvpn-desktop/VpnBridge.swift" ] \
     || fail "$APPLE_DIR/Sources/proxysvpn-desktop/VpnBridge.swift is missing - the app cannot drive the tunnel without it. It is tracked in git: git checkout -- $APPLE_DIR/Sources/proxysvpn-desktop/VpnBridge.swift"
-[ -d "$APPLE_DIR/Frameworks/Libbox.xcframework" ] \
-    || fail "$APPLE_DIR/Frameworks/Libbox.xcframework is missing - the PacketTunnel extension cannot link without it. Build it first: bash scripts/build-libbox.sh"
+[ -d "$APPLE_DIR/Frameworks/LibXray.xcframework" ] \
+    || fail "$APPLE_DIR/Frameworks/LibXray.xcframework is missing - the PacketTunnel extension cannot link without it. Build it first: bash scripts/build-libxray.sh"
+if [ -d "$APPLE_DIR/Frameworks/Libbox.xcframework" ]; then
+    # Left over from the sing-box engine (before 28.09.2026). Nothing links it
+    # any more; it only takes space and invites linking a second Go runtime.
+    echo "note: $APPLE_DIR/Frameworks/Libbox.xcframework is unused now and can be deleted" >&2
+fi
 
 cat <<'EOF'
 

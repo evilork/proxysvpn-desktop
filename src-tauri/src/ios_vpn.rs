@@ -8,9 +8,10 @@
 // gen/apple/Sources/proxysvpn-desktop/VpnBridge.swift via C FFI — both sides
 // are linked into the same app binary (@_cdecl on the Swift side).
 //
-// Flow: fetch subscription (reqwest works fine on iOS) → build sing-box
-// config → hand the JSON to Swift → Swift saves the NE profile and starts
-// the tunnel → we poll the session status until connected or timed out.
+// Flow: fetch subscription (reqwest works fine on iOS) → build the Xray config
+// and the tunnel addresses (xray_apple.rs) → hand the JSON to Swift → Swift
+// saves the NE profile and starts the tunnel → we poll the session status
+// until connected or timed out.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
@@ -75,9 +76,22 @@ pub async fn is_connected_wait() -> bool {
 }
 
 /// Starts the tunnel for `server` and waits until NE reports "connected".
+///
+/// The routing profile and the person's tunnel settings are read here, like
+/// the desktop's `build_xray_config` does, so the extension runs the same
+/// rules as the Mac.
 pub async fn connect(server: &ServerConfig) -> Result<()> {
-    let config = crate::singbox::build_config(server)?;
-    let config_str = serde_json::to_string(&config)?;
+    if server.host().parse::<std::net::Ipv4Addr>().is_ok() {
+        // Not an error: it works on every network with IPv4. On an IPv6-only
+        // one (NAT64, App Review's own) only a NAME gets a synthesized IPv6
+        // address, so say why that network would fail, without the address.
+        crate::logger::log("warn", "ios-vpn", "node is an IPv4 literal: unreachable on IPv6-only (NAT64) networks");
+    }
+    let config_str = crate::xray_apple::provider_configuration(
+        server,
+        crate::subscription::last_routing().as_ref(),
+        &crate::tunnel_prefs::load(),
+    )?;
     let config_c = CString::new(config_str)
         .map_err(|_| anyhow!("config contains interior NUL byte"))?;
 

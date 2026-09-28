@@ -279,10 +279,12 @@ pub(crate) fn matches_transport_pref(server: &ServerConfig, pref: crate::tunnel_
     }
 }
 
-/// `sing_box`: the iOS build runs sing-box (`singbox.rs`), which has no XHTTP
-/// transport — `transport/` of SagerNet/sing-box has none as of 27.09.2026.
+/// `sing_box`: an engine without XHTTP (sing-box has none as of 27.09.2026).
 /// Built there, an XHTTP entry would go out as plain TCP and fail every time
-/// while looking like a dead node, so that build does not list it at all.
+/// while looking like a dead node, so such a build does not list it at all.
+/// No build passes `true` since 28.09.2026: the iOS extension runs Xray-core
+/// too (xray_apple.rs). The switch and its error code stay until a cleanup
+/// removes them together with their tests.
 ///
 /// `pub(crate)`: the Watafast manifest applies the exact same rule when it
 /// picks which candidate of a location this build can actually run.
@@ -823,10 +825,10 @@ async fn fetch_manifest_servers(sub_url: &str, lang_en: bool) -> Option<(Vec<Ser
         // speak for a non-active account, never a manifest.
         return None;
     }
-    // iOS runs sing-box, which has no XHTTP transport — the exact split
-    // `engine_supports_on` already draws for the subscription list.
+    // Every build runs Xray-core now (iOS too, xray_apple.rs), so no engine
+    // leaves XHTTP out: see `engine_supports_on`.
     let transport = crate::tunnel_prefs::load().transport;
-    let servers = manifest::build_servers(&verified, cfg!(target_os = "ios"), transport, lang_en);
+    let servers = manifest::build_servers(&verified, false, transport, lang_en);
     if servers.is_empty() {
         return None;
     }
@@ -1036,7 +1038,8 @@ fn interpret_response(
     body: &str,
     now: u64,
 ) -> Result<Subscription, AppError> {
-    interpret_response_on(host, status, headers, body, now, cfg!(target_os = "ios"))
+    // `false`: no build runs sing-box any more (see `engine_supports_on`).
+    interpret_response_on(host, status, headers, body, now, false)
 }
 
 /// The same, with the engine named: `sing_box` as in engine_supports_on.
@@ -1835,9 +1838,10 @@ pub fn last_routing() -> Option<RoutingRules> {
 /// Russian domains routed around the tunnel when the service told us nothing.
 ///
 /// A SEED, not a source of truth. It is used on a first run that could not
-/// reach the subscription, and by the iOS sing-box builder until that file is
-/// rewritten to take `RoutingRules`. Do not extend it: a domain added here and
-/// not to `scripts/build-ru-direct.mjs` recreates the two-lists problem.
+/// reach the subscription, on the Mac and in the iOS extension alike (both
+/// build from `build_xray_config_around`). Do not extend it: a domain added
+/// here and not to `scripts/build-ru-direct.mjs` recreates the two-lists
+/// problem.
 pub const RU_DIRECT_DOMAINS: &[&str] = &[
     "yandex.ru", "yandex.com", "yandex.net",
     "ya.ru",
@@ -1867,7 +1871,7 @@ pub const RU_DIRECT_DOMAINS: &[&str] = &[
 pub const TUNNEL_DNS: &str = "198.18.0.2";
 
 /// Networks routed around the tunnel when the service told us nothing.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 const SEED_DIRECT_IPS: &[&str] = &["geoip:private", "geoip:ru"];
 
 /// Build the xray runtime config for a VLESS node, using the routing rules the
@@ -1889,31 +1893,27 @@ pub fn build_xray_config_with_routing(cfg: &VlessConfig, routing: Option<&Routin
 }
 
 /// То же, но с настройками туннеля. Всё проверяемое живёт здесь.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub fn build_xray_config_with_routing_and_prefs(
     cfg: &VlessConfig,
     routing: Option<&RoutingRules>,
     prefs: &crate::tunnel_prefs::TunnelPrefs,
 ) -> Value {
+    build_xray_config_around(vless_outbound(cfg, prefs), true, routing, prefs)
+}
+
+/// Everything around the node's own outbound (`proxy`): DNS, routing and the
+/// helper outbounds. Split from the VLESS part so the Apple engine
+/// (xray_apple.rs) runs Hysteria2 under the very same rules. `block_quic`:
+/// rule 1 below, for a `proxy` that cannot carry UDP.
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
+pub(crate) fn build_xray_config_around(
+    proxy: Value,
+    block_quic: bool,
+    routing: Option<&RoutingRules>,
+    prefs: &crate::tunnel_prefs::TunnelPrefs,
+) -> Value {
     use serde_json::json;
-
-    let mut user = serde_json::Map::new();
-    user.insert("id".into(), json!(cfg.uuid));
-    user.insert("encryption".into(), json!(cfg.encryption));
-    // Vision only over TCP; the parser already drops it for XHTTP, and the
-    // builder does not rely on that.
-    if !cfg.flow.is_empty() && cfg.transport == VlessTransport::Tcp {
-        user.insert("flow".into(), json!(cfg.flow));
-    }
-
-    let mut reality = serde_json::Map::new();
-    reality.insert("serverName".into(), json!(cfg.sni));
-    reality.insert("fingerprint".into(), json!(cfg.fingerprint));
-    reality.insert("publicKey".into(), json!(cfg.public_key));
-    reality.insert("shortId".into(), json!(cfg.short_id));
-    if !cfg.spider_x.is_empty() {
-        reality.insert("spiderX".into(), json!(cfg.spider_x));
-    }
 
     let (direct_domains, direct_ips, domain_strategy) = match routing {
         Some(rules) => (
@@ -1933,12 +1933,14 @@ pub fn build_xray_config_with_routing_and_prefs(
 
     let mut rules: Vec<Value> = Vec::new();
     // 1. Block QUIC. Vision is TCP-only, so UDP/443 would leave the tunnel.
-    rules.push(json!({
-        "type": "field",
-        "outboundTag": "block",
-        "network": "udp",
-        "port": "443"
-    }));
+    if block_quic {
+        rules.push(json!({
+            "type": "field",
+            "outboundTag": "block",
+            "network": "udp",
+            "port": "443"
+        }));
+    }
     // 2. СОБСТВЕННЫЕ запросы имён xray - через узел, и только через него.
     //
     // Это лечение поломки, которая стоила нам 1,2 секунды на КАЖДОЕ новое
@@ -2025,7 +2027,7 @@ pub fn build_xray_config_with_routing_and_prefs(
     }
     // No catch-all: xray sends what matched nothing to the first outbound.
 
-    let outbounds = build_outbounds(cfg, user, reality, prefs);
+    let outbounds = build_outbounds(proxy, prefs);
 
     json!({
         "log": { "loglevel": "warning" },
@@ -2095,20 +2097,29 @@ pub fn build_xray_config_with_routing_and_prefs(
     })
 }
 
-/// Исходящие: узел, прямой выход, чёрная дыра, резолвер и - по желанию -
-/// дробильщик рукопожатия.
-///
-/// Вынесено отдельной функцией, потому что дробление вставляет ЛИШНИЙ
-/// исходящий и меняет настройки сокета у основного: собирать это вперемешку с
-/// маршрутизацией в одном литерале стало нечитаемо.
-#[cfg(any(target_os = "macos", test))]
-fn build_outbounds(
-    cfg: &VlessConfig,
-    user: serde_json::Map<String, Value>,
-    reality: serde_json::Map<String, Value>,
-    prefs: &crate::tunnel_prefs::TunnelPrefs,
-) -> Vec<Value> {
+/// The node itself: VLESS + REALITY, over TCP (Vision) or XHTTP, tagged
+/// `proxy`. Shared with the Apple engine (xray_apple.rs).
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
+pub(crate) fn vless_outbound(cfg: &VlessConfig, prefs: &crate::tunnel_prefs::TunnelPrefs) -> Value {
     use serde_json::json;
+
+    let mut user = serde_json::Map::new();
+    user.insert("id".into(), json!(cfg.uuid));
+    user.insert("encryption".into(), json!(cfg.encryption));
+    // Vision only over TCP; the parser already drops it for XHTTP, and the
+    // builder does not rely on that.
+    if !cfg.flow.is_empty() && cfg.transport == VlessTransport::Tcp {
+        user.insert("flow".into(), json!(cfg.flow));
+    }
+
+    let mut reality = serde_json::Map::new();
+    reality.insert("serverName".into(), json!(cfg.sni));
+    reality.insert("fingerprint".into(), json!(cfg.fingerprint));
+    reality.insert("publicKey".into(), json!(cfg.public_key));
+    reality.insert("shortId".into(), json!(cfg.short_id));
+    if !cfg.spider_x.is_empty() {
+        reality.insert("spiderX".into(), json!(cfg.spider_x));
+    }
 
     let mut stream = serde_json::Map::new();
     match &cfg.transport {
@@ -2139,17 +2150,30 @@ fn build_outbounds(
         stream.insert("sockopt".into(), json!({ "dialerProxy": "fragment" }));
     }
 
+    json!({
+        "tag": "proxy",
+        "protocol": "vless",
+        "settings": { "vnext": [{
+            "address": cfg.host,
+            "port": cfg.port,
+            "users": [ Value::Object(user) ]
+        }]},
+        "streamSettings": Value::Object(stream)
+    })
+}
+
+/// Исходящие: узел, прямой выход, чёрная дыра, резолвер и - по желанию -
+/// дробильщик рукопожатия.
+///
+/// Вынесено отдельной функцией, потому что дробление вставляет ЛИШНИЙ
+/// исходящий и меняет настройки сокета у основного: собирать это вперемешку с
+/// маршрутизацией в одном литерале стало нечитаемо.
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
+fn build_outbounds(proxy: Value, prefs: &crate::tunnel_prefs::TunnelPrefs) -> Vec<Value> {
+    use serde_json::json;
+
     let mut outbounds = vec![
-        json!({
-            "tag": "proxy",
-            "protocol": "vless",
-            "settings": { "vnext": [{
-                "address": cfg.host,
-                "port": cfg.port,
-                "users": [ Value::Object(user) ]
-            }]},
-            "streamSettings": Value::Object(stream)
-        }),
+        proxy,
         json!({ "tag": "direct", "protocol": "freedom" }),
         json!({ "tag": "block",  "protocol": "blackhole" }),
         // Отвечает на запросы имён сам, по разделу `dns` выше.
