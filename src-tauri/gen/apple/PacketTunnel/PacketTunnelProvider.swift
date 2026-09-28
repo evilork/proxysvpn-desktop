@@ -57,6 +57,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let iface = PlatformInterface(provider: self)
         platformInterface = iface
 
+        // iOS kills a packet tunnel extension that grows past ~50 MB. This
+        // makes sing-box cap the Go heap and return memory under pressure,
+        // as sing-box-for-apple does; a stopgap until the engine is replaced.
+        LibboxSetMemoryLimit(true)
+
         // A C function with NSError** is not imported as `throws`.
         var serviceError: NSError?
         guard let service = LibboxNewService(config, iface, &serviceError) else {
