@@ -15,11 +15,19 @@
 // Finished rungs get a tick, the current one gets a spinner, FUTURE RUNGS ARE
 // NOT SHOWN — a visible list of everything still to try reads as "it is all
 // broken". There is no seconds counter either: a ticking number is pressure.
+//
+// A screen reader hears the same thing from a live line: each rung's own
+// sentence as it is reached, then how it ended. The rungs have no pass or
+// fail of their own — a tick only means "moved on" — so nothing is claimed
+// about them, and the rung sentences already say what is being done
+// ("Пробую другой способ связи"); a "— выполняется" after them would only
+// contradict the ones written in the past tense.
 
 import { useEffect, useState } from "react";
 
 import type { MsgKey } from "../i18n";
 import type { StatePayload } from "../types";
+import LiveRegion from "./LiveRegion";
 import { Sheet, Spinner, useLatest, useUi } from "./ui";
 
 /** [starts at ms, line]. Mirrors the ladder in DESIGN.md М3. */
@@ -70,6 +78,15 @@ export default function HealingSheet({
 
   const reached = RUNGS.filter(([at]) => elapsed >= at);
   const visible = reached.length > 0 ? reached : [RUNGS[0]];
+  const currentKey = visible[visible.length - 1][1];
+  const announcement =
+    outcome === "ok"
+      ? t("heal.ok")
+      : outcome === "fail"
+        ? t("heal.fail")
+        : healing
+          ? t(currentKey)
+          : "";
 
   return (
     <Sheet title={t("heal.title")} onClose={onCancel}>
@@ -99,6 +116,8 @@ export default function HealingSheet({
             {t("heal.cancel")}
           </button>
         ) : null}
+
+        <LiveRegion text={announcement} />
       </div>
     </Sheet>
   );

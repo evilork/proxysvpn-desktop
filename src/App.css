@@ -1086,6 +1086,22 @@ button.row:hover {
 
 /* --- Small parts ---------------------------------------------------------- */
 
+/* Read by VoiceOver and friends, invisible on screen: the live lines in [4]
+   and [8] that say out loud what a tick or a cross says to the eye. Not
+   `display: none`, which would hide it from them too. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .segmented {
   display: inline-flex;
   /* At twice the text size "Как в системе · Светлое · Тёмное" is wider than

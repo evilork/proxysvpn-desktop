@@ -62,6 +62,14 @@ const ru = {
   "unit.kb": "{n} КБ",
   "unit.mb": "{n} МБ",
 
+  // ── Accessibility ─────────────────────────────────────────────────────────
+  // Heard, never seen: the live line in [8] that says what a tick, a cross or
+  // a spinner says to the eye. {name} is the row's own line. ([4] speaks its
+  // rung sentences as they are - they already say what is being done.)
+  "a11y.check.passed": "{name} — в порядке",
+  "a11y.check.failed": "{name} — есть проблема",
+  "a11y.check.running": "{name} — выполняется",
+
   // ── [2] Main screen — the shield ──────────────────────────────────────────
   "main.off.title": "Защита выключена",
   "main.off.hint": "Нажмите, чтобы включить",
@@ -601,6 +609,11 @@ const en: Partial<Record<MsgKey, string>> = {
   "time.days": "{n} day|{n} days",
   "unit.kb": "{n} KB",
   "unit.mb": "{n} MB",
+
+  // ── Accessibility ─────────────────────────────────────────────────────────
+  "a11y.check.passed": "{name}: passed",
+  "a11y.check.failed": "{name}: failed",
+  "a11y.check.running": "{name}: in progress",
 
   "main.off.title": "Protection is off",
   "main.off.hint": "Tap to turn it on",

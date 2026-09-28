@@ -18,12 +18,19 @@
 // App Store builds do not open the cabinet (it sells top-ups, and the app
 // ships without in-app purchases), so there the line says the check is not
 // available yet and no button points anywhere.
+//
+// The ticks and crosses are for the eye only (aria-hidden). A screen reader
+// hears the same result from a live line: "running" once when a run starts -
+// every row comes back from one call, so there is no per-row progress to
+// report - then each row that passed or failed, in the order drawn, then the
+// verdict.
 
 import { useCallback, useState } from "react";
 
 import { bridge, type CheckReport, type CheckRow, type CheckRowId } from "../bridge";
 import { IS_APPSTORE } from "../dist";
 import type { MsgKey } from "../i18n";
+import LiveRegion from "./LiveRegion";
 import { Screen, Spinner, useUi } from "./ui";
 
 const DEVICE_ROWS: CheckRowId[] = [
@@ -134,6 +141,30 @@ export default function CheckScreen({
   const canFix = service?.available === true && service.canFix;
   const verdictId = report?.verdict ?? null;
   const allGood = stage === "done" && report !== null && verdictId === null;
+  const verdictLine = allGood
+    ? t("check.allGood")
+    : verdictId !== null
+      ? t("check.verdict", { text: t(VERDICT_KEY[verdictId]) })
+      : t("check.serviceFailed");
+
+  const announcement = (): string => {
+    if (stage === "running") return t("a11y.check.running", { name: t("check.title") });
+    if (stage === "fixing") return t("a11y.check.running", { name: t("check.fix") });
+    if (stage !== "done") return "";
+    const said: string[] = [];
+    const sayRows = (ids: CheckRowId[], rows: CheckRow[] | null) => {
+      for (const id of ids) {
+        const { state } = rowState(id, rows);
+        // Skipped and unchecked rows carry no result; the screen shows none.
+        if (state === "pass") said.push(t("a11y.check.passed", { name: t(ROW_KEY[id]) }));
+        if (state === "fail") said.push(t("a11y.check.failed", { name: t(ROW_KEY[id]) }));
+      }
+    };
+    sayRows(DEVICE_ROWS, report?.device ?? null);
+    if (service?.available) sayRows(SERVICE_ROWS, service.rows);
+    said.push(verdictLine);
+    return said.join(". ");
+  };
 
   return (
     <Screen
@@ -214,20 +245,16 @@ export default function CheckScreen({
 
       {stage === "done" ? (
         <div className="verdict" data-bad={verdictId !== null ? "true" : "false"}>
+          <p className="body">{verdictLine}</p>
           {allGood ? (
-            <>
-              <p className="body">{t("check.allGood")}</p>
-              <p className="small dim" style={{ marginTop: 6 }}>
-                {t("check.allGoodNote")}
-              </p>
-            </>
-          ) : verdictId !== null ? (
-            <p className="body">{t("check.verdict", { text: t(VERDICT_KEY[verdictId]) })}</p>
-          ) : (
-            <p className="body">{t("check.serviceFailed")}</p>
-          )}
+            <p className="small dim" style={{ marginTop: 6 }}>
+              {t("check.allGoodNote")}
+            </p>
+          ) : null}
         </div>
       ) : null}
+
+      <LiveRegion text={announcement()} />
     </Screen>
   );
 }
