@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop",
+  "description": "Main window, desktop only: tauri-plugin-notification is linked on desktop only (Cargo.toml), and an iOS build refuses a permission of a plugin it does not link",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["main"],
+  "permissions": [
+    "notification:default"
+  ]
+}
