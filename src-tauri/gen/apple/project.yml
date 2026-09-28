@@ -1,6 +1,5 @@
 name: proxysvpn-desktop
 options:
-  bundleIdPrefix: com.proxysvpn.desktop
   deploymentTarget:
     # Libbox (sing-box) requires iOS 15+.
     iOS: 15.0
@@ -8,11 +7,30 @@ fileGroups: [../../src]
 configs:
   debug: debug
   release: release
+settings:
+  base:
+    # The one line to change for another bundle id: the app is
+    # $(PVPN_BUNDLE_ID), the tunnel extension $(PVPN_BUNDLE_ID).PacketTunnel,
+    # and VpnBridge.swift derives the provider id from the running app.
+    # `tauri ios build/dev` rewrites the app target's PRODUCT_BUNDLE_IDENTIFIER
+    # from the tauri config, so a new value also goes into "identifier" of
+    # src-tauri/tauri.ios.conf.json; scripts/setup-ios.sh refuses a mismatch.
+    PVPN_BUNDLE_ID: com.proxysvpn.desktop
+    # App and extension must carry the same versions or App Store Connect
+    # warns on upload. MARKETING_VERSION follows "version" in tauri.conf.json
+    # (setup-ios.sh checks); `tauri ios build` overwrites
+    # CURRENT_PROJECT_VERSION in both targets through agvtool (docs/IOS.md).
+    MARKETING_VERSION: 0.3.1
+    CURRENT_PROJECT_VERSION: 1
+    # Expanded by xcodegen from the environment; empty is fine for the
+    # simulator, device and App Store builds need the paid team's id.
+    DEVELOPMENT_TEAM: ${PVPN_TEAM_ID}
+    CODE_SIGN_STYLE: Automatic
 settingGroups:
   app:
     base:
       PRODUCT_NAME: ProxysVPN
-      PRODUCT_BUNDLE_IDENTIFIER: com.proxysvpn.desktop
+      PRODUCT_BUNDLE_IDENTIFIER: $(PVPN_BUNDLE_ID)
       SWIFT_VERSION: "5.0"
 targetTemplates:
   app:
@@ -53,8 +71,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.1.0
-        CFBundleVersion: "0.1.0"
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         NSMotionUsageDescription: "Чтобы глаз на эмблеме держал взгляд, когда вы поворачиваете телефон. Показания датчика не покидают устройство и никуда не передаются."
@@ -106,8 +124,8 @@ targets:
       path: PacketTunnel/Info.plist
       properties:
         CFBundleDisplayName: ProxysVPN Tunnel
-        CFBundleShortVersionString: 0.1.0
-        CFBundleVersion: "0.1.0"
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
@@ -118,7 +136,7 @@ targets:
           - packet-tunnel-provider
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.proxysvpn.desktop.PacketTunnel
+        PRODUCT_BUNDLE_IDENTIFIER: $(PVPN_BUNDLE_ID).PacketTunnel
         PRODUCT_NAME: PacketTunnel
         SWIFT_VERSION: "5.0"
         ENABLE_BITCODE: false

@@ -22,8 +22,11 @@ private let bridgeLog = OSLog(subsystem: "com.proxysvpn.desktop", category: "Vpn
 final class VpnController {
     static let shared = VpnController()
 
-    /// Must match PRODUCT_BUNDLE_IDENTIFIER of the PacketTunnel target.
-    static let providerBundleId = "com.proxysvpn.desktop.PacketTunnel"
+    /// PRODUCT_BUNDLE_IDENTIFIER of the PacketTunnel target. project.yml
+    /// derives it as the app's id + ".PacketTunnel" (Apple requires the
+    /// prefix), so deriving it here too keeps a bundle id switch to the one
+    /// line in project.yml instead of a second literal to forget.
+    static let providerBundleId = (Bundle.main.bundleIdentifier ?? "") + ".PacketTunnel"
 
     private enum LoadState { case notLoaded, loading, loaded }
 
