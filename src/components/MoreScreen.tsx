@@ -28,12 +28,24 @@
 // reflects state through `NEVPNStatus` alone, no local notifications. A
 // toggle nobody can feel is the same anti-pattern as launch-at-login above,
 // so it is hidden on iOS for the same reason, not shown-and-disabled.
+//
+// "О приложении" is the second group: the privacy policy and terms (5.1.1(i)),
+// the data notice to read again (5.4), support, the open-source licences, and
+// account deletion (5.1.1(v)) - which opens the site's deletion page only
+// after saying plainly what goes with the account. "Отвязать" below it says
+// that the account stays, so the two cannot be mistaken for each other.
+//
+// App Store builds lose the footer's cabinet button (the cabinet sells top-ups
+// and the app ships without in-app purchases, guideline 3.1.1); the version
+// stays as plain text.
 
 import { useCallback, useEffect, useState } from "react";
 
 import { bridge, type AppInfo, type RoutingState, type SubState } from "../bridge";
+import { IS_APPSTORE } from "../dist";
 import { LANGS, LANG_NAME, formatTime, type Lang } from "../i18n";
-import { IconChevron, Screen, Spinner, useUi, type ThemePref } from "./ui";
+import { ACCOUNT_DELETE_URL, privacyUrl, termsUrl } from "../legal";
+import { IconChevron, NavRow, Screen, Sheet, Spinner, useUi, type ThemePref } from "./ui";
 
 const THEME_OPTIONS: [ThemePref, "more.theme.system" | "more.theme.light" | "more.theme.dark"][] = [
   ["system", "more.theme.system"],
@@ -57,6 +69,9 @@ export default function MoreScreen({
   onTimeline,
   onUnlinked,
   onOpenCabinet,
+  onDataNotice,
+  onSupport,
+  onLicenses,
 }: {
   info: AppInfo | null;
   sub: SubState | null;
@@ -79,13 +94,20 @@ export default function MoreScreen({
   onTimeline: () => void;
   /** The link was removed from this device; the app returns to [1]. */
   onUnlinked: () => void;
+  /** Direct builds only: App Store builds render no cabinet button. */
   onOpenCabinet: () => void;
+  /** The data notice, to read again; nothing is recorded. */
+  onDataNotice: () => void;
+  /** App.tsx knows the address: the support page in App Store builds. */
+  onSupport: () => void;
+  onLicenses: () => void;
 }) {
-  const { t, lang, toast } = useUi();
+  const { t, lang, toast, openExternal } = useUi();
   const [routing, setRouting] = useState<RoutingState | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number | undefined>(sub?.lastUpdatedAt);
   const [confirmUnlink, setConfirmUnlink] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [notifyEnabled, setNotifyEnabled] = useState<boolean | null>(null);
   // See the header comment: iOS has no code path that ever reads this
   // preference, so the row (and the read that feeds it) does not exist there.
@@ -157,9 +179,15 @@ export default function MoreScreen({
       onClose={onClose}
       footer={
         <>
-          <button type="button" className="btn btn-quiet" onClick={onOpenCabinet}>
-            {t("app.name")} {info?.version ?? ""} · {t("more.cabinet")}
-          </button>
+          {IS_APPSTORE ? (
+            <p className="small faint" style={{ textAlign: "center" }}>
+              {t("app.name")} {info?.version ?? ""}
+            </p>
+          ) : (
+            <button type="button" className="btn btn-quiet" onClick={onOpenCabinet}>
+              {t("app.name")} {info?.version ?? ""} · {t("more.cabinet")}
+            </button>
+          )}
           <p className="small faint" style={{ textAlign: "center" }}>
             {t("more.geoNote")}
           </p>
@@ -211,6 +239,8 @@ export default function MoreScreen({
           <span className="row-side">
             <input
               type="checkbox"
+              role="switch"
+              aria-checked={autoConnect}
               checked={autoConnect}
               onChange={(e) => onAutoConnect(e.target.checked)}
             />
@@ -226,6 +256,8 @@ export default function MoreScreen({
             <span className="row-side">
               <input
                 type="checkbox"
+                role="switch"
+                aria-checked={notifyEnabled ?? true}
                 checked={notifyEnabled ?? true}
                 disabled={notifyEnabled === null}
                 onChange={(e) => void setNotify(e.target.checked)}
@@ -302,6 +334,25 @@ export default function MoreScreen({
       </div>
 
       <div className="section">
+        <span className="caps">{t("about.title")}</span>
+        <div className="list">
+          <NavRow title={t("notice.privacy")} onClick={() => openExternal(privacyUrl(lang))} />
+          <NavRow title={t("notice.terms")} onClick={() => openExternal(termsUrl(lang))} />
+          <NavRow title={t("notice.title")} onClick={onDataNotice} />
+          <NavRow title={t("about.support")} onClick={onSupport} />
+          <NavRow title={t("about.licenses")} onClick={onLicenses} />
+          <button type="button" className="row" onClick={() => setConfirmDelete(true)}>
+            <span className="row-main">
+              <span className="row-title danger">{t("about.delete")}</span>
+            </span>
+            <span className="row-side">
+              <IconChevron />
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <div className="section">
         {confirmUnlink ? (
           <>
             <p className="small dim">{t("more.unlinkConfirm")}</p>
@@ -325,6 +376,34 @@ export default function MoreScreen({
           </button>
         )}
       </div>
+
+      {confirmDelete ? (
+        <Sheet title={t("about.delete")} onClose={() => setConfirmDelete(false)}>
+          <div className="sheet-body">
+            <h2 className="h2">{t("about.delete")}</h2>
+            <p className="body dim">{t("about.deleteConfirm")}</p>
+            <div className="btn-row" style={{ marginTop: 12 }}>
+              <button
+                type="button"
+                className="btn btn-outline"
+                onClick={() => setConfirmDelete(false)}
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => {
+                  setConfirmDelete(false);
+                  openExternal(ACCOUNT_DELETE_URL);
+                }}
+              >
+                {t("about.deleteYes")}
+              </button>
+            </div>
+          </div>
+        </Sheet>
+      ) : null}
     </Screen>
   );
 }

@@ -66,6 +66,8 @@ import TimelineScreen from "./components/TimelineScreen";
 import WhereScreen from "./components/WhereScreen";
 import { Toast, UiProvider, type ThemePref, type UiContextValue } from "./components/ui";
 import { supportUrl as supportPageUrl } from "./legal";
+import DataNoticeScreen from "./components/DataNoticeScreen";
+import LicensesScreen from "./components/LicensesScreen";
 
 type Route =
   | "pair"
@@ -79,7 +81,9 @@ type Route =
   | "report"
   | "where"
   | "tunnel"
-  | "rules";
+  | "rules"
+  | "dataNotice"
+  | "licenses";
 
 const TOAST_MS = 4000;
 /** Recovery is silent below this; past it the sheet may be opened. */
@@ -543,8 +547,16 @@ export default function App() {
               void refreshSubState();
             }}
             onOpenCabinet={() => openExternal(cabinetUrl)}
+            onDataNotice={() => push("dataNotice")}
+            onSupport={() => openExternal(supportUrl)}
+            onLicenses={() => push("licenses")}
           />
         );
+      case "dataNotice":
+        // Read again from More: nothing is recorded, it was accepted once.
+        return <DataNoticeScreen mode="readOnly" platform={info?.platform} onClose={pop} />;
+      case "licenses":
+        return <LicensesScreen platform={info?.platform} onClose={pop} />;
       case "timeline":
         return (
           <TimelineScreen

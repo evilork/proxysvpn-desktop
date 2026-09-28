@@ -508,9 +508,11 @@ const ru = {
   "more.theme.system": "Как в системе",
   "more.theme.light": "Светлое",
   "more.theme.dark": "Тёмное",
-  "more.unlink": "Отвязать ссылку от этого устройства",
+  // Says that the account stays: "Удалить аккаунт" (О приложении) is the other
+  // button, and the two must not read alike.
+  "more.unlink": "Отвязать это устройство — аккаунт останется",
   "more.unlinkConfirm":
-    "Ссылка будет удалена с этого устройства. Подписка и оплата не тронуты — ссылку можно добавить снова.",
+    "Ссылка будет удалена только с этого устройства. Аккаунт, другие устройства и доступ останутся — ссылку можно добавить снова.",
   "more.unlinkYes": "Отвязать",
   "more.cabinet": "Личный кабинет",
   "more.geoNote": "Списки маршрутизации уже внутри приложения — ничего не скачивается",
@@ -543,7 +545,14 @@ const ru = {
   "notice.terms": "Условия использования",
   "notice.continue": "Продолжить",
   "about.title": "О приложении",
+  "about.support": "Поддержка",
   "about.licenses": "Лицензии открытого ПО",
+  "about.delete": "Удалить аккаунт",
+  // The owner's wording: what goes, and that it does not come back. The page
+  // that opens next deletes; the app only warns first.
+  "about.deleteConfirm":
+    "Аккаунт удалится вместе со всеми устройствами, остатком баланса и PRO. Восстановить его будет нельзя.",
+  "about.deleteYes": "Удалить",
   "lic.intro":
     "В ProxysVPN работают открытые компоненты. Нажмите на любой — покажем текст его лицензии и где лежит исходный код.",
   "lic.count": "{n} компонент|{n} компонента|{n} компонентов",
@@ -978,9 +987,9 @@ const en: Partial<Record<MsgKey, string>> = {
   "more.theme.system": "Follow the system",
   "more.theme.light": "Light",
   "more.theme.dark": "Dark",
-  "more.unlink": "Unlink this device from the subscription",
+  "more.unlink": "Unlink this device — your account stays",
   "more.unlinkConfirm":
-    "The link will be removed from this device. The subscription and payment are untouched — you can add it again.",
+    "The link is removed from this device only. Your account, other devices and access stay — you can add the link again.",
   "more.unlinkYes": "Unlink",
   "more.cabinet": "Your account",
   "more.geoNote": "Routing lists are already inside the app — nothing is downloaded",
@@ -1007,7 +1016,12 @@ const en: Partial<Record<MsgKey, string>> = {
   "notice.terms": "Terms of Use",
   "notice.continue": "Continue",
   "about.title": "About",
+  "about.support": "Support",
   "about.licenses": "Open-source licences",
+  "about.delete": "Delete account",
+  "about.deleteConfirm":
+    "Your account will be deleted together with all its devices, the remaining balance and PRO. It cannot be restored.",
+  "about.deleteYes": "Delete",
   "lic.intro":
     "ProxysVPN is built with open-source components. Tap any of them to see its licence and where its source code is.",
   "lic.count": "{n} component|{n} components",
