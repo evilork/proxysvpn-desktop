@@ -27,6 +27,7 @@ import {
 import { IS_APPSTORE, purchaseLinksAllowed } from "./dist";
 import { isAllowedExternal } from "./externalUrl";
 import { makeT, type Lang } from "./i18n";
+import { setNativeTilt } from "./gaze";
 import { detectLang } from "./lang";
 import {
   AUTO_CONNECT_KEY,
@@ -69,6 +70,18 @@ import { Toast, UiProvider, type ThemePref, type UiContextValue } from "./compon
 import { supportUrl as supportPageUrl } from "./legal";
 import DataNoticeScreen from "./components/DataNoticeScreen";
 import LicensesScreen from "./components/LicensesScreen";
+
+// The eye on the emblem follows device tilt the way it follows the mouse on
+// the Mac. Inside the app the tilt comes from the core (CoreMotion on iPhone
+// and iPad, no permission prompt); on the Mac the core answers "no sensor" and
+// the eye stays on the pointer. Wired once, before any eye is shown.
+if (IS_TAURI) {
+  setNativeTilt({
+    start: () => bridge.tiltStart(),
+    stop: () => bridge.tiltStop(),
+    subscribe: (fn) => bridge.onTilt(fn),
+  });
+}
 
 type Route =
   | "pair"

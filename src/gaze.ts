@@ -5,9 +5,11 @@
 // Ровно одно число на две оси, в долях от -1 до 1, и один источник правды о
 // том, откуда оно берётся:
 //
-//   телефон  — наклон корпуса (DeviceOrientationEvent). Зрачок смещается
-//              ПРОТИВ наклона, поэтому взгляд остаётся там же, где был, пока
-//              поворачивается сам аппарат.
+//   телефон  — наклон корпуса. В приложении на iPhone и iPad - из CoreMotion
+//              через ядро (motion.rs, MotionBridge.swift), в браузере - из
+//              DeviceOrientationEvent. Зрачок смещается ПРОТИВ наклона,
+//              поэтому взгляд остаётся там же, где был, пока поворачивается
+//              сам аппарат.
 //   десктоп  — положение курсора. Гироскопа нет, а «смотреть на человека» там
 //              значит смотреть на его указатель.
 //
@@ -23,8 +25,10 @@
 // спрашивала про движение и ориентацию в ответ на кнопку «Разрешить VPN» или
 // «Продолжить» - ради украшения, посреди настройки (пункт 5.1.1 правил Apple: просить
 // только то, что нужно для дела). В сборках для App Store вопроса нет вовсе:
-// датчик не слушается и не запрашивается, зрачок следит за касанием и
-// указателем.
+// веб-датчик не слушается и не запрашивается, а наклон приходит из CoreMotion
+// самого приложения - ему разрешение не нужно, и показания не покидают
+// устройство (владелец 28.09.2026: «чтобы глаз двигался от наклона, как с
+// курсором на маке»).
 
 import { IS_APPSTORE } from "./dist";
 
@@ -71,8 +75,17 @@ const SETTLED_SPEED = 0.02;
 /** Потолок шага. Вкладка была свёрнута - не выстреливать глазом на полкадра. */
 const MAX_STEP_SEC = 1 / 30;
 
-/** Скорость сползания базового угла за кадр: 20 с при 60 к/с. */
-const BASE_DRIFT = 1 / (20 * 60);
+/**
+ * Постоянная времени, за которую базовый угол догоняет текущий, в секундах.
+ *
+ * По времени, а не «за показание»: веб-датчик шлёт 60 показаний в секунду, а
+ * датчик приложения - 30 и только когда угол сдвинулся (плюс контрольное раз
+ * в 200 мс). Доля «за показание» при разной частоте дала бы разную позу.
+ */
+const BASE_DRIFT_SEC = 20;
+
+/** Потолок шага сползания: после паузы в показаниях не прыгать базой. */
+const MAX_DRIFT_STEP_SEC = 0.25;
 
 export interface Gaze {
   /** -1 влево, 1 вправо. */
@@ -95,6 +108,28 @@ export interface GazeReport {
   lastTilt: { beta: number; gamma: number } | null;
   listeners: number;
   source: "sensor" | "pointer" | "none";
+  /** Датчик приложения: null - не пробовали, false - его нет, true - идёт. */
+  native: boolean | null;
+}
+
+/**
+ * Наклон от самого приложения (CoreMotion через ядро), когда оно есть.
+ *
+ * Внедряется снаружи (App.tsx), а не импортом моста: модуль остаётся чистым,
+ * и тесты гоняют его без Tauri.
+ */
+export interface NativeTilt {
+  /** false - датчика нет (Mac, браузер). */
+  start(): Promise<boolean>;
+  stop(): Promise<void>;
+  subscribe(fn: (reading: { beta: number; gamma: number }) => void): () => void;
+}
+
+let nativeTilt: NativeTilt | null = null;
+
+/** Подключить наклон приложения. Вызывать до первого показа глаза. */
+export function setNativeTilt(source: NativeTilt | null): void {
+  nativeTilt = source;
 }
 
 /**
@@ -298,6 +333,15 @@ class GazeSource {
   private tiltEvents = 0;
   private pointerEvents = 0;
   private lastTilt: { beta: number; gamma: number } | null = null;
+  private lastTiltAt = 0;
+  /** Отписка от наклона приложения, пока он подключён. */
+  private nativeOff: (() => void) | null = null;
+  /**
+   * Номер последнего запуска датчика. Ответ на `start` может прийти, когда
+   * глаз уже закрыли или запустили снова, - тогда он чужой и не считается.
+   */
+  private nativeRun = 0;
+  private nativeOn: boolean | null = null;
 
   /** Что источник видит на самом деле. Для отладки на чужом устройстве. */
   report(): GazeReport {
@@ -312,6 +356,7 @@ class GazeSource {
       lastTilt: this.lastTilt,
       listeners: this.listeners.size,
       source: this.fromSensor ? "sensor" : this.pointerEvents > 0 ? "pointer" : "none",
+      native: this.nativeOn,
     };
   }
 
@@ -328,8 +373,10 @@ class GazeSource {
   private bind(): void {
     if (this.bound || typeof window === "undefined") return;
     this.bound = true;
-    // App Store: датчик не слушаем вовсе - только касание и указатель.
-    if (!IS_APPSTORE) window.addEventListener("deviceorientation", this.onTilt);
+    // Датчик приложения главнее веб-датчика: ему не нужно разрешение. Без
+    // приложения (браузер) - веб-датчик, но не в сборке для App Store.
+    if (nativeTilt) this.startNative(nativeTilt);
+    else if (!IS_APPSTORE) window.addEventListener("deviceorientation", this.onTilt);
     window.addEventListener("pointermove", this.onPointer, { passive: true });
     window.addEventListener("pointerout", this.onPointerOut, { passive: true });
     document.addEventListener("visibilitychange", this.onVisibility);
@@ -339,6 +386,7 @@ class GazeSource {
     if (!this.bound) return;
     this.bound = false;
     window.removeEventListener("deviceorientation", this.onTilt);
+    this.stopNative();
     window.removeEventListener("pointermove", this.onPointer);
     window.removeEventListener("pointerout", this.onPointerOut);
     document.removeEventListener("visibilitychange", this.onVisibility);
@@ -350,6 +398,7 @@ class GazeSource {
     this.vy = 0;
     this.lastTs = 0;
     this.base = null;
+    this.lastTiltAt = 0;
     this.fromSensor = false;
   }
 
@@ -358,17 +407,72 @@ class GazeSource {
     // заново, чтобы глаз не остался увезённым в сторону.
     if (document.visibilityState === "hidden") {
       this.base = null;
+      this.lastTiltAt = 0;
       this.target = { x: 0, y: 0 };
       this.run();
+      // Свёрнутое приложение датчик не держит: батарея дороже украшения.
+      this.stopNative();
+    } else if (this.bound && nativeTilt && !this.nativeOff && this.nativeOn !== false) {
+      // Вернулись в приложение - датчик снова нужен. Где его нет (Mac), не
+      // спрашиваем повторно.
+      this.startNative(nativeTilt);
     }
+  };
+
+  private startNative(source: NativeTilt): void {
+    const run = ++this.nativeRun;
+    this.nativeOff = source.subscribe(this.onNativeTilt);
+    source
+      .start()
+      .then((on) => {
+        if (run !== this.nativeRun) {
+          // Пока ждали ответа, глаз закрыли: датчик больше никому не нужен.
+          if (on && !this.nativeOff) void source.stop().catch(() => undefined);
+          return;
+        }
+        this.nativeOn = on;
+        if (!on) this.dropNative();
+      })
+      .catch(() => {
+        // Ядро не ответило - глаз просто остаётся на касании и указателе.
+        if (run === this.nativeRun) {
+          this.nativeOn = false;
+          this.dropNative();
+        }
+      });
+  }
+
+  private stopNative(): void {
+    if (!this.nativeOff) return;
+    this.nativeRun += 1;
+    this.dropNative();
+    if (nativeTilt) void nativeTilt.stop().catch(() => undefined);
+  }
+
+  private dropNative(): void {
+    this.nativeOff?.();
+    this.nativeOff = null;
+  }
+
+  private onNativeTilt = (reading: { beta: number; gamma: number }): void => {
+    this.applyTilt(reading.beta, reading.gamma);
   };
 
   private onTilt = (e: DeviceOrientationEvent): void => {
     const { beta, gamma } = e;
     if (beta === null || gamma === null) return;
+    this.applyTilt(beta, gamma);
+  };
+
+  /** Общий путь для обоих датчиков: одни углы, одни правила. */
+  private applyTilt(beta: number, gamma: number): void {
     this.tiltEvents += 1;
     this.lastTilt = { beta, gamma };
     this.fromSensor = true;
+
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const dt = this.lastTiltAt ? Math.min((now - this.lastTiltAt) / 1000, MAX_DRIFT_STEP_SEC) : 0;
+    this.lastTiltAt = now;
 
     if (!this.base) {
       this.base = { beta, gamma };
@@ -379,13 +483,14 @@ class GazeSource {
 
     // Базовый угол медленно ползёт за текущим: быстрый наклон глаз
     // отрабатывает, смену позы - нет.
+    const drift = Math.min(1, dt / BASE_DRIFT_SEC);
     this.base = {
-      beta: this.base.beta + (beta - this.base.beta) * BASE_DRIFT,
-      gamma: this.base.gamma + (gamma - this.base.gamma) * BASE_DRIFT,
+      beta: this.base.beta + (beta - this.base.beta) * drift,
+      gamma: this.base.gamma + (gamma - this.base.gamma) * drift,
     };
 
     this.run();
-  };
+  }
 
   private onPointer = (e: PointerEvent): void => {
     this.pointerEvents += 1;

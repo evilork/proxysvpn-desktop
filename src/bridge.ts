@@ -67,6 +67,7 @@ import {
   type MetricPayload,
   type StatePayload,
   type SubMeta,
+  type TiltReading,
   type VpnSnapshot,
   type VpnStep,
 } from "./types";
@@ -336,6 +337,16 @@ export interface CoreBridge {
   openExternal(url: string): Promise<void>;
   readClipboard(): Promise<string>;
   writeClipboard(text: string): Promise<void>;
+
+  /**
+   * Device tilt for the eye on the emblem: native CoreMotion on iPhone and
+   * iPad, no permission prompt. `false` - no tilt sensor here (the Mac, the
+   * browser preview); the eye then stays on the pointer.
+   */
+  tiltStart(): Promise<boolean>;
+  tiltStop(): Promise<void>;
+  /** Readings while started. Returns the unsubscribe. */
+  onTilt(fn: (tilt: TiltReading) => void): () => void;
 }
 
 /** An `AppError` wrapped in a real Error, so `throw` and `catch` behave. */
@@ -538,6 +549,31 @@ class TauriBridge implements CoreBridge {
     } catch (raw) {
       throw new CoreError(parseAppError(raw));
     }
+  }
+  tiltStart(): Promise<boolean> {
+    return call<boolean>("motion_start");
+  }
+  tiltStop(): Promise<void> {
+    return call<void>("motion_stop");
+  }
+  onTilt(fn: (tilt: TiltReading) => void): () => void {
+    let disposed = false;
+    let unlisten: UnlistenFn | null = null;
+    void listen<TiltReading>(EV.tilt, (event) => fn(event.payload))
+      .then((handle) => {
+        // Same race as in `subscribe`: the eye can close before `listen`
+        // resolves.
+        if (disposed) handle();
+        else unlisten = handle;
+      })
+      .catch(() => {
+        // No event, no tilt: the eye keeps following the pointer.
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+      unlisten = null;
+    };
   }
 }
 
@@ -1248,6 +1284,18 @@ class MockBridge implements CoreBridge {
     } catch {
       throw new CoreError({ code: "UNKNOWN", detail: "clipboard unavailable" });
     }
+  }
+
+  // The browser preview has no native sensor; gaze.ts falls back to the web's
+  // own DeviceOrientationEvent there.
+  async tiltStart(): Promise<boolean> {
+    return false;
+  }
+
+  async tiltStop(): Promise<void> {}
+
+  onTilt(_fn: (tilt: TiltReading) => void): () => void {
+    return () => {};
   }
 
   private pause(ms: number): Promise<void> {

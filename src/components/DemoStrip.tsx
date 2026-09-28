@@ -62,7 +62,8 @@ function GazeDetails({ report }: { report: GazeReport }) {
       </span>
       <span>
         наклонов {report.tiltEvents} · касаний {report.pointerEvents} · β/γ {tilt} ·
-        подписчиков {report.listeners} · источник {report.source}
+        подписчиков {report.listeners} · источник {report.source} · датчик приложения{" "}
+        {String(report.native)}
       </span>
     </div>
   );
