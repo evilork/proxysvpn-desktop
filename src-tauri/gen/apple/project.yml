@@ -133,7 +133,17 @@ targets:
         embed: true
         codeSign: true
     preBuildScripts:
-      - script: npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
+      # Release builds keep line tables in the Rust code. swift-rs compiles the
+      # Swift half of Tauri and its plugins in the configuration named by
+      # Cargo's DEBUG, and optimized Swift in Xcode 27 makes swift-rs's own
+      # @_cdecl helpers (retain_object, release_object, string_from_bytes)
+      # local, so a release app fails to link; with debug info on they are
+      # built unoptimized and stay global. The executable is stripped on
+      # archive anyway, and the line tables go into the uploaded dSYM.
+      # Drop this once swift-rs exports those helpers from optimized builds.
+      - script: |
+          export CARGO_PROFILE_RELEASE_DEBUG=line-tables-only
+          npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
         name: Build Rust Code
         basedOnDependencyAnalysis: false
         outputFiles:
