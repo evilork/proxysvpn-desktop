@@ -23,7 +23,9 @@ echo "==> Checking Xcode"
 if ! xcode-select -p 2>/dev/null | grep -q "Xcode.app"; then
     fail "full Xcode is required (App Store), then: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
 fi
-xcodebuild -version | head -1
+# `sed -n 1p`, not `head -1`: head exits after one line, xcodebuild dies of
+# SIGPIPE writing the second, and pipefail + set -e end the script (exit 141).
+xcodebuild -version | sed -n 1p
 
 echo "==> Checking Rust iOS targets"
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim
@@ -61,7 +63,7 @@ TAURI_INFO="$(node -e '
 ')" || fail "cannot read src-tauri/tauri.conf.json / tauri.ios.conf.json"
 read -r TAURI_ID TAURI_VERSION <<<"$TAURI_INFO"
 yml_value() {
-    sed -n "s/^[[:space:]]*$1:[[:space:]]*\([^[:space:]#]*\).*/\1/p" "$APPLE_DIR/project.yml" | head -1
+    sed -n "s/^[[:space:]]*$1:[[:space:]]*\([^[:space:]#]*\).*/\1/p" "$APPLE_DIR/project.yml" | sed -n 1p
 }
 YML_ID="$(yml_value PVPN_BUNDLE_ID)"
 YML_VERSION="$(yml_value MARKETING_VERSION)"
