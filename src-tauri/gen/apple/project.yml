@@ -53,7 +53,14 @@ targets:
     sources:
       - path: Sources
       - path: Assets.xcassets
+      # Externals/<arch>/<configuration>/libapp.a is the Rust core, linked
+      # through the libapp.a dependency below. Listed with the default build
+      # phase, xcodegen puts every libapp.a present at generation time into
+      # Copy Bundle Resources: the app then ships the static library (hundreds
+      # of MB) and, once debug and release both exist, the archive fails with
+      # "Multiple commands produce .../ProxysVPN.app/libapp.a".
       - path: Externals
+        buildPhase: none
       # en.lproj / ru.lproj (InfoPlist.strings) are picked up from here as a
       # localized variant group in the Resources phase; listing them on their
       # own would copy two flat InfoPlist.strings into the bundle root.
