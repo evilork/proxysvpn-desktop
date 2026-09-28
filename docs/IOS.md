@@ -208,8 +208,10 @@ codesign -d --entitlements - Payload/ProxysVPN.app/PlugIns/PacketTunnel.appex
 Если entitlements нет — архивировать и экспортировать через Xcode, а не
 через `tauri ios build`. Фаза «Build Rust Code» спрашивает опции у запущенного
 Tauri CLI, поэтому сначала `npm run tauri -- ios build --open` (CLI держит их,
-пока открыт Xcode), затем в Xcode Product → Archive → Distribute App → App
-Store Connect, либо во втором терминале. Номер сборки в этом пути ставится
+пока открыт Xcode; адрес и токен CLI 2.12 пишет в
+`src-tauri/gen/apple/.tauri/cli-options-server.json`, вне git), затем в
+Xcode Product → Archive → Distribute App → App Store Connect, либо во втором
+терминале. Номер сборки в этом пути ставится
 руками: `CURRENT_PROJECT_VERSION=1.N`.
 
 ```bash
@@ -253,7 +255,7 @@ Go такие адреса в NAT64 не переводит.
 | `src-tauri/src/xray_apple.rs` | конфиг Xray для расширения (из десктопного генератора) и адреса туннеля |
 | `src-tauri/src/ios_vpn.rs` | FFI-мост Rust → Swift, ожидание статуса NE |
 | `src-tauri/tauri.ios.conf.json` | iOS-оверрайд: bundle ID App Store, основа номера сборки, без externalBin-бинарников |
-| `src-tauri/capabilities/desktop.json` | разрешения плагинов, которые линкуются только на desktop |
+| `src-tauri/capabilities/{desktop,mobile}.json` | разрешения окна: desktop (с уведомлениями) и iOS (без них) |
 | `src-tauri/gen/apple/project.yml` | спека xcodegen: app + PacketTunnel таргеты, bundle ID, версии, команда |
 | `src-tauri/gen/apple/ExportOptions.plist` | экспорт для App Store Connect |
 | `.../Sources/proxysvpn-desktop/VpnBridge.swift` | управление NETunnelProviderManager |
@@ -337,14 +339,21 @@ Go такие адреса в NAT64 не переводит.
   и архив падает на `Undefined symbols`. Rust остаётся оптимизированным,
   исполняемый файл в архиве всё равно очищается от символов, строки кода уходят
   в dSYM. Убрать, когда swift-rs начнёт экспортировать эти хелперы.
-- **iOS 27 требует UIScene.** Приложение, собранное Xcode 27 с Tauri 2.10,
-  в симуляторе iOS 27 не запускается: `UIScene life cycle is required for apps
-  built with this SDK`. Нужен Tauri, который поднимает окно через UIScene;
-  обновление Tauri — отдельная задача.
-- Разрешение плагина, который линкуется только на desktop (как
-  `notification:default`), кладётся в `src-tauri/capabilities/desktop.json`
-  (`platforms`: macOS, windows, linux): иначе iOS-сборка падает на
-  `Permission … not found`.
+- **iOS 27 требует UIScene (Apple TN3187).** Приложение, собранное SDK
+  iOS 27 без сценового жизненного цикла, не запускается: `Application failed
+  to launch: UIScene life cycle is required for apps built with this SDK`.
+  Так было с Tauri 2.10. С Tauri 2.12 (tao 0.37) делегат приложения всегда
+  отвечает на `application:configurationForConnectingSceneSession:options:` и
+  ставит сценовый делегат tao, поэтому `UIApplicationSceneManifest` в
+  `Info.plist` не нужен и шаблон проекта перегенерировать не надо. Проверено
+  28.09.2026 в симуляторах iOS 27.0 и 26.5, iPhone и iPad: 2.10 падает с
+  этой ошибкой, 2.12 запускается, строк про UIScene в журнале нет. Ниже
+  `tauri = "2.12"` в `Cargo.toml` не опускать.
+- Разрешения окна у каждой платформы свои: `src-tauri/capabilities/desktop.json`
+  (macOS, windows, linux) и `mobile.json` (iOS). Разрешение плагина, который
+  линкуется только на desktop (как `notification:default`), пишется только в
+  `desktop.json`: иначе iOS-сборка падает на `Permission … not found`. Общие
+  разрешения (opener, буфер обмена) записаны в оба файла.
 - `tauri ios xcode-script` собирает крейт обычным `cargo build`, то есть вместе
   с бинарником `src-tauri/src/main.rs`. На iOS его `main` пустой: вызов `run()`
   потянул бы функции `pvpn_*`, которые есть только в `VpnBridge.swift`, и
