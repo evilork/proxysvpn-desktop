@@ -13,10 +13,10 @@
 //
 // App Store builds (src/dist.ts) drop it entirely: there a switch that is
 // off forever is a non-working feature under guideline 2.1, explanation or
-// not. For the same reason iOS does not offer "XHTTP only": the iOS engine
-// cannot run XHTTP yet (ENGINE_UNSUPPORTED), and a choice after which nothing
-// connects is worse than no choice. It comes back with the move of iOS to
-// Xray-core.
+// not. For the same reason iOS does not offer the IP-family and DNS choices:
+// the Apple engine (xray_apple.rs) resolves by one fixed policy, the one the
+// data notice states, and replaces whatever these two would set. "XHTTP only"
+// is offered everywhere since iOS runs Xray-core too.
 //
 // Каждая правка применяется СРАЗУ. Если туннель поднят, ядро переподключается
 // само - иначе настройка молчала бы до следующего включения, и человек об этом
@@ -125,11 +125,8 @@ export default function TunnelScreen({
   }
 
   const customMissing = prefs.dns === "custom" && prefs.customDns.trim() === "";
-  // A choice saved before this rule stays visible, so the person can see it
-  // and move off it; it is just no longer offered.
-  const transports = TRANSPORTS.filter(
-    ([value]) => !(platform === "ios" && value === "xhttpOnly" && prefs.transport !== value),
-  );
+  // See the header: on iOS these two choices would change nothing.
+  const engineOwnsDns = platform === "ios";
 
   return (
     <Screen
@@ -194,7 +191,7 @@ export default function TunnelScreen({
         </div>
         <div className="row">
           <span className="segmented">
-            {transports.map(([value, key]) => (
+            {TRANSPORTS.map(([value, key]) => (
               <button
                 key={value}
                 type="button"
@@ -208,71 +205,75 @@ export default function TunnelScreen({
           </span>
         </div>
 
-        <div className="row">
-          <span className="row-main">
-            <span className="row-title">{t("tun.ip")}</span>
-            <span className="row-sub">{t("tun.ipHint")}</span>
-          </span>
-        </div>
-        <div className="row">
-          <span className="segmented">
-            {IP_KINDS.map(([value, key]) => (
-              <button
-                key={value}
-                type="button"
-                aria-pressed={prefs.ipKind === value}
-                disabled={busy}
-                onClick={() => void apply({ ...prefs, ipKind: value })}
-              >
-                {t(key)}
-              </button>
-            ))}
-          </span>
-        </div>
-
-        <div className="row">
-          <span className="row-main">
-            <span className="row-title">{t("tun.dns")}</span>
-            <span className="row-sub">{t("tun.dnsHint")}</span>
-          </span>
-        </div>
-        <div className="row">
-          <span className="segmented">
-            {DNS_CHOICES.map(([value, key]) => (
-              <button
-                key={value}
-                type="button"
-                aria-pressed={prefs.dns === value}
-                disabled={busy}
-                onClick={() => void apply({ ...prefs, dns: value })}
-              >
-                {t(key)}
-              </button>
-            ))}
-          </span>
-        </div>
-
-        {prefs.dns === "custom" ? (
-          <div className="row">
-            <span className="row-main">
-              <input
-                type="text"
-                className="field"
-                value={prefs.customDns}
-                placeholder={t("tun.dnsPlaceholder")}
-                spellCheck={false}
-                autoCapitalize="off"
-                autoCorrect="off"
-                disabled={busy}
-                onChange={(e) => setPrefs({ ...prefs, customDns: e.target.value })}
-                onBlur={() => void apply(prefs)}
-              />
-              <span className="row-sub">
-                {customMissing ? t("tun.dnsMissing") : t("tun.dnsOwnHint")}
+        {engineOwnsDns ? null : (
+          <>
+            <div className="row">
+              <span className="row-main">
+                <span className="row-title">{t("tun.ip")}</span>
+                <span className="row-sub">{t("tun.ipHint")}</span>
               </span>
-            </span>
-          </div>
-        ) : null}
+            </div>
+            <div className="row">
+              <span className="segmented">
+                {IP_KINDS.map(([value, key]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={prefs.ipKind === value}
+                    disabled={busy}
+                    onClick={() => void apply({ ...prefs, ipKind: value })}
+                  >
+                    {t(key)}
+                  </button>
+                ))}
+              </span>
+            </div>
+
+            <div className="row">
+              <span className="row-main">
+                <span className="row-title">{t("tun.dns")}</span>
+                <span className="row-sub">{t("tun.dnsHint")}</span>
+              </span>
+            </div>
+            <div className="row">
+              <span className="segmented">
+                {DNS_CHOICES.map(([value, key]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={prefs.dns === value}
+                    disabled={busy}
+                    onClick={() => void apply({ ...prefs, dns: value })}
+                  >
+                    {t(key)}
+                  </button>
+                ))}
+              </span>
+            </div>
+
+            {prefs.dns === "custom" ? (
+              <div className="row">
+                <span className="row-main">
+                  <input
+                    type="text"
+                    className="field"
+                    value={prefs.customDns}
+                    placeholder={t("tun.dnsPlaceholder")}
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    disabled={busy}
+                    onChange={(e) => setPrefs({ ...prefs, customDns: e.target.value })}
+                    onBlur={() => void apply(prefs)}
+                  />
+                  <span className="row-sub">
+                    {customMissing ? t("tun.dnsMissing") : t("tun.dnsOwnHint")}
+                  </span>
+                </span>
+              </div>
+            ) : null}
+          </>
+        )}
       </div>
     </Screen>
   );
