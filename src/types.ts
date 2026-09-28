@@ -158,7 +158,17 @@ export const EV = {
   metric: "vpn:metric",
   event: "vpn:event",
   meta: "vpn:meta",
+  /** Device tilt for the eye; `motion::EVENT` in motion.rs. */
+  tilt: "gaze-tilt",
 } as const;
+
+/** One tilt reading, degrees, in DeviceOrientationEvent terms. */
+export interface TiltReading {
+  /** Front to back: 0 lying flat face up, +90 upright facing the person. */
+  beta: number;
+  /** Left to right: positive when the right edge goes down. */
+  gamma: number;
+}
 
 /**
  * The ONE thing a failure offers the user.

@@ -34,6 +34,7 @@ mod ping;
 mod probe;
 mod netmem;
 mod manifest;
+mod motion;
 mod subscription;
 mod tunnel_prefs;
 mod notify_prefs;
@@ -4216,6 +4217,7 @@ pub fn run() {
     let builder = builder.setup(|app| {
             let core = Core::new(app.handle().clone());
             app.manage(core);
+            app.manage(motion::MotionState::default());
 
             #[cfg(target_os = "macos")]
             {
@@ -4281,7 +4283,9 @@ pub fn run() {
             pair_poll,
             onboarding_state,
             onboarding_run,
-            app_info
+            app_info,
+            motion::motion_start,
+            motion::motion_stop
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

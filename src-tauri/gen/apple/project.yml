@@ -130,6 +130,8 @@ targets:
       - sdk: UIKit.framework
       - sdk: WebKit.framework
       - sdk: NetworkExtension.framework
+      # MotionBridge.swift: device tilt for the eye, no permission needed.
+      - sdk: CoreMotion.framework
       - target: PacketTunnel
         embed: true
         codeSign: true
