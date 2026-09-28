@@ -76,6 +76,26 @@
 
   --font: "Rubik", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
 
+  /* Type follows the system text size. Every size in this file is written
+     as `calc(N * var(--type-px))`: N is the size in px the design was drawn
+     at, and --type-px is one such pixel expressed in rem.
+
+     --type-base is how many px 1rem holds when the system text size is at
+     its default: 16 from the fixed root below, 17 on iOS/iPadOS, where the
+     root is the Dynamic Type body size (17 pt at the default "Large"). So at
+     the default size every screen is exactly the size it was drawn at on
+     every platform, and on iOS it grows with Settings → Display & Text Size.
+
+     Capped at twice the drawn size: the 200 % Apple asks for before an app
+     may claim Larger Text. The accessibility sizes go on to 53 pt, over
+     300 %, and there the pinned footers of [8] and [12] would leave a phone
+     one row of list to scroll; pinch-zoom, which index.html no longer
+     forbids, covers what is past the cap. Measured in iOS Simulator Safari:
+     root 17 / 23 / 28 / 53 px at Large / xxxL / AX1 / AX5 gives h1 26 / 35.2
+     / 42.8 / 52 px, and nothing runs off a 390 pt screen at any of them. */
+  --type-base: 16;
+  --type-px: min(calc(1rem / var(--type-base)), 2px);
+
   /* Рельеф, на котором построен сайт: тень вниз-вправо цветом самой тёмной
      поверхности. Диагональ 5/5 - подпись этого интерфейса, а не украшение,
      та же стоит на каждой кнопке proksya.xyz.
@@ -179,7 +199,45 @@ body,
   overscroll-behavior: none;
 }
 
+/* The root every rem hangs off. 16 px is the fallback, and the size the
+   whole design was drawn against. */
+html {
+  font-size: 16px;
+}
+
+/* iOS and iPadOS: the root becomes the Dynamic Type body size, so rem, and
+   with it --type-px, follows Settings → Display & Text Size.
+
+   `-webkit-touch-callout` is what keeps this off the Mac. WebKit there knows
+   -apple-system-body as well, but answers with the 13 pt macOS body size: the
+   desktop app would shrink by a fifth and still follow nothing. */
+@supports (font: -apple-system-body) and (-webkit-touch-callout: none) {
+  html {
+    font: -apple-system-body;
+    /* The shorthand resets these along with the size, and only the size is
+       wanted from it. */
+    font-family: var(--font);
+    line-height: 1.5;
+  }
+
+  :root {
+    --type-base: 17;
+  }
+
+  /* iOS zooms the page into any text field under 16 px the moment it takes
+     focus, and with zoom no longer forbidden nothing stops it. The domain
+     lists in "Свои правила" are 15 px. */
+  input,
+  textarea,
+  select {
+    font-size: max(16px, 1em);
+  }
+}
+
 body {
+  /* Text that sets no size of its own (radio rows, bare buttons) stays at the
+     16 px it always inherited, and scales along with the rest. */
+  font-size: calc(16 * var(--type-px));
   user-select: none;
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
@@ -205,17 +263,6 @@ label,
 summary,
 [role="button"] {
   touch-action: manipulation;
-}
-
-/* iOS zooms the page into any text field under 16 px the moment it takes
-   focus, and with zoom no longer forbidden nothing stops it. The domain lists
-   in "Свои правила" are 15 px. `-webkit-touch-callout` is iOS-only. */
-@supports (-webkit-touch-callout: none) {
-  input,
-  textarea,
-  select {
-    font-size: max(16px, 1em);
-  }
 }
 
 :focus-visible {
@@ -252,7 +299,7 @@ summary,
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 15px;
+  font-size: calc(15 * var(--type-px));
   font-weight: 600;
   letter-spacing: 0.01em;
 }
@@ -266,15 +313,26 @@ summary,
 /* --- Typography ----------------------------------------------------------- */
 
 .h1 {
-  font-size: 26px;
+  font-size: calc(26 * var(--type-px));
   line-height: 1.15;
   font-weight: 700;
   letter-spacing: -0.02em;
   margin: 0;
 }
 
+/* At twice the text size one word can be wider than a 320 pt screen
+   ("Подтвердить" at 52 px). It breaks rather than being cut off by the
+   window. `max-width` is what makes that work inside the centred flex column
+   of [2], where a heading is otherwise as wide as its longest word. Neither
+   changes anything while every word fits, which at the drawn size they do. */
+.h1,
 .h2 {
-  font-size: 19px;
+  max-width: 100%;
+  overflow-wrap: break-word;
+}
+
+.h2 {
+  font-size: calc(19 * var(--type-px));
   line-height: 1.25;
   font-weight: 650;
   letter-spacing: -0.01em;
@@ -282,7 +340,7 @@ summary,
 }
 
 .body {
-  font-size: 15px;
+  font-size: calc(15 * var(--type-px));
   line-height: 1.45;
   margin: 0;
 }
@@ -296,12 +354,12 @@ summary,
 }
 
 .small {
-  font-size: 13px;
+  font-size: calc(13 * var(--type-px));
   line-height: 1.4;
 }
 
 .caps {
-  font-size: 12px;
+  font-size: calc(12 * var(--type-px));
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -335,7 +393,7 @@ summary,
   background: var(--surface);
   color: var(--text);
   font-family: var(--font);
-  font-size: 16px;
+  font-size: calc(16 * var(--type-px));
   font-weight: 500;
   text-align: center;
   box-shadow: var(--lift);
@@ -374,7 +432,7 @@ summary,
   background: transparent;
   color: var(--text-dim);
   font-weight: 500;
-  font-size: 15px;
+  font-size: calc(15 * var(--type-px));
   min-height: var(--tap);
   box-shadow: none;
 }
@@ -668,7 +726,7 @@ summary,
   border-radius: 12px;
   background: transparent;
   color: var(--text-dim);
-  font-size: 15px;
+  font-size: calc(15 * var(--type-px));
 }
 
 /* On a 375 pt phone the line wraps; it must break BETWEEN the three facts,
@@ -687,8 +745,10 @@ summary,
 }
 
 .quiet-note {
-  min-height: 20px;
-  font-size: 13px;
+  /* One line held open even when empty, so the button above does not jump;
+     a line grows with the text, so the hold does too. */
+  min-height: calc(20 * var(--type-px));
+  font-size: calc(13 * var(--type-px));
   color: var(--text-faint);
 }
 
@@ -734,7 +794,7 @@ summary,
   background: transparent;
   border-radius: 12px;
   color: var(--text-dim);
-  font-size: 14px;
+  font-size: calc(14 * var(--type-px));
   font-weight: 550;
   display: inline-flex;
   align-items: center;
@@ -759,7 +819,7 @@ summary,
   border-radius: 12px;
   background: var(--surface);
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: calc(13 * var(--type-px));
   line-height: 1.35;
   text-align: left;
 }
@@ -797,7 +857,7 @@ summary,
   background: transparent;
   color: var(--text);
   text-align: left;
-  font-size: 15px;
+  font-size: calc(15 * var(--type-px));
 }
 
 .row + .row {
@@ -821,7 +881,7 @@ button.row:hover {
 }
 
 .row-sub {
-  font-size: 13px;
+  font-size: calc(13 * var(--type-px));
   color: var(--text-dim);
   line-height: 1.35;
 }
@@ -829,16 +889,16 @@ button.row:hover {
 .row-side {
   flex: 0 0 auto;
   color: var(--text-dim);
-  font-size: 14px;
+  font-size: calc(14 * var(--type-px));
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
 
 .row-flag {
-  font-size: 22px;
+  font-size: calc(22 * var(--type-px));
   line-height: 1;
-  width: 28px;
+  width: calc(28 * var(--type-px));
   text-align: center;
 }
 
@@ -896,6 +956,9 @@ button.row:hover {
 
 .screen-head .h2 {
   flex: 1 1 auto;
+  /* Lets a title narrower than its longest word wrap it instead of pushing
+     the row past the edge; see .h1, .h2. */
+  min-width: 0;
 }
 
 /* Vertical centring for short screens. Auto margins, not
@@ -999,10 +1062,27 @@ button.row:hover {
 
 .segmented {
   display: inline-flex;
+  /* At twice the text size "Как в системе · Светлое · Тёмное" is wider than
+     a phone. The options then wrap inside the control instead of running
+     off the right edge; at the drawn size they fit and nothing wraps. */
+  flex-wrap: wrap;
+  max-width: 100%;
   padding: 3px;
   gap: 3px;
   border-radius: 12px;
   background: var(--surface-2);
+}
+
+/* Same moment, one level up: a row holding a label and a segmented control
+   puts the control on a line of its own once the two no longer fit side by
+   side, and lets it narrow to the row. Both only ever kick in on overflow. */
+.row:has(.segmented) {
+  flex-wrap: wrap;
+}
+
+.row:has(.segmented) > .row-side {
+  flex-shrink: 1;
+  min-width: 0;
 }
 
 .segmented button {
@@ -1012,7 +1092,7 @@ button.row:hover {
   border-radius: 9px;
   background: transparent;
   color: var(--text-dim);
-  font-size: 14px;
+  font-size: calc(14 * var(--type-px));
   font-weight: 550;
 }
 
@@ -1069,7 +1149,7 @@ button.row:hover {
   border-radius: 999px;
   background: var(--surface-2);
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: calc(12 * var(--type-px));
   font-weight: 550;
 }
 
@@ -1096,7 +1176,7 @@ button.row:hover {
 
 .mono-box {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: calc(12 * var(--type-px));
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1124,7 +1204,7 @@ button.row:hover {
   gap: 10px;
   min-height: 44px;
   padding: 8px 14px;
-  font-size: 14px;
+  font-size: calc(14 * var(--type-px));
 }
 
 .check-row + .check-row {
@@ -1133,7 +1213,8 @@ button.row:hover {
 
 .check-row .mark {
   flex: 0 0 auto;
-  width: 20px;
+  /* The glyph is text and grows with it; a fixed box would clip ✓ and ✕. */
+  width: calc(20 * var(--type-px));
   text-align: center;
   font-weight: 700;
 }
@@ -1156,7 +1237,7 @@ button.row:hover {
   border-radius: var(--radius);
   background: var(--surface);
   border-left: 3px solid var(--accent);
-  font-size: 15px;
+  font-size: calc(15 * var(--type-px));
   line-height: 1.4;
 }
 
@@ -1169,7 +1250,7 @@ button.row:hover {
   align-items: center;
   gap: 10px;
   min-height: 32px;
-  font-size: 15px;
+  font-size: calc(15 * var(--type-px));
   color: var(--text-dim);
 }
 
@@ -1178,7 +1259,7 @@ button.row:hover {
 }
 
 .heal-step .mark {
-  width: 18px;
+  width: calc(18 * var(--type-px));
   text-align: center;
   color: var(--accent-text);
 }
@@ -1189,14 +1270,16 @@ button.row:hover {
   bottom: calc(var(--safe-bottom) + 82px);
   transform: translateX(-50%);
   z-index: 60;
-  max-width: 420px;
+  /* `max-content` alone lets a long line, or a short one at a large text
+     size, run past both edges of a phone. */
+  max-width: min(420px, calc(100vw - 32px));
   width: max-content;
   padding: 10px 16px;
   border-radius: 999px;
   background: var(--surface-2);
   border: 1px solid var(--line);
   color: var(--text);
-  font-size: 14px;
+  font-size: calc(14 * var(--type-px));
   text-align: center;
   animation: fade-in 0.16s ease-out;
   pointer-events: none;
@@ -1224,7 +1307,7 @@ button.row:hover {
      strip can never block a real control. */
   bottom: calc(var(--safe-bottom) + 76px);
   z-index: 70;
-  font-size: 11px;
+  font-size: calc(11 * var(--type-px));
   color: var(--text-faint);
   pointer-events: none;
 }
@@ -1269,7 +1352,7 @@ button.row:hover {
   background: transparent;
   color: var(--text-dim);
   text-align: left;
-  font-size: 11px;
+  font-size: calc(11 * var(--type-px));
   padding: 3px 6px;
   border-radius: 6px;
 }
@@ -1284,7 +1367,7 @@ button.row:hover {
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--line);
-  font-size: 11px;
+  font-size: calc(11 * var(--type-px));
   line-height: 1.35;
   color: var(--text-dim);
   user-select: text;
