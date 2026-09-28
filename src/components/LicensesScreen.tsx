@@ -4,7 +4,7 @@
 // grouped by licence, and for each one the licence text and where its source
 // code is. MIT, BSD, Apache and the rest ask for their notice to travel with
 // the binary; MPL-2.0 (Xray-core) also asks that people be told where the
-// source is.
+// source is, and for the patched iOS Xray-core that includes our patch.
 //
 // The source is shown as text with a copy button, not as a link: an App Store
 // build opens only its allowlisted pages (src/externalUrl.ts), and GitHub is
@@ -166,13 +166,17 @@ function ComponentDetail({
     };
   }, [component]);
 
-  const copySource = useCallback(() => {
-    void bridge
-      .writeClipboard(component.source)
-      .then(() => toast(t("common.copied")))
-      .catch(() => toast(t("lic.copyFailed")));
-  }, [component.source, t, toast]);
+  const copyLink = useCallback(
+    (link: string) => {
+      void bridge
+        .writeClipboard(link)
+        .then(() => toast(t("common.copied")))
+        .catch(() => toast(t("lic.copyFailed")));
+    },
+    [t, toast],
+  );
 
+  const changes = component.changes;
   const credits = component.copyright ?? (component.authors?.length ? component.authors.join(", ") : null);
 
   return (
@@ -180,7 +184,11 @@ function ComponentDetail({
       <div className="section">
         <span className="caps">{t("lic.license")}</span>
         <p className="body">{component.license}</p>
-        {credits ? <p className="small dim">{credits}</p> : null}
+        {credits ? (
+          <p className="small dim" style={{ whiteSpace: "pre-line" }}>
+            {credits}
+          </p>
+        ) : null}
       </div>
 
       <div className="section">
@@ -188,10 +196,24 @@ function ComponentDetail({
         <p className="mono-box" style={{ margin: 0 }}>
           {component.source}
         </p>
-        <button type="button" className="btn btn-quiet" onClick={copySource}>
+        <button type="button" className="btn btn-quiet" onClick={() => copyLink(component.source)}>
           {t("lic.copySource")}
         </button>
       </div>
+
+      {/* A patched copy (the iOS Xray-core): its source is the upstream code
+          above plus these changes, and MPL-2.0 asks that both be findable. */}
+      {changes ? (
+        <div className="section">
+          <span className="caps">{t("lic.changes")}</span>
+          <p className="mono-box" style={{ margin: 0 }}>
+            {changes}
+          </p>
+          <button type="button" className="btn btn-quiet" onClick={() => copyLink(changes)}>
+            {t("lic.copySource")}
+          </button>
+        </div>
+      ) : null}
 
       {component.licenseIds.map((id) => (
         <div className="section" key={id}>

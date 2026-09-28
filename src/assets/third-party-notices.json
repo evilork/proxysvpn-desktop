@@ -35,12 +35,12 @@
     {
       "kind": "engine",
       "name": "libXray",
-      "version": null,
+      "version": "v26.9.9",
       "license": "MIT",
       "licenseIds": [
         "MIT"
       ],
-      "source": "https://github.com/XTLS/libXray",
+      "source": "https://github.com/XTLS/libXray/tree/50b95979f5db551bd273165cf469e5daaf791341",
       "platforms": [
         "ios"
       ],
@@ -70,9 +70,22 @@
       ],
       "source": "https://github.com/XTLS/Xray-core",
       "platforms": [
-        "ios",
         "macos"
       ]
+    },
+    {
+      "kind": "engine",
+      "name": "Xray-core",
+      "version": "v1.260327.1-0.20260908222543-52a412d9e2f5",
+      "license": "MPL-2.0",
+      "licenseIds": [
+        "MPL-2.0"
+      ],
+      "source": "https://github.com/XTLS/Xray-core/tree/52a412d9e2f5c2a5142b1b4e2ab3771dacb8b120",
+      "platforms": [
+        "ios"
+      ],
+      "changes": "https://github.com/evilork/proxysvpn-desktop/blob/main/scripts/libxray/xray-core-no-gpl.patch"
     },
     {
       "kind": "font",
@@ -5888,6 +5901,659 @@
       "authors": [
         "caleb"
       ]
+    },
+    {
+      "kind": "go",
+      "name": "github.com/andybalholm/brotli",
+      "version": "v1.0.6",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/andybalholm/brotli/tree/v1.0.6",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/apernet/quic-go",
+      "version": "v0.61.1-0.20260806010916-184d081eef3e",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/apernet/quic-go/tree/v0.61.1-0.20260806010916-184d081eef3e",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2016 the quic-go authors & Google, Inc."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/cloudflare/circl",
+      "version": "v1.6.5",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/cloudflare/circl/tree/v1.6.5",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2019 Cloudflare. All rights reserved.\nCopyright (c) 2009 The Go Authors. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/ghodss/yaml",
+      "version": "v1.0.1-0.20220118164431-d8423dcdf344",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/ghodss/yaml/tree/v1.0.1-0.20220118164431-d8423dcdf344",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2014 Sam Ghods\nCopyright (c) 2012 The Go Authors. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/google/btree",
+      "version": "v1.1.2",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://github.com/google/btree/tree/v1.1.2",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "go",
+      "name": "github.com/google/gopacket",
+      "version": "v1.1.19",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/google/gopacket/tree/v1.1.19",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2012 Google, Inc. All rights reserved.\nCopyright (c) 2009-2011 Andreas Krennmair. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/google/uuid",
+      "version": "v1.6.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/google/uuid/tree/v1.6.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2009,2014 Google Inc. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/gorilla/websocket",
+      "version": "v1.5.3",
+      "license": "BSD-2-Clause",
+      "licenseIds": [
+        "BSD-2-Clause"
+      ],
+      "source": "https://github.com/gorilla/websocket/tree/v1.5.3",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2013 The Gorilla WebSocket Authors. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/huin/goupnp",
+      "version": "v1.2.0",
+      "license": "BSD-2-Clause",
+      "licenseIds": [
+        "BSD-2-Clause"
+      ],
+      "source": "https://github.com/huin/goupnp/tree/v1.2.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2013, John Beisley"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/jackpal/go-nat-pmp",
+      "version": "v1.0.2",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://github.com/jackpal/go-nat-pmp/tree/v1.0.2",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2013 John Howard Palevich"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/klauspost/compress",
+      "version": "v1.17.4",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://github.com/klauspost/compress/tree/v1.17.4",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2012 The Go Authors. All rights reserved.\nCopyright (c) 2019 Klaus Post. All rights reserved.\nCopyright 2016-2017 The New York Times Company\nCopyright (c) 2015 Klaus Post\nCopyright (c) 2011 The Snappy-Go Authors. All rights reserved.\nCopyright 2016 The filepathx Authors"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/klauspost/cpuid/v2",
+      "version": "v2.4.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/klauspost/cpuid/tree/v2.4.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2015 Klaus Post"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/koron/go-ssdp",
+      "version": "v0.0.4",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/koron/go-ssdp/tree/v0.0.4",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2016 MURAOKA Taro"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/libp2p/go-nat",
+      "version": "v1.0.1-0.20250821073202-01afc089f138",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://github.com/libp2p/go-nat/tree/v1.0.1-0.20250821073202-01afc089f138",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "go",
+      "name": "github.com/libp2p/go-netroute",
+      "version": "v0.2.1",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/libp2p/go-netroute/tree/v0.2.1",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2020 Will Scott. All rights reserved.\nCopyright (c) 2012 Google, Inc. All rights reserved.\nCopyright (c) 2009-2011 Andreas Krennmair. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/metacubex/age",
+      "version": "v0.0.0-20260603010618-28d156b4ea78",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/metacubex/age/tree/28d156b4ea78",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2019 The age Authors\nCopyright 2019 Google LLC\nCopyright 2022 Filippo Valsorda"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/metacubex/hkdf",
+      "version": "v0.1.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/metacubex/hkdf/tree/v0.1.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/metacubex/hpke",
+      "version": "v0.1.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/metacubex/hpke/tree/v0.1.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/metacubex/mlkem",
+      "version": "v0.1.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/metacubex/mlkem/tree/v0.1.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/miekg/dns",
+      "version": "v1.1.73",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/miekg/dns/tree/v1.1.73",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2009, The Go Authors. Extensions copyright (c) 2011, Miek Gieben."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/pelletier/go-toml",
+      "version": "v1.9.5",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://github.com/pelletier/go-toml/tree/v1.9.5",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2013 - 2021 Thomas Pelletier, Eric Anderton"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/pion/dtls/v3",
+      "version": "v3.1.5",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/pion/dtls/tree/v3.1.5",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2026 The Pion community"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/pion/logging",
+      "version": "v0.2.4",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/pion/logging/tree/v0.2.4",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2023 The Pion community"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/pion/stun/v3",
+      "version": "v3.1.7",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/pion/stun/tree/v3.1.7",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2026 The Pion community"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/pion/transport/v4",
+      "version": "v4.1.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/pion/transport/tree/v4.1.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2026 The Pion community"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/pires/go-proxyproto",
+      "version": "v0.15.0",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://github.com/pires/go-proxyproto/tree/v0.15.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2016 Paulo Pires"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/quic-go/qpack",
+      "version": "v0.6.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/quic-go/qpack/tree/v0.6.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2019 Marten Seemann"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/refraction-networking/utls",
+      "version": "v1.8.3-0.20260301010127-aa6edf4b11af",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/refraction-networking/utls/tree/v1.8.3-0.20260301010127-aa6edf4b11af",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2009 The Go Authors. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/robfig/cron/v3",
+      "version": "v3.0.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/robfig/cron/tree/v3.0.1",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (C) 2012 Rob Figueiredo"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/wlynxg/anet",
+      "version": "v0.0.5",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/wlynxg/anet/tree/v0.0.5",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2023, wlynxg"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/xtls/reality",
+      "version": "v0.0.0-20260908062103-8cdf7bf9c7f0",
+      "license": "MPL-2.0",
+      "licenseIds": [
+        "MPL-2.0"
+      ],
+      "source": "https://github.com/xtls/reality/tree/8cdf7bf9c7f0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2023 RPRX. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "Go standard library and runtime",
+      "version": "go1.27.1",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://go.googlesource.com/go/+/refs/tags/go1.27.1",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "go4.org/netipx",
+      "version": "v0.0.0-20231129151722-fdeea329fbba",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/go4.org/netipx@v0.0.0-20231129151722-fdeea329fbba",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2020 The Inet.af AUTHORS. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "golang.org/x/crypto",
+      "version": "v0.57.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/golang.org/x/crypto@v0.57.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "golang.org/x/exp",
+      "version": "v0.0.0-20240506185415-9bf2ced13842",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/golang.org/x/exp@v0.0.0-20240506185415-9bf2ced13842",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2009 The Go Authors. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "golang.org/x/net",
+      "version": "v0.59.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/golang.org/x/net@v0.59.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "golang.org/x/sync",
+      "version": "v0.23.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/golang.org/x/sync@v0.23.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "golang.org/x/sys",
+      "version": "v0.48.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/golang.org/x/sys@v0.48.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "golang.org/x/text",
+      "version": "v0.42.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/golang.org/x/text@v0.42.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "golang.org/x/time",
+      "version": "v0.14.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/golang.org/x/time@v0.14.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "golang.zx2c4.com/wireguard",
+      "version": "v0.0.0-20250521234502-f333402bd9cb",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://pkg.go.dev/golang.zx2c4.com/wireguard@v0.0.0-20250521234502-f333402bd9cb",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "go",
+      "name": "google.golang.org/genproto/googleapis/rpc",
+      "version": "v0.0.0-20260526163538-3dc84a4a5aaa",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://pkg.go.dev/google.golang.org/genproto/googleapis/rpc@v0.0.0-20260526163538-3dc84a4a5aaa",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "go",
+      "name": "google.golang.org/grpc",
+      "version": "v1.83.2",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://pkg.go.dev/google.golang.org/grpc@v1.83.2",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2014 gRPC authors."
+    },
+    {
+      "kind": "go",
+      "name": "google.golang.org/protobuf",
+      "version": "v1.36.12",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/google.golang.org/protobuf@v1.36.12",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2018 The Go Authors. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "gopkg.in/yaml.v2",
+      "version": "v2.4.0",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://pkg.go.dev/gopkg.in/yaml.v2@v2.4.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2011-2016 Canonical Ltd."
+    },
+    {
+      "kind": "go",
+      "name": "gvisor.dev/gvisor",
+      "version": "v0.0.0-20260122175437-89a5d21be8f0",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://pkg.go.dev/gvisor.dev/gvisor@v0.0.0-20260122175437-89a5d21be8f0",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "go",
+      "name": "lukechampine.com/blake3",
+      "version": "v1.4.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://pkg.go.dev/lukechampine.com/blake3@v1.4.1",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2020 Luke Champine"
     },
     {
       "kind": "npm",

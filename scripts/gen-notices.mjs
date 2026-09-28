@@ -23,7 +23,17 @@
 //     Apple builds; Xray-core, Hysteria and tun2socks beside the desktop app,
 //     fetched by scripts/fetch-binaries.sh) and the Rubik font.
 //   • The Go modules inside libXray, when scripts/libxray-notices.json exists
-//     (written by scripts/build-libxray.sh with the Apple engine).
+//     (written by scripts/build-libxray.sh with the Apple engine). Two of them
+//     ARE the engines above: their pinned version, source and our patch go
+//     into the iOS row of Xray-core and libXray instead of a second row named
+//     by module path. Our own code in that list (the juju/ratelimit stand-in
+//     under scripts/libxray/) is not third-party and is left out.
+//
+// ── MPL-2.0 and our patch ───────────────────────────────────────────────────
+// The iOS Xray-core is built with scripts/libxray/xray-core-no-gpl.patch. MPL
+// asks that whoever gets the binary is told where its source is, and here
+// that is the upstream commit PLUS the patch: the row carries both (`source`
+// and `changes`), and the patch is linked in this repository, which is public.
 //
 // ── Why it refuses instead of guessing ──────────────────────────────────────
 // A component without a licence field, or with a licence whose text is not
@@ -43,6 +53,20 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "src/assets/third-party-notices.json");
 const TEXTS_DIR = join(ROOT, "src/assets/licenses");
 const LIBXRAY_NOTICES = join(ROOT, "scripts/libxray-notices.json");
+/**
+ * Where files of this repository are browsable (README links the same repo).
+ * `main` because that is what a shipped build is made from.
+ */
+const THIS_REPO_FILES = "https://github.com/evilork/proxysvpn-desktop/blob/main";
+
+/**
+ * Go module paths of the Apple engine that are listed as engines by name. A
+ * module path in this map folds into the static entry instead of its own row.
+ */
+const ENGINE_MODULES = new Map([
+  ["github.com/xtls/xray-core", "Xray-core"],
+  ["github.com/xtls/libxray", "libXray"],
+]);
 
 /** Build targets the notices cover, and the name the window uses for each. */
 const CARGO_TARGETS = [
@@ -409,39 +433,120 @@ function npmComponents() {
 
 // ── What the package managers do not see ────────────────────────────────────
 
-function staticComponents() {
-  const out = [];
-  for (const component of STATIC_COMPONENTS) {
-    const license = readLicense(component.license, component.name);
-    if (license) out.push({ ...component, ...license, authors: [] });
+/** scripts/libxray-notices.json, or null when the Apple engine was never built here. */
+function readLibxrayNotices() {
+  if (!existsSync(LIBXRAY_NOTICES)) return null;
+  const notices = JSON.parse(readFileSync(LIBXRAY_NOTICES, "utf8"));
+  if (!notices || !Array.isArray(notices.modules)) {
+    problem("scripts/libxray-notices.json: no modules list");
+    return null;
   }
-  return out;
+  return notices;
 }
 
-function libxrayModules() {
-  if (!existsSync(LIBXRAY_NOTICES)) return [];
-  const notices = JSON.parse(readFileSync(LIBXRAY_NOTICES, "utf8"));
-  if (!Array.isArray(notices.modules)) {
-    problem("scripts/libxray-notices.json: no modules list");
-    return [];
+/**
+ * The copyright lines of a Go module's LICENSE and NOTICE, for the row's
+ * credits: MIT and BSD ask for "the above copyright notice" to travel with the
+ * binary, Apache for the NOTICE, and the bundled SPDX texts carry neither. A
+ * line counts when "Copyright" is followed by a year, with or without (c):
+ * that leaves out the licences' own clauses ("copyright notice, this list of
+ * conditions…") and the Apache appendix template. Addresses are dropped, as
+ * they are for authors.
+ */
+function copyrightOf(module) {
+  const text = [module.noticeText, module.licenseText].filter((t) => typeof t === "string").join("\n");
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^copyright\s+(?:\(c\)\s*|©\s*)?\d{4}/i.test(line))
+    .map((line) => line.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").replace(/[\s,]+$/, ""));
+  const unique = [...new Set(lines)];
+  return unique.length > 0 ? unique.join("\n") : undefined;
+}
+
+/**
+ * `modifications` reads "<path in this repository> (what the patch does)".
+ * The path has to exist here, or the link would lead nowhere.
+ */
+function changesOf(module, who) {
+  if (module.modifications === undefined) return undefined;
+  const path = typeof module.modifications === "string" ? module.modifications.trim().split(/\s+/)[0] : "";
+  if (!path || !existsSync(join(ROOT, path))) {
+    problem(`${who}: modifications "${module.modifications}" name no file of this repository`);
+    return undefined;
   }
-  const out = [];
+  return `${THIS_REPO_FILES}/${path}`;
+}
+
+/**
+ * The Go modules of the Apple engine: rows of their own, and the pinned
+ * facts about the two that are listed as engines (ENGINE_MODULES).
+ */
+function libxrayComponents(notices) {
+  const engines = new Map();
+  const modules = [];
+  if (!notices) return { engines, modules };
   for (const module of notices.modules) {
     const who = `libXray module ${module && module.name}`;
     if (!module || typeof module.name !== "string" || typeof module.source !== "string") {
       problem(`${who}: needs name and source`);
       continue;
     }
+    // A path of this repository is our own code (scripts/libxray/ratelimit):
+    // not a third-party component, and nothing to credit anyone for.
+    if (!/^[a-z]+:/i.test(module.source) && existsSync(join(ROOT, module.source))) continue;
+    const source = normalRepo(module.source);
+    if (!source) {
+      problem(`${who}: source "${module.source}" is not a link`);
+      continue;
+    }
     const license = readLicense(module.license, who);
     if (!license) continue;
+    const version = typeof module.version === "string" && module.version !== "-" ? module.version : null;
+    const copyright = copyrightOf(module);
+    const engine = ENGINE_MODULES.get(module.name);
+    if (engine) {
+      engines.set(engine, { version, source, license: license.license, copyright, changes: changesOf(module, who) });
+      continue;
+    }
+    modules.push({ kind: "go", name: module.name, version, ...license, source, copyright, authors: [], platforms: ["ios"] });
+  }
+  for (const name of ENGINE_MODULES.values()) {
+    if (!engines.has(name)) problem(`scripts/libxray-notices.json: no module for ${name}`);
+  }
+  return { engines, modules };
+}
+
+/**
+ * The fixed list. An engine the libXray build pins gets its iOS row from
+ * there (version, source, our patch); the Mac app fetches the latest release,
+ * so its row keeps no version.
+ */
+function staticComponents(engines) {
+  const out = [];
+  for (const component of STATIC_COMPONENTS) {
+    const license = readLicense(component.license, component.name);
+    if (!license) continue;
+    const pinned = component.platforms.includes("ios") ? engines.get(component.name) : undefined;
+    if (!pinned) {
+      out.push({ ...component, ...license, authors: [] });
+      continue;
+    }
+    if (pinned.license !== license.license) {
+      problem(`${component.name}: libXray's build says ${pinned.license}, this script says ${license.license}`);
+      continue;
+    }
+    const elsewhere = component.platforms.filter((platform) => platform !== "ios");
+    if (elsewhere.length > 0) out.push({ ...component, ...license, platforms: elsewhere, authors: [] });
     out.push({
-      kind: "go",
-      name: module.name,
-      version: typeof module.version === "string" && module.version !== "-" ? module.version : null,
+      ...component,
       ...license,
-      source: normalRepo(module.source) ?? module.source,
-      authors: [],
+      version: pinned.version,
+      source: pinned.source,
+      changes: pinned.changes,
+      copyright: pinned.copyright ?? component.copyright,
       platforms: ["ios"],
+      authors: [],
     });
   }
   return out;
@@ -460,13 +565,15 @@ function shape(entry) {
     source: entry.source,
     platforms: entry.platforms,
   };
+  if (entry.changes) out.changes = entry.changes;
   if (entry.copyright) out.copyright = entry.copyright;
   if (entry.authors && entry.authors.length > 0) out.authors = entry.authors;
   return out;
 }
 
 function build() {
-  const components = [...staticComponents(), ...cargoComponents(), ...npmComponents(), ...libxrayModules()];
+  const { engines, modules } = libxrayComponents(readLibxrayNotices());
+  const components = [...staticComponents(engines), ...cargoComponents(), ...npmComponents(), ...modules];
   if (problems.size > 0) {
     console.error(`gen-notices: ${problems.size} problem(s) to fix first:`);
     for (const line of problems) console.error(`  - ${line}`);

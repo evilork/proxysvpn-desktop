@@ -26,6 +26,13 @@ export interface NoticeComponent {
   source: string;
   /** Which builds ship it. */
   platforms: NoticePlatform[];
+  /**
+   * Our changes to it, https, where the build carries a patched copy (the iOS
+   * Xray-core). MPL-2.0 asks where the source of what ships is: that is
+   * `source` plus this.
+   */
+  changes?: string;
+  /** One or more lines, "\n" between them. */
   copyright?: string;
   authors?: string[];
 }
@@ -63,7 +70,7 @@ function readComponent(value: unknown, index: number): NoticeComponent {
     throw new Error(`third-party notice #${index}: bad ${field}`);
   };
   if (!isRecord(value)) return fail("entry");
-  const { kind, name, version, license, licenseIds, source, platforms, copyright, authors } = value;
+  const { kind, name, version, license, licenseIds, source, platforms, changes, copyright, authors } = value;
   if (!isKind(kind)) return fail("kind");
   if (typeof name !== "string" || name === "") return fail("name");
   if (version !== null && typeof version !== "string") return fail("version");
@@ -71,6 +78,9 @@ function readComponent(value: unknown, index: number): NoticeComponent {
   if (!isStringArray(licenseIds) || licenseIds.length === 0) return fail("licenseIds");
   if (typeof source !== "string" || !source.startsWith("https://")) return fail("source");
   if (!isPlatformList(platforms)) return fail("platforms");
+  if (changes !== undefined && (typeof changes !== "string" || !changes.startsWith("https://"))) {
+    return fail("changes");
+  }
   if (copyright !== undefined && typeof copyright !== "string") return fail("copyright");
   if (authors !== undefined && !isStringArray(authors)) return fail("authors");
   return {
@@ -81,6 +91,7 @@ function readComponent(value: unknown, index: number): NoticeComponent {
     licenseIds,
     source,
     platforms,
+    ...(changes !== undefined ? { changes } : {}),
     ...(copyright !== undefined ? { copyright } : {}),
     ...(authors !== undefined ? { authors } : {}),
   };
