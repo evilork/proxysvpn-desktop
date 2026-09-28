@@ -49,7 +49,8 @@ export type ErrorCode =
   | "SUB_INVALID"
   | "SUB_EMPTY"
   // Readable settings, but every location needs a transport this build's
-  // engine lacks (iOS: sing-box has no XHTTP). The app is behind, not the link.
+  // engine lacks. The app is behind, not the link. No build hits it since iOS
+  // moved from sing-box (no XHTTP) to Xray-core on 28.09.2026.
   | "ENGINE_UNSUPPORTED"
   | "BALANCE_EMPTY"
   | "EXPIRED"

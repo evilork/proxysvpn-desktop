@@ -34,7 +34,8 @@ pub enum ErrorCode {
     /// Server answered with a valid, genuinely empty list.
     SubEmpty,
     /// Every entry of a readable subscription needs a transport this build's
-    /// engine does not have (the iOS build runs sing-box, which has no XHTTP).
+    /// engine does not have (the iOS build on sing-box, which had no XHTTP;
+    /// none since iOS runs Xray-core, see `subscription::engine_supports_on`).
     /// Not "unreadable": the settings are fine, the app is behind them — and
     /// asking the server again, as for SubInvalid, would get the same list.
     EngineUnsupported,
