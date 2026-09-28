@@ -284,7 +284,8 @@ Go такие адреса в NAT64 не переводит.
     ответ NOERROR: десктоп отправляет их через узел `proxySettings`, которого
     в Xray 26.9 больше нет.
 
-  Настройка «DNS» из экрана туннеля на iOS не применяется. На desktop DNS
+  Поэтому экран туннеля на iOS не показывает выбор DNS и IPv4/IPv6
+  (`TunnelScreen.tsx`): движок заменил бы их этой политикой. На desktop DNS
   устроен иначе (см. `build_xray_config`).
 - **Адрес узла** резолвится системным резолвером: IPv4, если сеть его умеет,
   иначе IPv6 (на сети IPv6-only с NAT64 это синтезированный адрес). Узел,
@@ -361,6 +362,17 @@ Xray-core и XTLS/REALITY (MPL-2.0), libXray (MIT), utls, quic-go, gVisor и
 репозиторий публичный). Apache-2.0 требует показать файлы NOTICE — они в том
 же JSON (`noticeText`). GPL-кода в сборке нет: это проверяет
 `scripts/build-libxray.sh`.
+
+В приложении это экран «Лицензии открытого ПО» (`LicensesScreen.tsx`). Его
+список `src/assets/third-party-notices.json` собирает
+`node scripts/gen-notices.mjs` из Cargo, npm и `scripts/libxray-notices.json`:
+модули `xtls/xray-core` и `xtls/libxray` становятся iOS-строками «Xray-core» и
+«libXray» (закреплённый коммит; у Xray-core ещё и ссылка на патч), наш
+`scripts/libxray/ratelimit` в список не попадает, у остальных Go-модулей —
+строки Copyright из их LICENSE и NOTICE. После каждого запуска
+`build-libxray.sh`, изменившего `libxray-notices.json`, — перезапустить
+генератор и закоммитить оба файла; `node scripts/gen-notices.mjs --check`
+скажет, устарел ли список.
 
 ## Проверка на устройствах (владелец)
 
