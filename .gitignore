@@ -8,10 +8,12 @@ src-tauri/Cargo.lock
 
 # The iOS project under src-tauri/gen is almost entirely generated - by
 # `tauri ios init`, by xcodegen out of project.yml, and by the build. Almost:
-# PacketTunnelProvider.swift is 361 lines written by hand, project.yml is what
-# xcodegen generates FROM, and without them `scripts/setup-ios.sh` has nothing
-# to work with on a fresh clone. So the folder is ignored and those are
-# excepted, rather than the whole thing being dropped.
+# PacketTunnelProvider.swift and VpnBridge.swift are written by hand,
+# project.yml is what xcodegen generates FROM, and without them
+# `scripts/setup-ios.sh` has nothing to work with on a fresh clone. So the
+# folder is ignored and those are excepted, rather than the whole thing being
+# dropped. Git cannot re-include a file inside an excluded directory, hence
+# the '!dir/' + 'dir/*' pair in front of every excepted file.
 src-tauri/gen/*
 !src-tauri/gen/apple/
 src-tauri/gen/apple/*
@@ -20,6 +22,11 @@ src-tauri/gen/apple/*
 !src-tauri/gen/apple/PacketTunnel/
 src-tauri/gen/apple/PacketTunnel/*
 !src-tauri/gen/apple/PacketTunnel/PacketTunnelProvider.swift
+!src-tauri/gen/apple/Sources/
+src-tauri/gen/apple/Sources/*
+!src-tauri/gen/apple/Sources/proxysvpn-desktop/
+src-tauri/gen/apple/Sources/proxysvpn-desktop/*
+!src-tauri/gen/apple/Sources/proxysvpn-desktop/VpnBridge.swift
 
 # Local dev certificate for testing on a phone (scripts/dev-cert.sh)
 .certs/
