@@ -1072,6 +1072,18 @@ button.row:hover {
   }
 }
 
+/* iPad and anything else that wide. 480 is a phone column: on an iPad it
+   left two thirds of the screen empty and the text no bigger for it. Below
+   the rules it overrides on purpose - same specificity, so order decides.
+   The desktop window is a fixed 480 wide and never gets here. */
+@media (min-width: 768px) {
+  .app,
+  .screen-inner,
+  .sheet {
+    max-width: 720px;
+  }
+}
+
 /* --- Small parts ---------------------------------------------------------- */
 
 .segmented {
