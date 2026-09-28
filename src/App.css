@@ -57,8 +57,17 @@
   --line: #1d1d26;
   --line-strong: #2b2b38;
   --text: #e4e4f0;
-  --text-dim: #7a7a88;
-  --text-faint: #5c5c68;
+  /* Both grey levels are AA for body text (4.5:1) on EVERY surface they land
+     on, the lighter --surface and --surface-2 included, not only on --bg.
+     The old faint, #5c5c68, was 2.9:1 on --surface: the "не проверяли" line
+     in [8] and every section caption failed a contrast audit.
+       dim   #9898a5: 6.9 on --bg, 6.7 on --surface, 6.2 on --surface-2
+       faint #80808d: 5.1 on --bg, 4.9 on --surface, 4.5 on --surface-2
+     Dim moved up with faint so the two stay two different levels; the old
+     dim, #7a7a88, would now be darker than faint (and was 4.5:1 on --surface
+     itself). */
+  --text-dim: #9898a5;
+  --text-faint: #80808d;
 
   --accent: #7ba8a0;
   /* Green ON a surface needs more contrast than green AS a surface. */
@@ -159,8 +168,13 @@
   --line: #e0e3e8;
   --line-strong: #c8ccd3;
   --text: #0a0a0c;
-  --text-dim: #5f6470;
-  --text-faint: #868c98;
+  /* Same rule as dark, measured the other way round: on white-ish surfaces
+     the darkest background is the worst case.
+       dim   #4f5460: 6.8 on --bg, 7.1 on --surface, 6.5 on --surface-2
+       faint #666b76: 4.8 on --bg, 5.0 on --surface, 4.6 on --surface-2
+     The old faint, #868c98, was 3.0:1 on --bg. */
+  --text-dim: #4f5460;
+  --text-faint: #666b76;
   --accent: #5b8a82;
   /* #4ade80 as TEXT on white is unreadable; the darker green is the same
      hue at a contrast a person can actually read. */
