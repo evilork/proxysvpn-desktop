@@ -406,8 +406,25 @@ fn http_client() -> Result<&'static reqwest::Client, AppError> {
         .ok_or_else(|| AppError::with_detail(ErrorCode::Unknown, "http client init failed"))
 }
 
+/// Distribution channel, sent by App Store builds only.
+///
+/// The service leaves purchase text and links out of what it sends a client
+/// that says it came from the App Store (the app ships without in-app
+/// purchases, guideline 3.1.1), and a header is the one signal it cannot
+/// mistake for a version string. No storefront is sent: knowing it needs
+/// StoreKit, and the service treats a missing storefront as "not the US".
+const DIST_HEADER: Option<(&str, &str)> = if cfg!(feature = "appstore") {
+    Some(("x-client-dist", "appstore"))
+} else {
+    None
+};
+
 fn build_client() -> Option<reqwest::Client> {
     let mut headers = reqwest::header::HeaderMap::new();
+
+    if let Some((name, value)) = DIST_HEADER {
+        headers.insert(name, reqwest::header::HeaderValue::from_static(value));
+    }
 
     // One link — one device. The server binds strictly inside `if (hwid)`, so
     // an app that omits this header is an app that opts out of the rule. See
@@ -3486,5 +3503,21 @@ mod tests {
         assert_eq!(reality["shortId"], "ab12");
         assert_eq!(reality["serverName"], "www.bing.com");
         assert_eq!(cfg["outbounds"][0]["settings"]["vnext"][0]["port"], 443);
+    }
+
+    #[cfg(feature = "appstore")]
+    #[test]
+    fn appstore_build_names_its_channel() {
+        assert_eq!(DIST_HEADER, Some(("x-client-dist", "appstore")));
+        // The header name and value must be valid, or `insert` would panic
+        // at the first subscription fetch instead of here.
+        assert!(build_client().is_some());
+    }
+
+    #[cfg(not(feature = "appstore"))]
+    #[test]
+    fn direct_build_sends_no_channel_header() {
+        assert_eq!(DIST_HEADER, None);
+        assert!(build_client().is_some());
     }
 }

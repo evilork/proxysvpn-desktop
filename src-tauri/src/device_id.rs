@@ -80,20 +80,34 @@ pub fn device_id() -> Option<&'static str> {
     ID.get_or_init(load_or_create).as_deref()
 }
 
-/// `ProxysVPN-Desktop/0.1.0 (macOS)`.
+/// `ProxysVPN-Desktop/0.1.0 (macOS)`; App Store builds (feature `appstore`)
+/// `ProxysVPN/0.3.1 (iOS; appstore)`.
 ///
 /// The server stores this under `sub_ua:<uuid>` and support reads it to answer
 /// "which app is this person using" without asking. A generic agent string
-/// would make our own client indistinguishable from an unknown one.
+/// would make our own client indistinguishable from an unknown one. The App
+/// Store tag is the same signal for the service's purchase-text filter as the
+/// `x-client-dist` header (subscription.rs), on every request that carries
+/// this agent — pairing included.
 pub fn user_agent() -> &'static str {
     static UA: OnceLock<String> = OnceLock::new();
     UA.get_or_init(|| {
-        format!(
-            "ProxysVPN-Desktop/{} ({})",
+        format_user_agent(
             env!("CARGO_PKG_VERSION"),
-            platform_name()
+            platform_name(),
+            cfg!(feature = "appstore"),
         )
     })
+}
+
+/// Both shapes in one place, so each can be tested whichever way the crate
+/// was built. The direct shape is byte-for-byte what it always was.
+fn format_user_agent(version: &str, platform: &str, appstore: bool) -> String {
+    if appstore {
+        format!("ProxysVPN/{version} ({platform}; appstore)")
+    } else {
+        format!("ProxysVPN-Desktop/{version} ({platform})")
+    }
 }
 
 fn platform_name() -> &'static str {
@@ -348,10 +362,43 @@ mod tests {
     #[test]
     fn user_agent_names_the_product_version_and_platform() {
         let ua = user_agent();
-        assert!(ua.starts_with("ProxysVPN-Desktop/"), "{ua}");
+        assert!(ua.starts_with("ProxysVPN"), "{ua}");
         assert!(ua.contains(env!("CARGO_PKG_VERSION")), "{ua}");
+        assert!(ua.contains(platform_name()), "{ua}");
         assert!(ua.ends_with(')'), "{ua}");
         // No node address, no machine name, no user name ever leaves here.
         assert!(!ua.contains('@'), "{ua}");
+    }
+
+    #[cfg(not(feature = "appstore"))]
+    #[test]
+    fn direct_build_user_agent_is_unchanged() {
+        let expected = format!(
+            "ProxysVPN-Desktop/{} ({})",
+            env!("CARGO_PKG_VERSION"),
+            platform_name()
+        );
+        assert_eq!(user_agent(), expected);
+        assert!(!user_agent().contains("appstore"));
+    }
+
+    #[cfg(feature = "appstore")]
+    #[test]
+    fn appstore_build_user_agent_says_so() {
+        let ua = user_agent();
+        assert!(ua.starts_with("ProxysVPN/"), "{ua}");
+        assert!(ua.ends_with("; appstore)"), "{ua}");
+    }
+
+    #[test]
+    fn both_user_agent_shapes() {
+        assert_eq!(
+            format_user_agent("1.2.3", "iOS", true),
+            "ProxysVPN/1.2.3 (iOS; appstore)"
+        );
+        assert_eq!(
+            format_user_agent("1.2.3", "macOS", false),
+            "ProxysVPN-Desktop/1.2.3 (macOS)"
+        );
     }
 }

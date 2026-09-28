@@ -1,6 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "identifier": "com.proxysvpn.app",
+  "build": {
+    "beforeDevCommand": "VITE_DIST=appstore npm run dev",
+    "beforeBuildCommand": "VITE_DIST=appstore npm run build",
+    "features": ["appstore"]
+  },
   "bundle": {
     "externalBin": [],
     "resources": [],

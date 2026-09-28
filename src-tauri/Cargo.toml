@@ -45,3 +45,11 @@ tauri-plugin-notification = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 # SCDynamicStore: the system resolver pointed into the tunnel (src/sysdns.rs).
 core-foundation = "0.10"
+
+[features]
+# App Store / TestFlight builds. tauri.ios.conf.json turns it on for every iOS
+# build; the direct DMG builds without it. It tags requests to the service
+# (User-Agent `; appstore)`, header `x-client-dist: appstore`) so the service
+# can leave purchase text and links out of what it sends such a build: the app
+# ships without in-app purchases (guideline 3.1.1).
+appstore = []
