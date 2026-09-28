@@ -1878,25 +1878,21 @@ pub fn build_xray_config_with_routing_and_prefs(
     routing: Option<&RoutingRules>,
     prefs: &crate::tunnel_prefs::TunnelPrefs,
 ) -> Value {
+    build_xray_config_around(vless_outbound(cfg, prefs), true, routing, prefs)
+}
+
+/// Everything around the node's own outbound (`proxy`): DNS, routing and the
+/// helper outbounds. Split from the VLESS part so that another engine's
+/// config (a Hysteria2 node run by Xray) can be built under the very same
+/// rules. `block_quic`: rule 1 below, for a `proxy` that cannot carry UDP.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn build_xray_config_around(
+    proxy: Value,
+    block_quic: bool,
+    routing: Option<&RoutingRules>,
+    prefs: &crate::tunnel_prefs::TunnelPrefs,
+) -> Value {
     use serde_json::json;
-
-    let mut user = serde_json::Map::new();
-    user.insert("id".into(), json!(cfg.uuid));
-    user.insert("encryption".into(), json!(cfg.encryption));
-    // Vision only over TCP; the parser already drops it for XHTTP, and the
-    // builder does not rely on that.
-    if !cfg.flow.is_empty() && cfg.transport == VlessTransport::Tcp {
-        user.insert("flow".into(), json!(cfg.flow));
-    }
-
-    let mut reality = serde_json::Map::new();
-    reality.insert("serverName".into(), json!(cfg.sni));
-    reality.insert("fingerprint".into(), json!(cfg.fingerprint));
-    reality.insert("publicKey".into(), json!(cfg.public_key));
-    reality.insert("shortId".into(), json!(cfg.short_id));
-    if !cfg.spider_x.is_empty() {
-        reality.insert("spiderX".into(), json!(cfg.spider_x));
-    }
 
     let (direct_domains, direct_ips, domain_strategy) = match routing {
         Some(rules) => (
@@ -1916,12 +1912,14 @@ pub fn build_xray_config_with_routing_and_prefs(
 
     let mut rules: Vec<Value> = Vec::new();
     // 1. Block QUIC. Vision is TCP-only, so UDP/443 would leave the tunnel.
-    rules.push(json!({
-        "type": "field",
-        "outboundTag": "block",
-        "network": "udp",
-        "port": "443"
-    }));
+    if block_quic {
+        rules.push(json!({
+            "type": "field",
+            "outboundTag": "block",
+            "network": "udp",
+            "port": "443"
+        }));
+    }
     // 2. СОБСТВЕННЫЕ запросы имён xray - через узел, и только через него.
     //
     // Это лечение поломки, которая стоила нам 1,2 секунды на КАЖДОЕ новое
@@ -2008,7 +2006,7 @@ pub fn build_xray_config_with_routing_and_prefs(
     }
     // No catch-all: xray sends what matched nothing to the first outbound.
 
-    let outbounds = build_outbounds(cfg, user, reality, prefs);
+    let outbounds = build_outbounds(proxy, prefs);
 
     json!({
         "log": { "loglevel": "warning" },
@@ -2078,20 +2076,29 @@ pub fn build_xray_config_with_routing_and_prefs(
     })
 }
 
-/// Исходящие: узел, прямой выход, чёрная дыра, резолвер и - по желанию -
-/// дробильщик рукопожатия.
-///
-/// Вынесено отдельной функцией, потому что дробление вставляет ЛИШНИЙ
-/// исходящий и меняет настройки сокета у основного: собирать это вперемешку с
-/// маршрутизацией в одном литерале стало нечитаемо.
+/// The node itself: VLESS + REALITY, over TCP (Vision) or XHTTP, tagged
+/// `proxy`.
 #[cfg(any(target_os = "macos", test))]
-fn build_outbounds(
-    cfg: &VlessConfig,
-    user: serde_json::Map<String, Value>,
-    reality: serde_json::Map<String, Value>,
-    prefs: &crate::tunnel_prefs::TunnelPrefs,
-) -> Vec<Value> {
+pub(crate) fn vless_outbound(cfg: &VlessConfig, prefs: &crate::tunnel_prefs::TunnelPrefs) -> Value {
     use serde_json::json;
+
+    let mut user = serde_json::Map::new();
+    user.insert("id".into(), json!(cfg.uuid));
+    user.insert("encryption".into(), json!(cfg.encryption));
+    // Vision only over TCP; the parser already drops it for XHTTP, and the
+    // builder does not rely on that.
+    if !cfg.flow.is_empty() && cfg.transport == VlessTransport::Tcp {
+        user.insert("flow".into(), json!(cfg.flow));
+    }
+
+    let mut reality = serde_json::Map::new();
+    reality.insert("serverName".into(), json!(cfg.sni));
+    reality.insert("fingerprint".into(), json!(cfg.fingerprint));
+    reality.insert("publicKey".into(), json!(cfg.public_key));
+    reality.insert("shortId".into(), json!(cfg.short_id));
+    if !cfg.spider_x.is_empty() {
+        reality.insert("spiderX".into(), json!(cfg.spider_x));
+    }
 
     let mut stream = serde_json::Map::new();
     match &cfg.transport {
@@ -2122,17 +2129,30 @@ fn build_outbounds(
         stream.insert("sockopt".into(), json!({ "dialerProxy": "fragment" }));
     }
 
+    json!({
+        "tag": "proxy",
+        "protocol": "vless",
+        "settings": { "vnext": [{
+            "address": cfg.host,
+            "port": cfg.port,
+            "users": [ Value::Object(user) ]
+        }]},
+        "streamSettings": Value::Object(stream)
+    })
+}
+
+/// Исходящие: узел, прямой выход, чёрная дыра, резолвер и - по желанию -
+/// дробильщик рукопожатия.
+///
+/// Вынесено отдельной функцией, потому что дробление вставляет ЛИШНИЙ
+/// исходящий и меняет настройки сокета у основного: собирать это вперемешку с
+/// маршрутизацией в одном литерале стало нечитаемо.
+#[cfg(any(target_os = "macos", test))]
+fn build_outbounds(proxy: Value, prefs: &crate::tunnel_prefs::TunnelPrefs) -> Vec<Value> {
+    use serde_json::json;
+
     let mut outbounds = vec![
-        json!({
-            "tag": "proxy",
-            "protocol": "vless",
-            "settings": { "vnext": [{
-                "address": cfg.host,
-                "port": cfg.port,
-                "users": [ Value::Object(user) ]
-            }]},
-            "streamSettings": Value::Object(stream)
-        }),
+        proxy,
         json!({ "tag": "direct", "protocol": "freedom" }),
         json!({ "tag": "block",  "protocol": "blackhole" }),
         // Отвечает на запросы имён сам, по разделу `dns` выше.
