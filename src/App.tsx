@@ -420,6 +420,7 @@ export default function App() {
       return (
         <OnboardingScreen
           steps={onboarding}
+          platform={info?.platform}
           onDone={() => {
             setOnboarding([]);
             void refreshSubState();
@@ -427,6 +428,13 @@ export default function App() {
         />
       );
     }
+
+    // Until the core has said which first-run steps are pending, nothing that
+    // talks to the service may appear. The pairing screen asks the service
+    // for a code the moment it mounts, and `sub_state` can answer before
+    // `onboarding_state` does — without this, a first run would request a
+    // pairing code before the data notice (guideline 5.4) was ever shown.
+    if (onboarding === null) return null;
 
     // No link: [1] is the whole app until there is one. It has no close
     // button, because there is nowhere to close it to.

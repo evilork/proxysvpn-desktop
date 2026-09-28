@@ -128,9 +128,14 @@ const ru = {
     "Он нужен один раз за запуск — чтобы направить интернет через защищённое соединение. Мы не видим и не сохраняем пароль: его спрашивает сама macOS.",
   "ob.pass.action": "Понятно, продолжить",
   "ob.ios.title": "Разрешите настройку VPN",
+  // Device-neutral: the same window runs on iPhone and iPad.
   "ob.ios.body":
-    "iPhone спросит один раз и попросит Face ID или код. Больше этот вопрос не повторится.",
+    "Система спросит один раз и попросит Face ID, Touch ID или код-пароль. Больше этот вопрос не повторится.",
   "ob.ios.action": "Разрешить",
+  // Words, not a link: the only address that opens that page is a private
+  // URL scheme (guideline 2.5.1).
+  "ob.ios.where":
+    "Разрешение можно дать и позже: Настройки → Основные → VPN и управление устройством.",
   "ob.waiting": "Ждём ответа системы…",
   "ob.denied": "Разрешение не получено. Без него включить не получится",
   "ob.showWhere": "Показать, где нажать",
@@ -510,6 +515,35 @@ const ru = {
   "more.cabinet": "Личный кабинет",
   "more.geoNote": "Списки маршрутизации уже внутри приложения — ничего не скачивается",
 
+  // ── Privacy & legal ───────────────────────────────────────────────────────
+  // The data notice (guideline 5.4, DataNoticeScreen.tsx) and More → О
+  // приложении. Each line of the notice is backed by code; the DNS lines
+  // follow the engine configs (singbox.rs / the Apple Xray config for
+  // "apple", subscription.rs + tunnel_prefs.rs for "desktop"). "We do not
+  // record sites" is shown only once NO_ACTIVITY_LOGS_CONFIRMED (legal.ts).
+  "notice.title": "Какие данные мы используем",
+  "notice.intro": "Только то, без чего VPN не работает. Всё, без мелкого шрифта:",
+  "notice.token": "Токен подписки — по нему сервис узнаёт ваш аккаунт.",
+  "notice.installId":
+    "Случайный номер установки — не номер устройства и ничего о нём. Нужен, чтобы одна ссылка работала на одном устройстве.",
+  "notice.version": "Версия приложения и платформа — в каждом запросе к сервису.",
+  "notice.ip":
+    "IP-адрес: его видит наш сайт, когда приложение загружает подписку, и VPN-сервер, пока вы подключены.",
+  "notice.traffic": "Сколько трафика прошло через ваш аккаунт.",
+  "notice.dns.apple":
+    "Имена сайтов разрешает Cloudflare по DNS-over-HTTPS — через VPN-сервер. Имена российских сайтов, которые открываются напрямую, разрешает публичный DNS Яндекса, мимо VPN.",
+  "notice.dns.desktop":
+    "Имена сайтов разрешают Cloudflare и Google — запросы к ним идут через VPN-сервер. В настройках туннеля можно выбрать системный или свой резолвер.",
+  "notice.noActivityLogs": "Мы не записываем, какие сайты вы открываете.",
+  "notice.log":
+    "Технический журнал хранится только на этом устройстве. Отчёт для поддержки покидает его, только если вы отправите его сами.",
+  "notice.promise":
+    "Кроме названных здесь DNS-сервисов, мы никому не передаём эти данные, не продаём их и не используем ни для чего, кроме работы VPN.",
+  "notice.privacy": "Политика конфиденциальности",
+  "notice.terms": "Условия использования",
+  "notice.continue": "Продолжить",
+  "about.title": "О приложении",
+
   // ── Demo strip. Development only, never reachable inside the app ──────────
   "demo.title": "Демо-режим",
   "demo.hint": "Ядро не подключено: экраны играют сценарий из адресной строки.",
@@ -594,8 +628,9 @@ const en: Partial<Record<MsgKey, string>> = {
   "ob.pass.action": "Got it, continue",
   "ob.ios.title": "Allow the VPN configuration",
   "ob.ios.body":
-    "iPhone will ask once and request Face ID or your passcode. It will not ask again.",
+    "The system will ask once and request Face ID, Touch ID or your passcode. It will not ask again.",
   "ob.ios.action": "Allow",
+  "ob.ios.where": "You can also allow it later: Settings → General → VPN & Device Management.",
   "ob.waiting": "Waiting for the system…",
   "ob.denied": "Permission was not granted. Without it we cannot turn protection on",
   "ob.showWhere": "Show me where to tap",
@@ -936,6 +971,29 @@ const en: Partial<Record<MsgKey, string>> = {
   "more.unlinkYes": "Unlink",
   "more.cabinet": "Your account",
   "more.geoNote": "Routing lists are already inside the app — nothing is downloaded",
+
+  "notice.title": "What data we use",
+  "notice.intro": "Only what the VPN cannot work without. All of it, no small print:",
+  "notice.token": "Your subscription token — it tells the service which account is yours.",
+  "notice.installId":
+    "A random install ID — not a hardware ID and nothing about your device. It keeps one link on one device.",
+  "notice.version": "The app version and platform, sent with every request to the service.",
+  "notice.ip":
+    "Your IP address: our site sees it when the app loads your subscription, and the VPN server sees it while you are connected.",
+  "notice.traffic": "How much traffic your account used.",
+  "notice.dns.apple":
+    "Site names are resolved by Cloudflare over DNS-over-HTTPS, through the VPN server. Names of Russian sites that open directly are resolved by Yandex public DNS, outside the VPN.",
+  "notice.dns.desktop":
+    "Site names are resolved by Cloudflare and Google, asked through the VPN server. Tunnel settings let you pick the system resolver or one of your own.",
+  "notice.noActivityLogs": "We do not record which sites you open.",
+  "notice.log":
+    "The technical log stays on this device. A support report leaves it only when you send it yourself.",
+  "notice.promise":
+    "Apart from the DNS services named here, we never pass these data to anyone, never sell them and use them for nothing but running the VPN.",
+  "notice.privacy": "Privacy Policy",
+  "notice.terms": "Terms of Use",
+  "notice.continue": "Continue",
+  "about.title": "About",
 
   "demo.title": "Demo mode",
   "demo.hint": "No core attached: the screens play a scenario from the address bar.",

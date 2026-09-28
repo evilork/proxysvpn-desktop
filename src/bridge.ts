@@ -266,7 +266,11 @@ export interface RoutingState {
   guess: "ru" | "abroad" | null;
 }
 
-export type OnboardingStep = "moveToApplications" | "password" | "iosPermission";
+/**
+ * `dataNotice` is the declaration of the data the app uses (guideline 5.4);
+ * the core puts it first on every platform until it has been seen.
+ */
+export type OnboardingStep = "dataNotice" | "moveToApplications" | "password" | "iosPermission";
 
 export interface OnboardingState {
   steps: OnboardingStep[];
@@ -611,6 +615,8 @@ const DEVICE_ROWS: CheckRowId[] = [
 
 class MockBridge implements CoreBridge {
   private readonly scenario: MockScenario;
+  /** The core's consent record, for as long as this page lives. */
+  private dataNoticeSeen = false;
   private readonly handlers = new Set<BridgeHandlers>();
   private readonly timers = new Set<number>();
 
@@ -1195,12 +1201,21 @@ class MockBridge implements CoreBridge {
   }
 
   async onboarding(): Promise<OnboardingState> {
-    return {
-      steps: this.scenario === "onboarding" ? ["moveToApplications", "password"] : [],
-    };
+    // A first run, as the core answers it: the data notice until "Продолжить",
+    // then whatever barriers the scenario plays.
+    const firstRun = this.scenario === "onboarding" || this.scenario === "nolink";
+    const steps: OnboardingStep[] = [];
+    if (firstRun && !this.dataNoticeSeen) steps.push("dataNotice");
+    if (this.scenario === "onboarding") steps.push("moveToApplications", "password");
+    return { steps };
   }
 
-  async onboardingRun(_step: OnboardingStep): Promise<void> {
+  async onboardingRun(step: OnboardingStep): Promise<void> {
+    if (step === "dataNotice") {
+      await this.pause(150);
+      this.dataNoticeSeen = true;
+      return;
+    }
     await this.pause(900);
   }
 
