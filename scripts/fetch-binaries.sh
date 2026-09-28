@@ -19,8 +19,14 @@ esac
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
-echo "Downloading xray ($XRAY_ZIP)..."
-curl -fsSL -o "$TMP/xray.zip" "https://github.com/XTLS/Xray-core/releases/latest/download/$XRAY_ZIP"
+# Pinned, not "latest": the desktop config's dns-out uses proxySettings, which
+# Xray 26.9.9 rejects, so a fresh clone on "latest" built a DMG whose tunnel
+# never came up (found 28.09.2026). 26.3.27 is what the shipping DMG runs.
+# Move the pin only together with a config change tested on a real Mac.
+XRAY_VERSION="${XRAY_VERSION:-v26.3.27}"
+
+echo "Downloading xray $XRAY_VERSION ($XRAY_ZIP)..."
+curl -fsSL -o "$TMP/xray.zip" "https://github.com/XTLS/Xray-core/releases/download/$XRAY_VERSION/$XRAY_ZIP"
 unzip -qo "$TMP/xray.zip" -d "$TMP"
 mv "$TMP/xray" "$BIN_DIR/xray-$TRIPLE"
 mv "$TMP/geoip.dat" "$BIN_DIR/geoip.dat"
