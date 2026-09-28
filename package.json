@@ -14,16 +14,16 @@
     "ios:build": "tauri ios build --export-method app-store-connect"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
-    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/api": "^2.12.0",
+    "@tauri-apps/plugin-clipboard-manager": "^2.4.0",
+    "@tauri-apps/plugin-opener": "^2.6.0",
     "lucide-react": "^1.11.0",
     "qrcode": "^1.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2",
+    "@tauri-apps/cli": "^2.12.0",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
