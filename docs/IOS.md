@@ -13,8 +13,16 @@ iOS полностью другой — этого требует платфор
   отдельный процесс-расширение, которым управляет система;
 - маршруты задаются декларативно через `NEPacketTunnelNetworkSettings`.
 
-Поэтому на iOS оба протокола (VLESS Reality и Hysteria2) обслуживает один
-движок — **sing-box** (`Libbox.xcframework`), работающий внутри расширения.
+Поэтому на iOS все протоколы (VLESS REALITY с Vision или XHTTP и Hysteria2)
+обслуживает один движок — **Xray-core** из `LibXray.xcframework`
+([libXray](https://github.com/XTLS/libXray), MIT, поверх Xray-core, MPL-2.0),
+работающий внутри расширения. Тот же Xray, что на macOS, и тот же генератор
+конфига: у iPhone те же локации и правила, что у Mac.
+
+До 28.09.2026 здесь был sing-box (Libbox). Его сменили по трём причинам: в нём
+нет XHTTP (Британия, США и Франция с 27.09 только XHTTP), он не проходит
+REALITY на Xray ≥ 26.9.8 (issue SagerNet/sing-box#4520), и он GPL-3.0, что
+несовместимо с App Store.
 
 ## Архитектура
 
@@ -24,7 +32,7 @@ iOS полностью другой — этого требует платфор
 │                                                            │
 │  React UI (WKWebView) ──invoke──> Rust core                │
 │    │  адаптив: safe areas,          │ subscription.rs      │
-│    │  44pt-таргеты, iPad-центровка  │ singbox.rs (конфиг)  │
+│    │  44pt-таргеты, iPad-центровка  │ xray_apple.rs (конфиг)│
 │    │                                │ ios_vpn.rs (FFI)     │
 │    │                                ▼                      │
 │    │                     VpnBridge.swift (@_cdecl)         │
@@ -34,8 +42,8 @@ iOS полностью другой — этого требует платфор
      │            ┌──────────────────────────────────┐
      │            │ PacketTunnel.appex               │
      │            │  PacketTunnelProvider.swift      │
-     │            │  └─ sing-box (Libbox.xcframework)│
-     │            │     VLESS Reality / Hysteria2    │
+     │            │  └─ Xray-core (LibXray.xcframework)
+     │            │     REALITY Vision/XHTTP, Hy2    │
      │            └──────────────────────────────────┘
      ▼
   весь трафик устройства
@@ -44,14 +52,22 @@ iOS полностью другой — этого требует платфор
 Поток подключения:
 
 1. UI вызывает `vpn_connect` (тот же интерфейс команд, что на macOS).
-2. Rust скачивает подписку, выбирает сервер, строит **JSON-конфиг sing-box**
-   (`src-tauri/src/singbox.rs`) — умный роутинг сохранён: приватные сети и
-   российские домены идут напрямую, QUIC блокируется для VLESS.
+2. Rust скачивает подписку, выбирает сервер и строит **JSON-конфиг Xray**
+   (`src-tauri/src/xray_apple.rs`) из десктопного генератора
+   (`subscription.rs`): те же исходящие, тот же роутинг из профиля подписки и
+   «Своих правил» — приватные сети и российские домены напрямую, QUIC
+   блокируется для VLESS. Вместо SOCKS-порта — вход `tun`, правила без
+   geo-файлов (сети прописаны литералами). Рядом — адреса туннеля для
+   `NEPacketTunnelNetworkSettings`: всё уходит одной строкой
+   `{"version":1,"xray":…,"tunnel":…}`.
 3. Через C FFI конфиг уходит в `VpnBridge.swift`, который сохраняет
    VPN-профиль (`NETunnelProviderManager`) и стартует туннель. При первом
    подключении iOS покажет системный диалог «Разрешить конфигурацию VPN».
-4. Система поднимает расширение `PacketTunnel`, оно запускает sing-box и
-   отдаёт ему tun-интерфейс.
+4. Система поднимает расширение `PacketTunnel`. Оно применяет адреса и
+   маршруты (IPv4 и IPv6 по умолчанию в туннель, локальные сети мимо, DNS —
+   адрес внутри туннеля), находит файловый дескриптор utun, кладёт его в
+   `env["xray.tun.fd"]` конфига и запускает Xray (`CGoInvoke` → `runXray`;
+   остановка — `stopXray`).
 5. Rust опрашивает статус NE и возвращает результат в UI.
 
 ## Требования
@@ -60,7 +76,8 @@ iOS полностью другой — этого требует платфор
   `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`
 - **Платный Apple Developer аккаунт** — entitlement Network Extension не
   работает с бесплатным.
-- Go 1.23+ (`brew install go`) — для сборки Libbox.
+- Go (`brew install go`) и python3 — для сборки `LibXray.xcframework`. Нужную
+  версию Go (сейчас go1.27.1) скрипт скачивает сам.
 - Rust + iOS-таргеты (`rustup target add aarch64-apple-ios aarch64-apple-ios-sim`).
 - Node.js 18+, CocoaPods, xcodegen (поставит setup-скрипт).
 - **Реальный iPhone/iPad** — симулятор не поддерживает Network Extension:
@@ -69,8 +86,9 @@ iOS полностью другой — этого требует платфор
 ## Сборка
 
 ```bash
-# 1. Движок расширения (sing-box → Libbox.xcframework), один раз
-bash scripts/build-libbox.sh
+# 1. Движок расширения (Xray-core → LibXray.xcframework), один раз и после
+#    смены версий в скрипте. Срезы: iOS, iOS Simulator, macOS, tvOS, tvOS Sim.
+bash scripts/build-libxray.sh
 
 # 2. Окружение и Xcode-проект. PVPN_TEAM_ID — Team ID платного аккаунта
 #    (developer.apple.com → Membership details); xcodegen пишет его в ОБА
@@ -88,7 +106,31 @@ npm run ios:dev
 только недостающие файлы (main.mm, bindings, LaunchScreen) и ничего
 существующего не перезаписывает. Дальше скрипт перегенерирует проект
 xcodegen'ом и падает с понятным сообщением, если нет `VpnBridge.swift` или
-`Libbox.xcframework`.
+`LibXray.xcframework`. Старый `Frameworks/Libbox.xcframework` можно удалить:
+его больше ничто не линкует.
+
+### Движок: что и из чего собирается
+
+`scripts/build-libxray.sh` закрепляет всё, от чего зависит двоичный код
+расширения: тег **и коммит** libXray (v26.9.9), коммит Xray-core (v26.9.9),
+который libXray пинует в go.mod, и версию Go (go1.27.1). Сдвинутый тег или
+разошедшийся пин ломают сборку, а не подменяют движок. Сборка — штатная
+`python3 build/main.py apple go local` из libXray (cgo, один Go-рантайм, есть
+срез tvOS), с двумя изменениями ради лицензии (проверено 28.09.2026):
+
+- Xray-core тянет sagernet/sing (GPL-3.0) ради Shadowsocks 2022 — через
+  загрузчик конфига и CLI, даже если конфиг его не использует.
+  `scripts/libxray/xray-core-no-gpl.patch` убирает Shadowsocks 2022 и
+  CLI-команды (мы не используем ни то, ни другое). Если патч не ложится на
+  новую версию Xray-core, сборка падает — патч нужно переделать.
+- XTLS/REALITY тянет juju/ratelimit (LGPL-3.0) ради серверной функции.
+  Вместо него подставлен `scripts/libxray/ratelimit` — своя реализация тех же
+  трёх имён под MIT (`go test` в этой папке).
+
+В конце скрипт перечисляет Go-модули, реально слинкованные в iOS-срез, с их
+лицензиями и текстами в `scripts/libxray-notices.json` (коммитится; вход для
+экрана лицензий) и падает на любой GPL-семейной или нераспознанной лицензии.
+Рядом с фреймворком пишется `Frameworks/LibXray.version`.
 
 После правок `project.yml` — снова `npm run ios:setup` (или
 `cd src-tauri/gen/apple && PVPN_TEAM_ID=… xcodegen generate`: без переменной
@@ -183,18 +225,20 @@ Go такие адреса в NAT64 не переводит.
 
 | Файл | Роль |
 |---|---|
-| `src-tauri/src/singbox.rs` | генерация конфига sing-box из подписки |
+| `src-tauri/src/xray_apple.rs` | конфиг Xray для расширения (из десктопного генератора) и адреса туннеля |
 | `src-tauri/src/ios_vpn.rs` | FFI-мост Rust → Swift, ожидание статуса NE |
 | `src-tauri/tauri.ios.conf.json` | iOS-оверрайд: bundle ID App Store, основа номера сборки, без externalBin-бинарников |
 | `src-tauri/capabilities/desktop.json` | разрешения плагинов, которые линкуются только на desktop |
 | `src-tauri/gen/apple/project.yml` | спека xcodegen: app + PacketTunnel таргеты, bundle ID, версии, команда |
 | `src-tauri/gen/apple/ExportOptions.plist` | экспорт для App Store Connect |
 | `.../Sources/proxysvpn-desktop/VpnBridge.swift` | управление NETunnelProviderManager |
-| `.../PacketTunnel/PacketTunnelProvider.swift` | расширение: sing-box внутри NE |
+| `.../PacketTunnel/PacketTunnelProvider.swift` | расширение: Xray внутри NE, дескриптор utun, журнал памяти |
 | `.../proxysvpn-desktop_iOS/PrivacyInfo.xcprivacy`, `.../PacketTunnel/PrivacyInfo.xcprivacy` | манифесты приватности |
 | `.../proxysvpn-desktop_iOS/{en,ru}.lproj/InfoPlist.strings` | имя под иконкой |
 | `.../Assets.xcassets/AppIcon.appiconset` | иконки iOS (копия `src-tauri/icons/ios`) |
-| `scripts/build-libbox.sh` | сборка Libbox.xcframework (пиновая версия sing-box) |
+| `scripts/build-libxray.sh` | сборка LibXray.xcframework (пины, патч лицензии, список лицензий) |
+| `scripts/libxray/` | патч Xray-core без GPL и замена juju/ratelimit |
+| `scripts/libxray-notices.json` | лицензии Go-модулей движка (генерируется скриптом) |
 | `scripts/setup-ios.sh` | проверка окружения, `tauri ios init` на свежем клоне, xcodegen |
 
 ## Отличия поведения от macOS
@@ -202,15 +246,35 @@ Go такие адреса в NAT64 не переводит.
 - **Нет прав root и диалога администратора** — вместо него системный запрос
   «Разрешить конфигурацию VPN» (один раз).
 - **Нет трея** — статус VPN виден в статус-баре iOS и в Настройках → VPN.
-- **DNS идёт через туннель** (DoH 1.1.1.1, для RU-доменов — 77.88.8.8
-  напрямую). На desktop DNS сознательно оставлен системным ради скорости.
+- **DNS идёт через туннель, и это политика, на которую ссылается экран
+  данных в приложении** — менять её только вместе с тем текстом:
+  - все имена — Cloudflare DoH (`https://1.1.1.1/dns-query`) через узел;
+  - российские и прочие «прямые» имена (профиль подписки, запасной список
+    `RU_DIRECT_DOMAINS`, «Всегда напрямую») — Yandex `77.88.8.8` напрямую, мимо
+    туннеля; «Всегда через VPN» выигрывает у прямого списка;
+  - имя самого узла — системным резолвером расширения (он знает NAT64/DNS64);
+  - приложениям отдаются только A-записи: IPv6-выхода у узлов нет. IPv6,
+    который всё же дошёл до туннеля и не ушёл «напрямую», отбивается сразу;
+  - запросы не-адресных типов (HTTPS/SVCB, MX, TXT, SRV) получают пустой
+    ответ NOERROR: десктоп отправляет их через узел `proxySettings`, которого
+    в Xray 26.9 больше нет.
+
+  Настройка «DNS» из экрана туннеля на iOS не применяется. На desktop DNS
+  устроен иначе (см. `build_xray_config`).
+- **Адрес узла** резолвится системным резолвером: IPv4, если сеть его умеет,
+  иначе IPv6 (на сети IPv6-only с NAT64 это синтезированный адрес). Узел,
+  записанный в подписке IPv4-литералом, на такой сети недоступен — в журнал
+  пишется предупреждение.
 - **Смена сети / сон** обрабатывает система + `sleep()/wake()` в расширении —
   route-watchdog не нужен.
 - **Пинг** меряется через туннель (на desktop — напрямую до edge-сервера),
   значения могут быть чуть выше.
-- Hysteria2 c `pinSHA256`: sing-box не поддерживает пин, используется
-  `insecure` (сервер аутентифицируется паролем hy2 до передачи данных —
-  тот же компромисс, что и на desktop, где пин включает insecure).
+- **Hysteria2** — встроенный клиент Xray (фаза 1). Пин сертификата
+  (`pinSHA256`) проверяется: он превращается в `pinnedPeerCertSha256`, режима
+  `insecure` нет. Ссылка с `insecure=1` без пина не подключается (движок
+  проверяет каждый сертификат). Если клиент Xray окажется нерабочим из
+  российских сетей (Xray-core#6717), фаза 2 — собрать клиент apernet в ту же
+  Go-сборку (не отдельным фреймворком).
 - Логи: `Documents/app.log` — через Finder (iPhone по кабелю → «Файлы» →
   ProxysVPN); в приложении «Файлы» на телефоне папки нет, потому что
   `LSSupportsOpeningDocumentsInPlace` убран. Логи в Console.app: subsystem
@@ -219,16 +283,21 @@ Go такие адреса в NAT64 не переводит.
 
 ## Известные ограничения и грабли
 
-- **Лимит памяти расширения ~50 МБ** — перед стартом вызывается
-  `LibboxSetMemoryLimit(true)`; не добавляйте в конфиг тяжёлые rule-set'ы без
-  необходимости.
-- `PacketTunnelProvider.swift` собирается с **sing-box v1.12.4**
-  (версия запинована в `scripts/build-libbox.sh`). При обновлении sing-box
-  сверяйте сигнатуры протокола с `ExtensionPlatformInterface.swift` из
-  [sing-box-for-apple](https://github.com/SagerNet/sing-box-for-apple) того же
-  тега — gomobile-API между минорными версиями меняется, а Swift ещё и
-  переименовывает методы (`autoDetectInterfaceControl` → `autoDetectControl`,
-  `sendNotification` → `send`). Расширению нужен `libresolv.tbd`.
+- **Лимит памяти расширения ~50 МБ** (цель — не больше 45 МиБ). libXray сам
+  ограничивает кучу Go 30 МиБ и раз в секунду возвращает память системе.
+  Расширение каждые 30 с пишет в журнал `footprint … MiB, available … MiB`
+  (Console.app, subsystem `com.proxysvpn.app.PacketTunnel`, категория
+  `Memory`, уровень info — включить «Include Info Messages»). Geo-файлы в
+  расширение не кладутся: правила только литералами.
+- **Один Go-рантайм на процесс.** В расширение линкуется только
+  `LibXray.xcframework`; второй Go-фреймворк (Libbox, отдельный Hysteria)
+  роняет процесс при загрузке. Расширению нужны `libresolv.tbd`,
+  `Security.framework` и `CoreFoundation.framework` (их зовёт рантайм Go;
+  статическая библиотека флаги линковки не несёт).
+- **Прямые адреса на IPv6-only Wi-Fi.** На сети NAT64 без CLAT (как у App
+  Review) расширение не может открыть IPv4-адрес напрямую, поэтому российские
+  сайты, которые идут мимо туннеля, там не откроются; всё, что идёт через
+  узел, работает. На сотовых сетях IPv6-only с 464XLAT такой проблемы нет.
 - **Xcode 27 (Swift 6.4):** swift-rs 1.0.7 передаёт SDK и target iOS в
   `swift build` так, что новая система сборки их игнорирует и собирает
   Swift-пакет Tauri под macOS — фаза «Build Rust Code» падает с `unable to
@@ -259,6 +328,32 @@ Go такие адреса в NAT64 не переводит.
 
 ## Лицензии
 
-iOS-сборка линкует [sing-box](https://github.com/SagerNet/sing-box) (GPL-3.0
-с дополнительными условиями) вместо xray/tun2socks. Проверьте совместимость с
-вашей моделью распространения до публикации в App Store.
+Расширение линкует только разрешительный код и MPL-2.0 (файловый копилефт):
+Xray-core и XTLS/REALITY (MPL-2.0), libXray (MIT), utls, quic-go, gVisor и
+остальные — полный список с текстами в `scripts/libxray-notices.json`. MPL
+требует сказать получателю, где взять исходники: Xray-core — коммит
+`52a412d9e2f5` плюс наш патч `scripts/libxray/xray-core-no-gpl.patch` (этот
+репозиторий публичный). Apache-2.0 требует показать файлы NOTICE — они в том
+же JSON (`noticeText`). GPL-кода в сборке нет: это проверяет
+`scripts/build-libxray.sh`.
+
+## Проверка на устройствах (владелец)
+
+Симулятор Network Extension не запускает, поэтому всё ниже — на железе, с
+командой разработчика организации:
+
+1. Самый старый поддерживаемый iPhone (iOS 15+) и iPad: привязка, подключение
+   к каждой локации — Vision, XHTTP (Британия, США, Франция), Hysteria2
+   (Нидерланды); несколько сайтов, видео.
+2. Из российских сетей (домашний провайдер и мобильный): Hysteria2 через
+   встроенный клиент Xray — если не работает, это сигнал к фазе 2.
+3. REALITY против узла на Xray ≥ 26.9.8.
+4. NAT64: Mac → Общий доступ → с Option (i) у «Общий интернет» → «Create NAT64
+   Network»; iPhone на этой сети: подписка скачивается, подключение
+   поднимается, сайты через узел открываются.
+5. Двухчасовой прогон на максимальной скорости со сменой сетей (Wi-Fi ↔
+   сотовая, самолётный режим): в Console `footprint` расширения не выше
+   45 МиБ, расширение не перезапускается.
+6. Страница проверки утечек: нет IPv6 и нет DNS мимо туннеля (кроме
+   российских имён через 77.88.8.8).
+7. Apple TV — когда появится tvOS-таргет (срез во фреймворке уже есть).

@@ -3,7 +3,7 @@
 > 🇬🇧 [English version](README.md)
 >
 > 📱 **iPhone / iPad:** из этой же кодовой базы собирается iOS-приложение с
-> туннелем в Network Extension (движок sing-box) — см. [docs/IOS.md](docs/IOS.md).
+> туннелем в Network Extension (движок Xray-core через libXray) — см. [docs/IOS.md](docs/IOS.md).
 
 Нативный VPN-клиент для macOS под сервис [ProxysVPN](https://proxysvpn.com). Пропускает **весь** системный трафик (браузер, Telegram, Discord, игры, App Store) через VLESS Reality + ML-KEM туннель — никаких ручных настроек proxy в системе не нужно.
 
