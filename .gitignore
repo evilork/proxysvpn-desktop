@@ -22,6 +22,16 @@ src-tauri/gen/apple/*
 !src-tauri/gen/apple/PacketTunnel/
 src-tauri/gen/apple/PacketTunnel/*
 !src-tauri/gen/apple/PacketTunnel/PacketTunnelProvider.swift
+!src-tauri/gen/apple/PacketTunnel/PrivacyInfo.xcprivacy
+!src-tauri/gen/apple/proxysvpn-desktop_iOS/
+src-tauri/gen/apple/proxysvpn-desktop_iOS/*
+!src-tauri/gen/apple/proxysvpn-desktop_iOS/PrivacyInfo.xcprivacy
+!src-tauri/gen/apple/proxysvpn-desktop_iOS/en.lproj/
+src-tauri/gen/apple/proxysvpn-desktop_iOS/en.lproj/*
+!src-tauri/gen/apple/proxysvpn-desktop_iOS/en.lproj/InfoPlist.strings
+!src-tauri/gen/apple/proxysvpn-desktop_iOS/ru.lproj/
+src-tauri/gen/apple/proxysvpn-desktop_iOS/ru.lproj/*
+!src-tauri/gen/apple/proxysvpn-desktop_iOS/ru.lproj/InfoPlist.strings
 !src-tauri/gen/apple/Sources/
 src-tauri/gen/apple/Sources/*
 !src-tauri/gen/apple/Sources/proxysvpn-desktop/

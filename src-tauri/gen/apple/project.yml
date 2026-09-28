@@ -51,7 +51,14 @@ targets:
       - path: Sources
       - path: Assets.xcassets
       - path: Externals
+      # en.lproj / ru.lproj (InfoPlist.strings) are picked up from here as a
+      # localized variant group in the Resources phase; listing them on their
+      # own would copy two flat InfoPlist.strings into the bundle root.
       - path: proxysvpn-desktop_iOS
+        excludes:
+          - PrivacyInfo.xcprivacy
+      - path: proxysvpn-desktop_iOS/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: assets
         buildPhase: resources
         type: folder
@@ -73,9 +80,14 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations: [en, ru]
+        # Documents/app.log is reachable through Finder file sharing. The logs
+        # are sanitized by logger.rs and named in the in-app data notice.
         UIFileSharingEnabled: true
-        LSSupportsOpeningDocumentsInPlace: true
-        NSMotionUsageDescription: "Чтобы глаз на эмблеме держал взгляд, когда вы поворачиваете телефон. Показания датчика не покидают устройство и никуда не передаются."
+        # ITSAppUsesNonExemptEncryption is added only after the export
+        # compliance questionnaire in App Store Connect is answered, with the
+        # value that questionnaire gives - not guessed here.
     entitlements:
       path: proxysvpn-desktop_iOS/proxysvpn-desktop_iOS.entitlements
       properties:
@@ -120,6 +132,10 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - path: PacketTunnel
+        excludes:
+          - PrivacyInfo.xcprivacy
+      - path: PacketTunnel/PrivacyInfo.xcprivacy
+        buildPhase: resources
     info:
       path: PacketTunnel/Info.plist
       properties:
