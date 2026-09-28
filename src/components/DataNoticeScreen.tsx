@@ -55,13 +55,9 @@ function bulletKeys(platform: Platform | undefined): MsgKey[] {
   return keys;
 }
 
-const LIST_STYLE = {
-  margin: 0,
-  paddingLeft: 20,
-  display: "flex",
-  flexDirection: "column",
-  gap: 10,
-} as const;
+// A plain block list: as flex items the bullets lose their markers.
+const LIST_STYLE = { margin: "4px 0 0", paddingLeft: 20, listStyleType: "disc" } as const;
+const ITEM_STYLE = { marginBottom: 10 } as const;
 
 export default function DataNoticeScreen({
   mode,
@@ -122,12 +118,11 @@ export default function DataNoticeScreen({
           {t("notice.title")}
         </h1>
         <p className="body dim">{t("notice.intro")}</p>
-      </div>
-
-      <div className="section">
         <ul className="body" style={LIST_STYLE}>
           {bulletKeys(platform).map((key) => (
-            <li key={key}>{t(key)}</li>
+            <li key={key} style={ITEM_STYLE}>
+              {t(key)}
+            </li>
           ))}
         </ul>
       </div>
