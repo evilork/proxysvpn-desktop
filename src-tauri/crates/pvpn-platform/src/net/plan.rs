@@ -237,8 +237,11 @@ pub mod windows {
     /// default driver, which is Wintun here.
     pub const DEVICE_ARG: &str = DEVICE;
 
-    /// Argv for the engine, unchanged from the pre-split build: no `-mtu`, and
-    /// `-loglevel info`. tun2socks creates the device itself from `-device`.
+    /// Argv for the engine: no `-mtu`, and `-loglevel warn` as on macOS
+    /// (0.3.1) and Linux. On `info` tun2socks writes a line per connection,
+    /// which is the list of addresses the person visited. `warn`, never
+    /// `warning`: the long form makes tun2socks exit. tun2socks creates the
+    /// device itself from `-device`.
     pub fn tun2socks(bin: &std::path::Path, socks_port: u16) -> Argv {
         Argv::new(
             bin.to_string_lossy().to_string(),
@@ -248,7 +251,7 @@ pub mod windows {
                 "-proxy".to_string(),
                 format!("socks5://127.0.0.1:{}", socks_port),
                 "-loglevel".to_string(),
-                "info".to_string(),
+                "warn".to_string(),
             ],
         )
     }
@@ -918,6 +921,26 @@ mod tests {
             linux::host_route_query(Ipv4Addr::new(203, 0, 113, 7)).to_string(),
             "ip -4 route get 203.0.113.7"
         );
+    }
+
+    /// On `info` tun2socks prints a line for every connection — the list of
+    /// addresses the person visited, and the 82.7 MB log 0.3.1 moved off it.
+    /// Windows takes the same level as macOS and Linux.
+    #[test]
+    fn windows_tun2socks_logs_only_warnings() {
+        let argv = windows::tun2socks(std::path::Path::new(r"C:\pvpn\tun2socks.exe"), 10808);
+        assert_eq!(
+            argv.args,
+            vec![
+                "-device",
+                "ProxysVPN",
+                "-proxy",
+                "socks5://127.0.0.1:10808",
+                "-loglevel",
+                "warn",
+            ]
+        );
+        assert!(!argv.args.contains(&"info".to_string()));
     }
 
     #[test]
