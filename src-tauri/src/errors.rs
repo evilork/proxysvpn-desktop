@@ -71,19 +71,31 @@ pub enum ErrorCode {
     // ── Bringing the tunnel up ─────────────────────────────────────────────
     /// The user dismissed the administrator prompt.
     PermissionDenied,
-    /// This machine has no way to grant the rights at all: no pkexec, or the
-    /// app runs from an AppImage that root cannot execute from (Linux). Not
-    /// a refusal, so not "press Retry and allow it".
+    /// This machine has no way to grant the rights at all: no pkexec, or no
+    /// polkit agent in the session (Linux). Not a refusal, so not "press
+    /// Retry and allow it".
     #[cfg_attr(not(desktop), allow(dead_code))]
     ElevationUnavailable,
+    /// SteamOS: the system dialog was dismissed or refused. On a Steam Deck
+    /// the likely reason is a deck user with no password, which is how
+    /// SteamOS ships it; the screen says how to set one (Konsole → passwd).
+    #[cfg_attr(not(desktop), allow(dead_code))]
+    SteamosPasswordNeeded,
+    /// SteamOS Gaming Mode: no polkit agent, so no password window, and the
+    /// AppImage's one-time setup has not been made (or an update needs it
+    /// again). It has to happen once in Desktop Mode.
+    #[cfg_attr(not(desktop), allow(dead_code))]
+    SteamosDesktopModeNeeded,
     /// Engine binary missing or refused to start.
     EngineStartFailed,
     /// macOS: the engines could not be copied into the root-owned folder at
     /// launch (`engine_stage.rs`), so none will start until a relaunch that
-    /// succeeds. Not ENGINE_START_FAILED, whose "press again" cannot help:
-    /// the cause is on the machine (a full disk, a folder of another owner)
-    /// and the log names it.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    /// succeeds. The Linux AppImage: its helper could not be copied into
+    /// /home/.proxysvpn (pvpn-platform helper/install.rs). Not
+    /// ENGINE_START_FAILED, whose "press again" cannot help: the cause is on
+    /// the machine (a full disk, a folder of another owner) and the log
+    /// names it.
+    #[cfg_attr(not(desktop), allow(dead_code))]
     EngineStageFailed,
     /// Engine was running and died under us.
     EngineDied,
@@ -210,13 +222,24 @@ pub fn classify(err: &anyhow::Error) -> AppError {
 
 /// The code for a failed preflight on Windows and Linux (tun_platform.rs).
 ///
-/// Only a machine that cannot elevate at all gets its own code: the platform
-/// layer says so with a type (`ElevationUnavailable`), and everything else a
-/// preflight reports is the person's own answer to the system dialog.
+/// The platform layer says with a type what is not the person's answer: a
+/// machine that cannot elevate at all (`ElevationUnavailable`), what SteamOS
+/// needs from them (`SteamOsAdvice`), an AppImage helper that could not be
+/// copied (`HelperSetupFailed`). Everything else a preflight reports is the
+/// person's own answer to the system dialog.
 #[cfg(desktop)]
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn preflight_code(err: &anyhow::Error) -> ErrorCode {
-    if pvpn_platform::privilege::is_elevation_unavailable(err) {
+    use pvpn_platform::privilege::{self, SteamOsAdvice};
+
+    if let Some(advice) = privilege::steamos_advice(err) {
+        match advice {
+            SteamOsAdvice::SetPassword => ErrorCode::SteamosPasswordNeeded,
+            SteamOsAdvice::UseDesktopMode => ErrorCode::SteamosDesktopModeNeeded,
+        }
+    } else if privilege::is_helper_setup_failure(err) {
+        ErrorCode::EngineStageFailed
+    } else if privilege::is_elevation_unavailable(err) {
         ErrorCode::ElevationUnavailable
     } else {
         ErrorCode::PermissionDenied
@@ -271,9 +294,9 @@ mod tests {
         }
     }
 
-    /// A machine that cannot elevate at all (no pkexec, an AppImage) is not
-    /// a refusal the person takes back by pressing Retry, so it does not get
-    /// PERMISSION_DENIED and its button.
+    /// A machine that cannot elevate at all (no pkexec, no polkit agent) is
+    /// not a refusal the person takes back by pressing Retry, so it does not
+    /// get PERMISSION_DENIED and its button.
     #[cfg(desktop)]
     #[test]
     fn a_machine_that_cannot_elevate_is_not_a_refusal() {
@@ -288,6 +311,36 @@ mod tests {
             AppError::new(ErrorCode::ElevationUnavailable).to_payload(),
             r#"{"code":"ELEVATION_UNAVAILABLE"}"#
         );
+    }
+
+    /// SteamOS gets what to do instead of "denied", and a helper that could
+    /// not be copied gets the "could not prepare its files" screen, however
+    /// much context the platform layer wraps around either.
+    #[cfg(desktop)]
+    #[test]
+    fn steamos_and_a_failed_helper_copy_get_their_own_screens() {
+        use pvpn_platform::privilege::{HelperSetupFailed, SteamOsAdvice};
+
+        let wrap = |err: anyhow::Error| err.context("spawn the privileged helper").context("preflight");
+        assert_eq!(
+            preflight_code(&wrap(anyhow::Error::new(SteamOsAdvice::SetPassword))),
+            ErrorCode::SteamosPasswordNeeded
+        );
+        assert_eq!(
+            preflight_code(&wrap(anyhow::Error::new(SteamOsAdvice::UseDesktopMode))),
+            ErrorCode::SteamosDesktopModeNeeded
+        );
+        assert_eq!(
+            preflight_code(&wrap(anyhow::Error::new(HelperSetupFailed("/home is writable by others".into())))),
+            ErrorCode::EngineStageFailed
+        );
+        // src/types.ts and src/i18n.ts match on these exact strings.
+        for (code, wire) in [
+            (ErrorCode::SteamosPasswordNeeded, "STEAMOS_PASSWORD_NEEDED"),
+            (ErrorCode::SteamosDesktopModeNeeded, "STEAMOS_DESKTOP_MODE_NEEDED"),
+        ] {
+            assert_eq!(AppError::new(code).to_payload(), format!(r#"{{"code":"{wire}"}}"#));
+        }
     }
 
     #[test]

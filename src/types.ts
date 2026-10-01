@@ -64,12 +64,19 @@ export type ErrorCode =
   | "PAIR_CODE_NOT_FOUND"
   | "PAIR_RATE_LIMITED"
   | "PERMISSION_DENIED"
-  // Linux: no pkexec, or an AppImage root cannot execute from. No system
-  // dialog would help, so it is not PERMISSION_DENIED and has no Retry.
+  // Linux: no pkexec, or no polkit agent in the session. No system dialog
+  // would help, so it is not PERMISSION_DENIED and has no Retry.
   | "ELEVATION_UNAVAILABLE"
+  // SteamOS (the AppImage): the dialog was dismissed or refused, most likely
+  // because the deck user has no password yet. Set one, then Retry.
+  | "STEAMOS_PASSWORD_NEEDED"
+  // SteamOS Gaming Mode: no polkit agent, so the one-time setup has to
+  // happen in Desktop Mode. Nothing here to press.
+  | "STEAMOS_DESKTOP_MODE_NEEDED"
   | "ENGINE_START_FAILED"
   // macOS: the engines could not be copied into the root-owned folder at
-  // launch. The cause is on the machine, so no Retry.
+  // launch; the Linux AppImage: its helper could not be copied into
+  // /home/.proxysvpn. The cause is on the machine, so no Retry.
   | "ENGINE_STAGE_FAILED"
   | "ENGINE_DIED"
   | "PORT_BUSY"
@@ -227,8 +234,12 @@ const DIRECT_ERROR_ACTION: Record<ErrorCode, ErrorAction> = {
   PAIR_RATE_LIMITED: "waitAndSee",
 
   PERMISSION_DENIED: "retry",
-  // The fix is on the machine (install the .deb or pkexec), not a press away.
+  // The fix is on the machine (install pkexec, start an agent), not a press away.
   ELEVATION_UNAVAILABLE: "contactSupport",
+  // `passwd` once, then the same dialog again.
+  STEAMOS_PASSWORD_NEEDED: "retry",
+  // The way out is Desktop Mode; Retry in Gaming Mode would only fail again.
+  STEAMOS_DESKTOP_MODE_NEEDED: "contactSupport",
   ENGINE_START_FAILED: "retry",
   // Connect again finds the same failed copy; a relaunch or support helps.
   ENGINE_STAGE_FAILED: "contactSupport",
