@@ -186,6 +186,12 @@ const SETTLING_WINDOW: Duration = Duration::from_secs(45);
 /// repair ends in Failed (`Session::sub_reuse_blocked`): the next Retry tears
 /// the tunnel down and asks the network for a fresh list, instead of reusing
 /// the stale one for the rest of the 15 minutes.
+///
+/// Asking is not the same as depending on the answer: when that fetch cannot
+/// reach any site (SUB_UNREACHABLE — the site names filtered while the nodes
+/// still get through, or a Failed that had nothing to do with the list), the
+/// list already held is used after all (`Session::fallback_sub_age`). A
+/// refusal from the service is never talked over that way.
 const SUB_REUSE_MS: u64 = 15 * 60 * 1000;
 
 /// Outgoing bytes with nothing coming back for this long is the passive half
@@ -607,6 +613,19 @@ impl Session {
         self.sub_fetched_at
             .map(|at| now.saturating_sub(at))
             .filter(|age| *age < SUB_REUSE_MS)
+    }
+
+    /// Age of the list a connect falls back to when the fetch it had to make
+    /// failed with `err`, or `None` when it must fail with that error.
+    ///
+    /// Only SUB_UNREACHABLE: no site could be reached, which says nothing
+    /// about the list. Any answer from the service — a refusal, an empty or
+    /// unreadable list — is the service speaking and is never talked over.
+    fn fallback_sub_age(&self, now: u64, err: &AppError) -> Option<u64> {
+        if err.code != ErrorCode::SubUnreachable || self.servers.is_empty() {
+            return None;
+        }
+        self.sub_fetched_at.map(|at| now.saturating_sub(at))
     }
 
     fn new() -> Self {
@@ -1594,7 +1613,19 @@ impl Core {
                     started.elapsed().as_millis()
                 ),
             );
-            fetched?;
+            if let Err(err) = fetched {
+                // See SUB_REUSE_MS: no site answered, so the list we hold is
+                // still the best there is.
+                let held = self.session.lock().await.fallback_sub_age(now_ms(), &err);
+                let Some(age) = held else {
+                    return Err(err);
+                };
+                logger::log(
+                    "warn",
+                    "vpn",
+                    &format!("подписка: сайты недоступны, берём список, полученный {} с назад", age / 1000),
+                );
+            }
         }
         if !self.is_current(generation).await {
             return Ok(());
@@ -4787,6 +4818,41 @@ mod tests {
 
         let empty = Session::new();
         assert_eq!(empty.reusable_sub_age(0), None);
+    }
+
+    /// Retry after a Failed must fetch, but when no site can be reached the
+    /// list already held still connects — as it did before the reuse block.
+    /// A refusal from the service is never talked over.
+    #[test]
+    fn an_unreachable_fetch_falls_back_to_the_list_already_held() {
+        let unreachable = AppError::new(ErrorCode::SubUnreachable);
+        let mut s = Session::new();
+        s.servers = vec![vless("Германия")];
+        s.sub_fetched_at = Some(1_000);
+        s.sub_reuse_blocked = true;
+        assert_eq!(s.fallback_sub_age(121_000, &unreachable), Some(120_000));
+        assert_eq!(
+            s.fallback_sub_age(1_000 + SUB_REUSE_MS * 4, &unreachable),
+            Some(SUB_REUSE_MS * 4),
+            "an older list still beats no connection when no site answers"
+        );
+
+        for refusal in [
+            ErrorCode::BalanceEmpty,
+            ErrorCode::Expired,
+            ErrorCode::DeviceTaken,
+            ErrorCode::NoDevices,
+            ErrorCode::SubNotice,
+            ErrorCode::SubEmpty,
+            ErrorCode::SubInvalid,
+            ErrorCode::SubMalformed,
+            ErrorCode::NoSubscription,
+        ] {
+            assert_eq!(s.fallback_sub_age(121_000, &AppError::new(refusal)), None, "{refusal:?}");
+        }
+
+        let empty = Session::new();
+        assert_eq!(empty.fallback_sub_age(121_000, &unreachable), None, "nothing held");
     }
 
     /// The tray is the only way to quit on Windows and Linux: in an English
