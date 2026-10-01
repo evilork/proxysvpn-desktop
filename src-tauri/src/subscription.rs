@@ -800,7 +800,7 @@ pub async fn fetch_all_servers(sub_url: &str, lang_en: bool) -> Result<Vec<Serve
 /// came back did not verify AND nothing usable was cached either. Every one
 /// of those leaves `fetch_subscription`'s result exactly what
 /// `fetch_subscription_only` produced — see `manifest::merge`.
-async fn fetch_manifest_servers(sub_url: &str, lang_en: bool) -> Option<(Vec<ServerConfig>, String)> {
+async fn fetch_manifest_servers(sub_url: &str, lang_en: bool) -> Option<manifest::ManifestPick> {
     let token = subscription_token(sub_url)?;
     let token_hash = manifest::token_hash_hex(&token);
     let now_ms = now_millis();
@@ -820,7 +820,17 @@ async fn fetch_manifest_servers(sub_url: &str, lang_en: bool) -> Option<(Vec<Ser
         .unwrap_or_default();
     let highest = manifest::highest_known_version(&token_hash);
 
-    let fresh = fetch_fresh_manifest(sub_url, &extra_hosts, &token, &token_hash, highest, now_ms).await;
+    let fresh = match fetch_fresh_manifest(sub_url, &extra_hosts, &token, &token_hash, highest, now_ms).await {
+        FreshManifest::Got(verified, host) => Some((verified, host)),
+        FreshManifest::Failed => None,
+        FreshManifest::Refused => {
+            // 403 second device / 404 unknown or deleted: the endpoint's own
+            // final answer about this token. A cached list must not outlive
+            // it (it used to, for up to eight days).
+            manifest::forget_cached();
+            return None;
+        }
+    };
     let from_cache = fresh.is_none() && cached.is_some();
 
     let (verified, host) = fresh.or(cached)?;
@@ -852,12 +862,22 @@ async fn fetch_manifest_servers(sub_url: &str, lang_en: bool) -> Option<(Vec<Ser
             host
         ),
     );
-    Some((servers, host))
+    Some(manifest::ManifestPick { servers, host, from_cache })
+}
+
+/// What one round of the manifest's own ladder produced.
+enum FreshManifest {
+    /// A fresh, verified manifest and the site that served it.
+    Got(manifest::Verified, String),
+    /// The endpoint's final "no" for this token (403 second device, 404
+    /// unknown or deleted).
+    Refused,
+    /// Anything else: unreachable, 429/5xx, an empty body, a failed check.
+    Failed,
 }
 
 /// The live half of `fetch_manifest_servers`: race the manifest's own ladder
-/// and verify what a 200 brings back. `None` on anything short of a fresh,
-/// valid manifest — the caller falls back to the cache in that case.
+/// and verify what a 200 brings back.
 async fn fetch_fresh_manifest(
     sub_url: &str,
     extra_hosts: &[String],
@@ -865,14 +885,20 @@ async fn fetch_fresh_manifest(
     token_hash: &str,
     highest_known_version: Option<u64>,
     now_ms: u64,
-) -> Option<(manifest::Verified, String)> {
-    let urls = manifest_urls(sub_url, extra_hosts).ok()?;
-    let answer = race_hosts(&urls).await.ok()?;
+) -> FreshManifest {
+    let Ok(urls) = manifest_urls(sub_url, extra_hosts) else {
+        return FreshManifest::Failed;
+    };
+    let Ok(answer) = race_hosts(&urls).await else {
+        return FreshManifest::Failed;
+    };
+    if matches!(answer.status(), 403 | 404) {
+        return FreshManifest::Refused;
+    }
     if answer.status() != 200 || answer.body().trim().is_empty() {
-        // 404 (unknown token) and 403 (second device) are final and correct
-        // to stop on; 429/5xx already exhausted the whole ladder inside
-        // `race_hosts` before landing here. Either way: no fresh manifest.
-        return None;
+        // 429/5xx already exhausted the whole ladder inside `race_hosts`
+        // before landing here: no fresh manifest, the cache may stand in.
+        return FreshManifest::Failed;
     }
     match manifest::verify_envelope(
         answer.body().as_bytes(),
@@ -888,7 +914,7 @@ async fn fetch_fresh_manifest(
                 answer.body().to_string(),
                 answer.host().to_string(),
             );
-            Some((verified, answer.host().to_string()))
+            FreshManifest::Got(verified, answer.host().to_string())
         }
         Err(reason) => {
             // Reason only, never the bytes that produced it.
@@ -897,7 +923,7 @@ async fn fetch_fresh_manifest(
                 "watafast-manifest",
                 &format!("манифест отклонён: {reason:?}"),
             );
-            None
+            FreshManifest::Failed
         }
     }
 }
