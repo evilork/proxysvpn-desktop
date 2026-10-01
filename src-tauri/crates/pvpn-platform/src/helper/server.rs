@@ -268,8 +268,9 @@ fn teardown() {
 ///
 /// Side effect worth knowing: the sidecars we spawn afterwards inherit the
 /// blocked mask, so a SIGTERM aimed at tun2socks would be ignored. We always
-/// stop it with SIGKILL (`Child::kill`), and the crash purge uses `pkill -9`,
-/// so nothing depends on tun2socks honouring SIGTERM.
+/// stop it with SIGKILL (`Child::kill`), the crash purge SIGKILLs the pid the
+/// route hint recorded, and PR_SET_PDEATHSIG is SIGKILL too, so nothing
+/// depends on tun2socks honouring SIGTERM.
 fn watch_signals() {
     // SAFETY: sigemptyset/sigaddset initialise a stack-allocated sigset_t;
     // pthread_sigmask with SIG_BLOCK on the only thread that exists so far is
