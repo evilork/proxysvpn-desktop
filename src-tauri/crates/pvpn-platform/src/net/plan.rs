@@ -243,7 +243,7 @@ pub mod windows {
     }
 
     /// `{` + 8-4-4-4-12 hex digits + `}`, and nothing else: the only shape
-    /// `remove_stale_device` puts inside a PowerShell string.
+    /// `remove_stale_device` puts into a device path.
     pub fn is_registry_guid(text: &str) -> bool {
         let Some(inner) = text.strip_prefix('{').and_then(|t| t.strip_suffix('}')) else {
             return false;
@@ -255,23 +255,22 @@ pub mod windows {
             })
     }
 
-    /// PowerShell that removes the not-present device whose instance id
-    /// carries `guid` (a Wintun adapter is `SWD\WINTUN\{guid}`) and prints
-    /// the instance ids it removed. `None` for anything that is not a GUID.
-    /// Only devices that are not running are touched, so a live adapter of
-    /// ours or anything else is never removed.
+    /// pnputil removing the Wintun device behind interface `guid`. Wintun
+    /// creates its adapters as software devices `SWD\WINTUN\{guid}` with the
+    /// interface GUID as instance id, so the path is known without asking
+    /// PnP. `None` for anything that is not a GUID.
+    ///
+    /// Not PowerShell + Get-PnpDevice, which this replaced: on the Windows 11
+    /// VM (02.10.2026) that pipeline never returned and the connect hung on
+    /// «Настраиваю сеть», Cancel included. pnputil answers at once, and a
+    /// device that is running is refused by it.
     pub fn remove_stale_device(guid: &str) -> Option<Argv> {
         if !is_registry_guid(guid) {
             return None;
         }
-        let script = format!(
-            "Get-PnpDevice -ErrorAction SilentlyContinue | \
-             Where-Object {{ $_.Status -ne 'OK' -and $_.InstanceId -like '*{guid}*' }} | \
-             ForEach-Object {{ & \"$env:SystemRoot\\System32\\pnputil.exe\" /remove-device $_.InstanceId | Out-Null; $_.InstanceId }}"
-        );
         Some(Argv::new(
-            system32(r"WindowsPowerShell\v1.0\powershell.exe"),
-            ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &script],
+            system32("pnputil.exe"),
+            ["/remove-device".to_string(), format!(r"SWD\WINTUN\{guid}")],
         ))
     }
 
@@ -1011,19 +1010,16 @@ mod tests {
     #[test]
     fn windows_removes_a_stale_device_only_by_a_well_formed_guid() {
         let argv = windows::remove_stale_device("{6B29FC40-CA47-1067-B31D-00DD010662DA}").expect("a GUID");
-        assert!(argv.program.to_ascii_lowercase().ends_with(r"\system32\windowspowershell\v1.0\powershell.exe"));
-        let script = argv.args.last().expect("script");
-        assert!(script.contains("-like '*{6B29FC40-CA47-1067-B31D-00DD010662DA}*'"));
-        assert!(script.contains("$_.Status -ne 'OK'"), "never a running device");
-        assert!(script.contains("pnputil.exe"));
+        assert!(argv.program.to_ascii_lowercase().ends_with(r"\system32\pnputil.exe"));
+        assert_eq!(argv.args, vec!["/remove-device", r"SWD\WINTUN\{6B29FC40-CA47-1067-B31D-00DD010662DA}"]);
         for bad in [
             "",
             "6B29FC40-CA47-1067-B31D-00DD010662DA",
             "{6B29FC40-CA47-1067-B31D-00DD010662D}",
-            "{6B29FC40-CA47-1067-B31D-00DD010662DA}' ; Remove-Item C:\\",
+            "{6B29FC40-CA47-1067-B31D-00DD010662DA} /force",
             "{*}",
         ] {
-            assert!(windows::remove_stale_device(bad).is_none(), "{bad:?} must not reach PowerShell");
+            assert!(windows::remove_stale_device(bad).is_none(), "{bad:?} must not reach pnputil");
         }
     }
 
