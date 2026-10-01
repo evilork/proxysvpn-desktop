@@ -3840,23 +3840,40 @@ async fn poll_pairing(token: &str) -> Result<PairOutcome, AppError> {
         return Err(AppError::new(ErrorCode::SubMalformed));
     }
     match ladder_get(&format!("/api/pair/{token}")).await {
-        Ok((_, body)) => {
-            let parsed: serde_json::Value =
-                serde_json::from_str(&body).map_err(|_| AppError::new(ErrorCode::SubInvalid))?;
-            match parsed.get("status").and_then(|v| v.as_str()) {
-                Some("ready") => parsed
-                    .get("subUrl")
-                    .and_then(|v| v.as_str())
-                    .map(|url| PairOutcome::Linked(url.to_string()))
-                    .ok_or_else(|| AppError::new(ErrorCode::SubInvalid)),
-                Some("pending") => Ok(PairOutcome::Waiting),
-                _ => Ok(PairOutcome::Expired),
-            }
-        }
+        Ok((_, body)) => read_pair_answer(&body),
         // The endpoint answers 404 once the token is spent or timed out, which
         // the ladder reports as "nothing there".
         Err(err) if err.code == ErrorCode::SubEmpty => Ok(PairOutcome::Expired),
         Err(err) => Err(err),
+    }
+}
+
+/// What one answer of `GET /api/pair/<token>` means.
+///
+/// The link in a "ready" answer goes through the same gate as a link
+/// delivered by a pair code (`pair_code::accept_pair_link`: https, one of our
+/// own sites). The QR slot is written by whoever POSTs first, with no session,
+/// and the token is in the QR on the screen: someone who reads it off a
+/// screen share or a screenshot could put any link there — plain http, any
+/// host — and the app stored it and sent all of the person's traffic through
+/// the servers that link names.
+fn read_pair_answer(body: &str) -> Result<PairOutcome, AppError> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| AppError::new(ErrorCode::SubInvalid))?;
+    match parsed.get("status").and_then(|v| v.as_str()) {
+        Some("ready") => {
+            let raw = parsed
+                .get("subUrl")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AppError::new(ErrorCode::SubInvalid))?;
+            pair_code::accept_pair_link(raw, &SITE_LADDER)
+                .map(PairOutcome::Linked)
+                .inspect_err(|_| {
+                    logger::log("warn", "pair", "refused a paired link that is not https on one of our sites");
+                })
+        }
+        Some("pending") => Ok(PairOutcome::Waiting),
+        _ => Ok(PairOutcome::Expired),
     }
 }
 
@@ -4691,6 +4708,32 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+
+    /// The QR slot is writable by anyone who reads the token off the screen;
+    /// a link it returns must be https on one of our own sites, exactly like
+    /// one a pair code returns.
+    #[test]
+    fn a_paired_link_from_the_qr_slot_must_be_ours_and_https() {
+        let ours = r#"{"status":"ready","subUrl":"https://proxysvpn.com/api/sub/0123456789abcdef0123456789abcdef"}"#;
+        assert!(matches!(read_pair_answer(ours), Ok(PairOutcome::Linked(url)) if url.starts_with("https://proxysvpn.com/")));
+
+        for planted in [
+            r#"{"status":"ready","subUrl":"http://evil.example/s/x"}"#,
+            r#"{"status":"ready","subUrl":"https://evil.example/s/x"}"#,
+            r#"{"status":"ready","subUrl":"http://proxysvpn.com/api/sub/0123456789abcdef0123456789abcdef"}"#,
+            r#"{"status":"ready","subUrl":"https://203.0.113.9/api/sub/x"}"#,
+            r#"{"status":"ready"}"#,
+        ] {
+            let refused = read_pair_answer(planted);
+            assert!(
+                matches!(&refused, Err(e) if e.code == ErrorCode::SubInvalid),
+                "{planted}"
+            );
+        }
+        assert!(matches!(read_pair_answer(r#"{"status":"pending"}"#), Ok(PairOutcome::Waiting)));
+        assert!(matches!(read_pair_answer(r#"{"status":"gone"}"#), Ok(PairOutcome::Expired)));
+        assert!(read_pair_answer("not json").is_err());
+    }
 
     /// A dead tun2socks takes the device and both half-defaults with it; the
     /// probe then reaches the site straight from the real address. That must
