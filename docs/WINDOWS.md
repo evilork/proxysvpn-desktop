@@ -14,7 +14,7 @@ VLESS:  tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10808 (xray)  --vless-
 Hy2:    tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10808 (xray) --socks--> 127.0.0.1:10809 (hysteria) -> node
 ```
 
-Startup order (`src-tauri/src/tun.rs`, identical on every platform):
+Startup order (`crates/pvpn-platform/src/net/local.rs`, shared with macOS):
 
 1. host route `<node>/32` through the physical adapter, so the engines keep
    reaching the node once the default points into the tunnel;
@@ -25,7 +25,10 @@ Startup order (`src-tauri/src/tun.rs`, identical on every platform):
    physical default, which stays in the table untouched.
 
 Teardown runs in the fixed order pinned by `net::TEARDOWN_ORDER`
-(`crates/pvpn-platform/src/net/mod.rs`) and unit-tested there.
+(`crates/pvpn-platform/src/net/mod.rs`). Both the startup order and every
+rollback path are unit-tested in `net/local.rs` against a fake backend that
+records the calls, so a reordering or a forgotten undo fails the build rather
+than leaking a route on a user's machine.
 
 ## Platform specifics
 

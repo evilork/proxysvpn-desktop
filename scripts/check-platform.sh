@@ -1,30 +1,31 @@
 #!/usr/bin/env bash
 # scripts/check-platform.sh
 #
-# Everything about the Windows (and Linux) port that CAN be verified on a Mac.
+# Everything about the Windows and Linux ports that CAN be verified from a Mac.
 #
-# The full app cannot be type-checked for Windows here: reqwest pulls in `ring`,
-# whose build script compiles C and therefore needs the MSVC toolchain and the
-# Windows SDK. The platform layer was split into its own crate (no tauri, no
+# The full app cannot be type-checked for those targets here: reqwest pulls in
+# `ring`, whose build script compiles C and therefore needs the MSVC toolchain /
+# a Linux sysroot. The platform layer was split into its own crate (no tauri, no
 # reqwest, no rustls — see src-tauri/crates/pvpn-platform/Cargo.toml) precisely
-# so that the OS-specific code is not in that blind spot: it is pure Rust plus
-# the `windows` crate, so `cargo check --target x86_64-pc-windows-msvc` works
-# without a Windows machine.
+# so that the OS-specific code is not inside that blind spot: it is pure Rust
+# plus the `windows` crate and libc, so `cargo check --target …` works for both
+# without either machine. That covers the Win32 FFI, the Linux root helper and
+# every route/DNS code path.
 #
-# What this does NOT prove: that the full app links on Windows, that netsh
-# accepts every argument spelling, or that tun2socks creates a Wintun adapter
-# named the way we expect. Only CI on windows-latest and a run on real hardware
-# can.
+# What this does NOT prove: that the full app links, that `netsh` and `ip`
+# accept every argument spelling, that tun2socks really names its adapter the
+# way we expect, or that pkexec behaves in a live desktop session. Only CI on
+# windows-latest / ubuntu-22.04 and a run on real hardware can.
 #
 # Usage: scripts/check-platform.sh
 
 set -euo pipefail
 cd "$(dirname "$0")/../src-tauri"
 
-WIN_TARGET="x86_64-pc-windows-msvc"
+TARGETS=(x86_64-pc-windows-msvc x86_64-unknown-linux-gnu)
 
 echo "== host build (macOS) =============================================="
-cargo check --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
 
 echo
 echo "== host tests ====================================================="
@@ -36,15 +37,22 @@ else
   echo "skipping proxysvpn-desktop tests: ../dist is missing (run npm run build)"
 fi
 
-echo
-echo "== platform layer, cross-checked for Windows ======================"
-if rustup target list --installed | grep -qx "$WIN_TARGET"; then
-  cargo check -p pvpn-platform --target "$WIN_TARGET" --all-targets
-else
-  echo "target $WIN_TARGET is not installed; run:"
-  echo "  rustup target add $WIN_TARGET"
-  exit 1
-fi
+missing=0
+for target in "${TARGETS[@]}"; do
+  if ! rustup target list --installed | grep -qx "$target"; then
+    echo "target $target is not installed; run: rustup target add $target"
+    missing=1
+  fi
+done
+[ "$missing" -eq 0 ] || exit 1
+
+for target in "${TARGETS[@]}"; do
+  echo
+  echo "== platform layer, cross-checked for $target =="
+  # Clippy and not just check: the lints are where the FFI mistakes show up,
+  # and these two targets get no other review on this machine.
+  cargo clippy -p pvpn-platform --all-targets --target "$target" -- -D warnings
+done
 
 echo
-echo "All checks that are possible without a Windows toolchain passed."
+echo "All checks that are possible without a Windows or Linux machine passed."
