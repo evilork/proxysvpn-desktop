@@ -281,9 +281,15 @@ fn dns_down(backend: DnsBackend) {
             run_ok(&p::resolved_flush());
         }
         DnsBackend::ResolvConf => {
+            // Only over our own file: one NetworkManager wrote since (after
+            // a reboot, on a new network) is newer than the backup and stays.
             match logic::resolv_restore(&paths::linux_persistent_dir(), Path::new(RESOLV_CONF)) {
-                Ok(true) => log("info", "/etc/resolv.conf restored"),
-                Ok(false) => {}
+                Ok(logic::ResolvRestore::Restored) => log("info", "/etc/resolv.conf restored"),
+                Ok(logic::ResolvRestore::KeptNewer) => log(
+                    "info",
+                    "/etc/resolv.conf was rewritten after connect; kept it and dropped the old backup",
+                ),
+                Ok(logic::ResolvRestore::NoBackup) => {}
                 Err(e) => log("warn", &format!("could not restore /etc/resolv.conf: {}", e)),
             }
         }

@@ -178,7 +178,11 @@ table and the pids of its own engines (`net/windows.rs`).
   the machine pointed at our resolvers with nothing left to restore.
   `purge_stale_sync()` puts it back on the next start, which means the machine
   keeps our resolvers until the app is launched again; a systemd unit that
-  restores it at boot instead is the proper fix and is not written yet.
+  restores it at boot instead is the proper fix and is not written yet. The
+  backup only ever goes back over our own file: when NetworkManager (or
+  resolvconf, or resolved) has rewritten `/etc/resolv.conf` since — at boot on
+  another network, say — theirs is newer, so it is kept and only the stale
+  backup is deleted. Disconnect and the .deb's `postrm` follow the same rule.
 
 ## DNS
 
