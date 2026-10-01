@@ -34,8 +34,15 @@ runner image for the same reason.
 
 Runtime packages (what the `.deb` asks for): `libwebkit2gtk-4.1-0`, `libgtk-3-0`,
 `iproute2`, `pkexec | policykit-1` and
-`libayatana-appindicator3-1 | libappindicator3-1`; recommended `systemd-resolved`
-(clean per-link DNS).
+`libayatana-appindicator3-1 | libappindicator3-1`.
+
+`systemd-resolved` is deliberately not even recommended. apt installs
+recommendations by default, and on a desktop that does not already run it
+(Debian 13 live checked on 01.10.2026) installing it switches
+`/etc/resolv.conf` to the stub at 127.0.0.53 while NetworkManager never hands
+it a server: every name lookup on the machine fails until resolved is removed.
+The app does not need it: with resolved running it sets per-link DNS through
+`resolvectl`, without it it rewrites `/etc/resolv.conf` and restores it.
 
 `pkexec` is a dependency with both package names as alternatives: it moved from
 `policykit-1` (Ubuntu 22.04) into a package of its own (Debian 12, Ubuntu 23.04+),
