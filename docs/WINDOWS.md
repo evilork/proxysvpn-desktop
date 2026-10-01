@@ -10,9 +10,13 @@ one run on real hardware before this ships to anybody.
 Identical in shape to macOS — same engines, same chain, same split routing:
 
 ```
-VLESS:  tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10808 (xray)  --vless--> node
-Hy2:    tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10808 (xray) --socks--> 127.0.0.1:10809 (hysteria) -> node
+VLESS:  tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10808 (xray)     --vless--> node
+Hy2:    tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10809 (hysteria) --hy2---->  node
 ```
+
+The two are alternatives, not a chain: for a hy2 server `lib.rs` starts hysteria
+only and hands `tun::start` the hysteria port directly, so xray is not running
+at all and tun2socks dials hysteria.
 
 Startup order (`crates/pvpn-platform/src/net/local.rs`, shared with macOS):
 
@@ -95,8 +99,11 @@ scripts/check-platform.sh
 ```
 
 It builds and tests everything on the host and then runs
-`cargo check -p pvpn-platform --target x86_64-pc-windows-msvc`, which type-checks
-the whole Windows platform layer including its `windows`-crate FFI.
+`cargo clippy -p pvpn-platform --all-targets --target x86_64-pc-windows-msvc
+-- -D warnings`, which type-checks *and* lints the whole Windows platform layer
+including its `windows`-crate FFI. Clippy rather than `cargo check` on purpose:
+the lints are where the FFI mistakes show up, and this target gets no other
+review on this machine. CI runs the same script, so the two cannot drift.
 
 `cargo check` for the **whole app** with that target cannot work here: `reqwest`
 pulls in `ring`, whose build script compiles C and fails with

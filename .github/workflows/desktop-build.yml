@@ -17,12 +17,32 @@ name: desktop-build
 
 on:
   workflow_dispatch:
+  # main is built too. Without this a merge is never compiled or bundled and a
+  # breakage only surfaces on the next pull request — which is exactly how a
+  # merged main could sit unverified, and did once in this branch's history.
+  push:
+    branches: [main]
+    # Kept in step with the pull_request list below. GitHub Actions does not
+    # support YAML anchors, so the two have to be edited together.
+    paths:
+      - "src/**"
+      - "src-tauri/**"
+      - "scripts/**"
+      - "public/**"
+      - "docs/**"
+      - "index.html"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig*.json"
+      - "vite.config.ts"
+      - ".github/workflows/desktop-build.yml"
   pull_request:
     paths:
       - "src/**"
       - "src-tauri/**"
       - "scripts/**"
       - "public/**"
+      - "docs/**"
       - "index.html"
       - "package.json"
       - "package-lock.json"
@@ -153,14 +173,15 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # Why this exists even though the matrix above builds all three platforms:
-  # it is the check that also runs on a developer's Mac (scripts/check-platform.sh),
-  # so keeping it in CI means the two cannot drift. It needs no npm, no system
-  # packages and no bundling, and it fails in about two minutes.
+  # Why this exists even though the matrix above builds all three platforms: it
+  # runs scripts/check-platform.sh, the script a developer runs on their Mac, so
+  # the two cannot drift. It used to re-implement a subset of the script by hand
+  # and silently omitted two of its steps; now it invokes the script itself, and
+  # the list of cross-compiled targets lives in one place.
   cross-check:
     name: Platform layer, cross-compiled
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -178,11 +199,19 @@ jobs:
           workspaces: src-tauri
           key: cross-check
 
-      - name: Platform layer for Windows
-        run: cargo clippy -p pvpn-platform --all-targets --target x86_64-pc-windows-msvc --manifest-path src-tauri/Cargo.toml -- -D warnings
+      - name: Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
 
-      - name: Platform layer for Linux
-        run: cargo clippy -p pvpn-platform --all-targets --target x86_64-unknown-linux-gnu --manifest-path src-tauri/Cargo.toml -- -D warnings
+      - name: Install npm dependencies
+        run: npm ci
 
-      - name: Platform layer tests (host)
-        run: cargo test -p pvpn-platform --manifest-path src-tauri/Cargo.toml
+      - name: Frontend build (tsc typecheck + vite)
+        # The script runs the GUI crate's checks too, and
+        # tauri::generate_context! embeds ../dist at compile time.
+        run: npm run build
+
+      - name: scripts/check-platform.sh
+        run: bash scripts/check-platform.sh
