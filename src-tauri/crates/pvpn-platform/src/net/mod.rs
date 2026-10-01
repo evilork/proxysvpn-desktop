@@ -82,6 +82,9 @@
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 
+/// TCP connections pinned to the physical interface, around the tunnel's
+/// split defaults (the Countries list measures its latencies with them).
+pub mod egress;
 pub mod linux_logic;
 pub mod plan;
 

@@ -9,6 +9,18 @@
 // service localises its remarks, the window translates the names it knows and
 // shows anything else exactly as the service wrote it. Display only: the core
 // keeps matching locations by the service's own name.
+//
+// The same goes for the words AROUND the names. The service's registry writes
+// badges and quota lines in Russian too — «Амстердам · резерв», «США (50
+// ГБ/мес)», «США · 0.2/50 ГБ», «США · использовано 50/50 ГБ · сброс 05.10»,
+// «12,4 из 50 ГБ» — and this app adds «XHTTP недоступен» when a location has
+// to fall back to another transport (manifest.rs). An English window read
+// "Amsterdam · резерв" (Windows VM, 02.10.2026). Every word is translated on
+// its own, so the numbers, dates and punctuation between them stay exactly as
+// the service wrote them; only "ГБ" becomes "GB" and so on.
+//
+// src-tauri/src/location_name.rs is the tray's copy of both tables, and a test
+// there fails the build when the two drift apart.
 
 import type { Lang } from "./i18n";
 
@@ -67,15 +79,58 @@ const EN_NAMES: readonly (readonly [string, string])[] = [
 ];
 
 /**
- * The name to show for `label` in `lang`. A known Russian name, alone or
- * followed by more ("Германия 2", "Германия · XHTTP"), is translated for an
- * English window; anything else is returned unchanged.
+ * Words the service writes around the names, keyed in lower case. Matched as
+ * whole words in any case; the case of the service's word is kept: «резерв»
+ * → "reserve", «Резерв» → "Reserve", «ЛЮКС» → "DELUXE". Units are written as
+ * they are in English whatever the case they came in.
+ */
+const EN_WORDS: readonly (readonly [string, string])[] = [
+  ["резерв", "reserve"],
+  ["люкс", "deluxe"],
+  ["квота", "quota"],
+  ["использовано", "used"],
+  ["сброс", "resets"],
+  ["из", "of"],
+  ["недоступен", "unavailable"],
+  ["автовыбор", "auto"],
+  ["гб", "GB"],
+  ["мб", "MB"],
+  ["тб", "TB"],
+  ["мес", "mo"],
+];
+
+const NAMES = new Map<string, string>(EN_NAMES.map(([ru, en]) => [ru, en]));
+const WORDS = new Map<string, string>(EN_WORDS.map(([ru, en]) => [ru, en]));
+
+/** `en` in the case the service wrote `word` in. */
+function inCaseOf(word: string, en: string): string {
+  const upper = word.toLocaleUpperCase("ru");
+  if (word.length > 1 && word === upper && word !== word.toLocaleLowerCase("ru")) {
+    return en.toUpperCase();
+  }
+  const first = word.charAt(0);
+  if (first !== first.toLocaleLowerCase("ru")) {
+    return en.charAt(0).toUpperCase() + en.slice(1);
+  }
+  return en;
+}
+
+/** One whole word: a known name exactly as the service spells it, then a known word in any case. */
+function translateWord(word: string): string {
+  const name = NAMES.get(word);
+  if (name !== undefined) return name;
+  const known = WORDS.get(word.toLocaleLowerCase("ru"));
+  return known === undefined ? word : inCaseOf(word, known);
+}
+
+/**
+ * The name to show for `label` in `lang`. In an English window every known
+ * Russian word — a location name ("Германия 2", "Германия · XHTTP") or a word
+ * of a badge ("Амстердам · резерв", "США (50 ГБ/мес)") — is translated where
+ * it stands; everything else, numbers included, is returned unchanged. A word
+ * is a whole run of letters, so "Германияx" is not "Германия".
  */
 export function displayLocation(label: string, lang: Lang): string {
   if (lang !== "en") return label;
-  for (const [ru, en] of EN_NAMES) {
-    if (label === ru) return en;
-    if (label.startsWith(`${ru} `)) return `${en}${label.slice(ru.length)}`;
-  }
-  return label;
+  return label.replace(/\p{L}+/gu, translateWord);
 }

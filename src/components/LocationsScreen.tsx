@@ -15,6 +15,12 @@
 // числа НЕТ, и на их месте по-прежнему слово. Ноль, прочерк и «ошибка» там
 // недопустимы - именно так когда-то и родился вечный спиннер.
 //
+// С включённым VPN список показывал 1-5 мс у всех стран (02.10.2026): обычное
+// рукопожатие уходило в наш же туннель, и отвечал на него tun2socks. Теперь
+// ядро меряет мимо туннеля, через физический интерфейс, а где не может - не
+// меряет вовсе и оставляет прежнее число, снятое мимо туннеля. Такое число
+// показывается с возрастом («234 мс · замер 12 минут назад», src/latency.ts).
+//
 // Nothing here carries an address or a port — not in the row, not in
 // `aria-label`, not in a tooltip. An unnamed entry becomes "Сервер №3", never
 // its host name.
@@ -29,7 +35,8 @@ import { useCallback, useEffect, useState } from "react";
 import { bridge, type LocationEntry, type LocationQuality } from "../bridge";
 import { flagFor, rendersFlagEmoji } from "../flags";
 import { displayLocation } from "../locationName";
-import { formatTime, type MsgKey } from "../i18n";
+import { formatAge, formatTime, type MsgKey } from "../i18n";
+import { rttMeasuredAtToShow } from "../latency";
 import { Screen, Spinner, useLatest, useUi } from "./ui";
 
 const QUALITY_KEY: Record<LocationQuality, MsgKey> = {
@@ -59,6 +66,8 @@ export default function LocationsScreen({
   const [refreshing, setRefreshing] = useState(true);
   const [staleAt, setStaleAt] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  /** This opening's latency round is back, so a number's age is worth saying. */
+  const [measured, setMeasured] = useState(false);
 
   // The list is fetched once per opening, never on a timer: the subscription
   // has a request budget and this screen is not allowed to eat it.
@@ -105,6 +114,9 @@ export default function LocationsScreen({
       .catch(() => {
         // Замер - украшение: без него список остаётся со словами и полностью
         // рабочим. Ошибку показывать не за что.
+      })
+      .finally(() => {
+        if (alive) setMeasured(true);
       });
     return () => {
       alive = false;
@@ -135,10 +147,30 @@ export default function LocationsScreen({
   const recent = items?.filter((entry) => entry.recent) ?? [];
   const all = items ?? [];
 
-  /** The name exactly as the service wrote it: «Британия · XHTTP». */
+  /**
+   * The whole name the service wrote, «Британия · XHTTP». The badge after «·»
+   * goes through `displayLocation` too: «Амстердам · резерв» is
+   * "Amsterdam · reserve" in an English window, not "Amsterdam · резерв".
+   */
   const titleOf = (entry: LocationEntry, index: number) => {
     const base = entry.label ? displayLocation(entry.label, lang) : t("loc.unnamed", { n: index + 1 });
-    return entry.note ? `${base} · ${entry.note}` : base;
+    return entry.note ? `${base} · ${displayLocation(entry.note, lang)}` : base;
+  };
+
+  /**
+   * The number, or the word when there is none. A number the core kept from
+   * an earlier round (it could not measure around the tunnel this time)
+   * carries its age.
+   */
+  const rttText = (entry: LocationEntry) => {
+    if (entry.rttMs === undefined) return t(QUALITY_KEY[entry.quality]);
+    const now = Date.now();
+    // Until this opening's round is back, every cached number looks old and
+    // would flash "measured N minutes ago" for the second the round takes.
+    const at = measured ? rttMeasuredAtToShow(entry, now) : null;
+    return at === null
+      ? t("loc.ms", { ms: entry.rttMs })
+      : t("loc.msAged", { ms: entry.rttMs, ago: formatAge(t, at, now) });
   };
 
   const renderRow = (entry: LocationEntry, index: number) => (
@@ -159,9 +191,7 @@ export default function LocationsScreen({
       <span className="row-main">
         <span className="row-title">{titleOf(entry, index)}</span>
         <span className="row-sub">
-          {entry.rttMs !== undefined
-            ? t("loc.ms", { ms: entry.rttMs })
-            : t(QUALITY_KEY[entry.quality])}
+          {rttText(entry)}
           {entry.protocol ? ` · ${entry.protocol}` : ""}
         </span>
       </span>

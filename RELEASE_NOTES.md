@@ -1,3 +1,67 @@
+# ProxysVPN Desktop v0.3.3-beta
+
+🇷🇺 Windows 10/11 (x64) после живой проверки: подключение на Windows исправлено. Плюс исправления, найденные при проверке в виртуальных машинах.
+
+🇬🇧 Windows 10/11 (x64) after a live check: connecting on Windows is fixed. Plus the fixes found while testing in virtual machines.
+
+## 🇷🇺 Установка
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. Подписи кода пока нет, поэтому каждая система один раз предупреждает.
+
+- **macOS 12+ (Apple Silicon):** откройте `ProxysVPN_0.3.3_aarch64.dmg`, перетащите ProxysVPN на ярлык Applications, затем один раз в Терминале `xattr -dr com.apple.quarantine /Applications/ProxysVPN.app` (или «Всё равно открыть» в Системных настройках → Конфиденциальность и безопасность). При запуске приложение спрашивает пароль администратора.
+- **Windows 10/11 (x64):** запустите `ProxysVPN_0.3.3_x64-setup.exe`; SmartScreen: «Подробнее» → «Выполнить в любом случае». При каждом запуске — запрос прав администратора (UAC).
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.3_amd64.deb`. Нужен сеанс с агентом polkit. Удаление: `sudo apt remove proxys-vpn`.
+
+## 🇷🇺 Что исправлено
+
+- **Windows: подключение.** Приложение настраивало адаптер туннеля раньше, чем Windows поднимала его с адресом IPv4, и подключение падало с «Элемент не найден». Теперь оно ждёт, пока адаптер поднимется, находит его по номеру, а не по имени (имя мог держать адаптер, оставшийся от прошлого запуска), и при отказе повторяет настройку.
+- **Переход на Hysteria2 и починка на медленном компьютере.** Движок считался запущенным раньше, чем начинал принимать соединения, и проверка сразу после перезапуска могла ошибиться. Теперь приложение ждёт xray до 8 секунд, hysteria до 10.
+- **Задержки в «Странах» при включённом VPN.** Раньше у части локаций было 1–5 мс: замер уходил в сам туннель. Теперь каждая строка меряется мимо туннеля, через физическую сеть. Это же чинит выбор самой быстрой локации при включённом VPN. Если замерить мимо туннеля нельзя, показывается последнее настоящее число с отметкой, когда его сняли.
+- **Главный экран после смены локации** сразу показывает новую локацию.
+- **Английский интерфейс:** слова рядом с названиями локаций («резерв», «квота», «ГБ/мес» и другие) теперь переводятся.
+- **Windows: установщик сам закрывает запущенное приложение** перед установкой и удалением.
+- **Журнал:** при сбое системной команды в журнал попадает её ответ, а не только код выхода; на Windows в правильной кодировке.
+
+## 🇷🇺 Известные ограничения
+
+- **IPv6 не идёт через туннель** ни на одной системе. Программы, которые сами соединяются по IPv6 (звонки WebRTC, приложения со своим DNS), в сети с IPv6 могут ходить мимо VPN.
+- **Windows:** системный DNS пока не направляется в туннель: имена разрешает DNS вашей сети.
+- **Windows на ARM** (Snapdragon, Surface Pro X): сборка x64 работает через эмуляцию, и подключение может занимать от 30 секунд до 2 минут, потому что в эмуляции драйвер Wintun не может удалить адаптер от прошлого запуска. Нативная сборка для ARM запланирована.
+- **Windows, обновление с более старой версии:** её деинсталлятор не умеет закрывать приложение. Если установщик скажет, что не может закрыть ProxysVPN, выйдите из приложения через трей и нажмите «Повторить».
+- **Нет подписи кода и автообновления.**
+- **macOS:** только Apple Silicon. Всё приложение работает от root: движки запускаются из копии в папке root, а сам исполняемый файл — из бандла в «Программах». После сбоя движки могут работать до следующего запуска ProxysVPN, и он их остановит.
+- **Linux:** только x86_64.
+
+## 🇬🇧 Install
+
+Compare each file's SHA-256 with `SHA256SUMS.txt`. Nothing is code-signed yet, so each system warns once.
+
+- **macOS 12+ (Apple Silicon):** open `ProxysVPN_0.3.3_aarch64.dmg`, drag ProxysVPN onto the Applications shortcut, then once in Terminal `xattr -dr com.apple.quarantine /Applications/ProxysVPN.app` (or "Open Anyway" in System Settings → Privacy & Security). The app asks for the administrator password at launch.
+- **Windows 10/11 (x64):** run `ProxysVPN_0.3.3_x64-setup.exe`; SmartScreen: "More info" → "Run anyway". Every launch asks for administrator rights (UAC).
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.3_amd64.deb`. Needs a session with a polkit agent. Remove with `sudo apt remove proxys-vpn`.
+
+## 🇬🇧 What's fixed
+
+- **Windows: connecting.** The app configured the tunnel adapter before Windows had brought it up with an IPv4 address, and connecting failed with "Element not found". It now waits for the adapter to come up, finds it by its index rather than by name (a leftover adapter from an earlier run could hold the name) and retries the setup when Windows refuses it.
+- **Switching to Hysteria2 and repair on a slow computer.** An engine counted as started before it accepted connections, so the check right after a restart could fail. The app now waits up to 8 seconds for xray and up to 10 for hysteria.
+- **Latency in Countries while the VPN is on.** Some locations used to show 1-5 ms because the tunnel itself was measured. Every row is now measured around the tunnel, over the physical network, which also fixes picking the fastest location while the VPN is on. When a row cannot be measured around the tunnel, it shows the last real number with when it was taken.
+- **The main screen after a location change** shows the new location right away.
+- **English interface:** the words around location names ("reserve", "quota", "GB/mo" and others) are translated now.
+- **Windows: the installer closes the running app itself** before installing and uninstalling.
+- **Log:** when a system command fails, the log has what it said, not only its exit code; on Windows in the right encoding.
+
+## 🇬🇧 Known limitations
+
+- **IPv6 does not go through the tunnel** on any system. Programs that connect over IPv6 on their own (WebRTC calls, apps with their own DNS) can go outside the VPN on an IPv6 network.
+- **Windows:** the system DNS is not sent into the tunnel yet; your network's DNS resolves names.
+- **Windows on ARM** (Snapdragon, Surface Pro X): the x64 build runs under emulation, and connecting can take 30 seconds to 2 minutes because the Wintun driver cannot remove the previous run's adapter there. A native ARM build is planned.
+- **Windows, upgrading from an older version:** its uninstaller cannot close the app. If the installer says it cannot close ProxysVPN, quit the app from the tray and press "Retry".
+- **No code signing and no automatic updates.**
+- **macOS:** Apple Silicon only. The whole app runs as root: the engines run from a copy in a root-owned folder, the app's own executable from the bundle in Applications. After a crash the engines may keep running until ProxysVPN is opened again, which stops them.
+- **Linux:** x86_64 only.
+
+---
+
 # ProxysVPN Desktop v0.3.2-beta
 
 🇷🇺 Первый выпуск для трёх систем: macOS (Apple Silicon), Windows 10/11 (x64) и Linux (.deb, x86_64). Плюс исправления по итогам аудита перед публикацией.

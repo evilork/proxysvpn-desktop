@@ -2898,7 +2898,7 @@ dependencies = [
 
 [[package]]
 name = "proxysvpn-desktop"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2931,6 +2931,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "socket2",
  "tokio",
  "windows 0.62.2",
  "zbus",

@@ -155,6 +155,12 @@ export interface LocationEntry {
    * нулём и не прочерком-ошибкой.
    */
   rttMs?: number;
+  /**
+   * When `rttMs` was measured, Unix ms. With the VPN on every row is measured
+   * around the tunnel; where that is impossible the core keeps the last number
+   * measured outside it, and this says how old it is (src/latency.ts).
+   */
+  rttAtMs?: number;
   /** Badge the SERVER wrote, e.g. "12,4 из 50 ГБ". Never assembled here. */
   note?: string;
   /**

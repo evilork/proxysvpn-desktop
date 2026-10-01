@@ -18,6 +18,10 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["process", "time", "rt", "sync", "io-util"] }
+# A socket pinned to the physical interface before it connects (net/egress.rs).
+# Already in the tree through tokio, pure Rust over libc / windows-sys; "all"
+# only unlocks the interface-binding calls.
+socket2 = { version = "0.6", features = ["all"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

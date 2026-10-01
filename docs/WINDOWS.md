@@ -1,11 +1,12 @@
 # ProxysVPN Desktop on Windows
 
-Status: built and packaged by CI (`windows-latest`). The 0.3.1 installer was
-installed on a Windows 11 ARM VM (x64 emulation) on 01.10.2026, redeemed a pair
-code and connected (VLESS, Germany). That run also showed the host-route bug
-fixed in 0.3.2 (`netsh delete route` without the interface). Not yet run on
-real x64 hardware, not yet tried on a Hysteria2 location, and 0.3.2 has not
-been run live yet; everything below marked "unverified" still is.
+Status: built and packaged by CI (`windows-latest`). Run live only on a
+Windows 11 ARM VM (x64 emulation): 0.3.1 connected on 01.10.2026; 0.3.2 failed
+to configure the adapter ("Element not found"), and the build that became 0.3.3
+connected and reconnected (VLESS, Germany) on 02.10.2026. On that VM a connect
+takes 30 s to 2 min because Wintun under emulation cannot remove the previous
+run's adapter; a native arm64 build would avoid it. Not yet run on real x64
+hardware; everything below marked "unverified" still is.
 
 ## How the tunnel works
 
@@ -93,6 +94,18 @@ spawn (`pvpn_platform::process::tie_to_app`); the app holds its only handle, so 
 crash or "End task" takes xray, hysteria and tun2socks along. There is
 deliberately no `taskkill /IM` sweep: it would also stop another VPN client's
 `tun2socks.exe` or `xray.exe`.
+
+**The installer stops the running app itself.** Tauri's own check before files
+are copied or removed ("ProxysVPN is running, press OK to close it") failed to
+close the elevated tray app once in three upgrades on a Windows 11 VM and
+aborted the install. `src-tauri/nsis/installer-hooks.nsh` (wired in through
+`bundle.windows.nsis.installerHooks`) runs first, in both
+`NSIS_HOOK_PREINSTALL` and `NSIS_HOOK_PREUNINSTALL`: `taskkill /F /T` on our own
+main binary only — the engines are its children and in its job object — then a
+bounded wait until the process is gone. An app that is not running is the
+normal case and never fails the install. The uninstallers of 0.3.2 and earlier
+carry no hook, so the very first upgrade from them still goes through the old
+check once.
 
 **Paths.** State lives in `%LOCALAPPDATA%\ProxysVPN` (hysteria config, route
 hint, the subscription link, device id and preferences) and logs in
