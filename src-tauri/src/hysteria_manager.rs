@@ -84,6 +84,23 @@ pub fn build_config(cfg: &Hy2Config) -> String {
     yaml
 }
 
+/// The hysteria client command line.
+///
+/// `HYSTERIA_DISABLE_UPDATE_CHECK`: without it the client asks api.hy2.io for
+/// a newer version right after connecting and again while it runs, telling a
+/// third party the data notice does not name our version, OS and architecture
+/// from the node's address. The app updates hysteria itself
+/// (scripts/sidecars.lock).
+fn client_command(bin: &std::path::Path, cfg_arg: &str) -> Command {
+    let mut cmd = Command::new(bin);
+    cmd.args(["client", "-c", cfg_arg])
+        .env("HYSTERIA_DISABLE_UPDATE_CHECK", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    cmd
+}
+
 /// One value of the hand-built YAML.
 ///
 /// Every value comes from a subscription line, and `query_pairs` decodes
@@ -172,11 +189,7 @@ pub async fn start(
     // place to find out whether that happened.
     crate::logger::log("info", "hysteria", "starting client");
 
-    let mut cmd = Command::new(&bin);
-    cmd.args(["client", "-c", cfg_arg])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+    let mut cmd = client_command(&bin, cfg_arg);
     // Without this a console window pops up on Windows for every engine start.
     pprocess::no_window(&mut cmd);
 
@@ -343,6 +356,18 @@ mod tests {
         assert_eq!(yaml_scalar("a b"), "\"a b\"");
         assert_eq!(yaml_scalar("#comment"), "\"#comment\"");
         assert_eq!(yaml_scalar(""), "\"\"");
+    }
+
+    #[test]
+    fn the_client_never_asks_api_hy2_io_for_updates() {
+        let cmd = client_command(std::path::Path::new("/x/hysteria"), "/tmp/c.yaml");
+        let set = cmd
+            .as_std()
+            .get_envs()
+            .any(|(k, v)| k == "HYSTERIA_DISABLE_UPDATE_CHECK" && v == Some(std::ffi::OsStr::new("1")));
+        assert!(set);
+        let args: Vec<_> = cmd.as_std().get_args().collect();
+        assert_eq!(args, ["client", "-c", "/tmp/c.yaml"]);
     }
 
     #[test]
