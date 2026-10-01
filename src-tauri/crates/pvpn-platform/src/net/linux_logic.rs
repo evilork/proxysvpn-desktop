@@ -176,10 +176,11 @@ fn hex_le_to_ipv6(field: &str) -> Option<std::net::Ipv6Addr> {
         return None;
     }
     let mut octets = [0u8; 16];
-    for (word, chunk) in octets.chunks_exact_mut(4).enumerate() {
+    let (words, _) = octets.as_chunks_mut::<4>();
+    for (word, chunk) in words.iter_mut().enumerate() {
         let hex = field.get(word * 8..word * 8 + 8)?;
         let raw = u32::from_str_radix(hex, 16).ok()?;
-        chunk.copy_from_slice(&raw.to_le_bytes());
+        *chunk = raw.to_le_bytes();
     }
     Some(std::net::Ipv6Addr::from(octets))
 }
