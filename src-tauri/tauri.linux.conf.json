@@ -1,12 +1,18 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
-    "targets": ["deb", "appimage"],
+    "targets": ["deb"],
     "linux": {
       "deb": {
         "section": "net",
-        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "iproute2"],
-        "recommends": ["libayatana-appindicator3-1", "systemd-resolved"],
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "iproute2",
+          "pkexec | policykit-1",
+          "libayatana-appindicator3-1 | libappindicator3-1"
+        ],
+        "recommends": ["systemd-resolved"],
         "files": {
           "/usr/share/polkit-1/actions/com.proxysvpn.desktop.policy": "linux/com.proxysvpn.desktop.policy"
         }

@@ -375,6 +375,9 @@ const ru = {
   "err.PERMISSION_DENIED.title": "Нужно разрешение системы",
   "err.PERMISSION_DENIED.body":
     "Без него приложение не может направить интернет через защищённое соединение. Нажмите «Повторить» и разрешите в системном окне.",
+  "err.ELEVATION_UNAVAILABLE.title": "Системе нечем выдать права",
+  "err.ELEVATION_UNAVAILABLE.body":
+    "Туннелю нужны права администратора, а запросить их здесь нечем: нет pkexec (polkit) или приложение запущено из AppImage. Установите приложение пакетом .deb — он поставит всё нужное.",
   "err.ENGINE_START_FAILED.title": "Соединение не запустилось",
   "err.ENGINE_START_FAILED.body":
     "Внутренняя часть приложения не поднялась. Обычно помогает повторное нажатие.",
@@ -925,6 +928,9 @@ const en: Partial<Record<MsgKey, string>> = {
   "err.PERMISSION_DENIED.title": "The system needs your permission",
   "err.PERMISSION_DENIED.body":
     "Without it we cannot route the internet through a secure connection. Tap Retry and allow it in the system dialog.",
+  "err.ELEVATION_UNAVAILABLE.title": "This system cannot grant the rights",
+  "err.ELEVATION_UNAVAILABLE.body":
+    "The tunnel needs administrator rights, and there is no way to ask for them here: pkexec (polkit) is missing, or the app runs from an AppImage. Install the app from the .deb package — it brings everything it needs.",
   "err.ENGINE_START_FAILED.title": "The connection did not start",
   "err.ENGINE_START_FAILED.body":
     "The internal part did not come up. Tapping again usually helps.",

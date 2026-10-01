@@ -30,7 +30,7 @@ Windows x86_64, Linux x86_64. Ничего не подписывается и н
 | --- | --- |
 | `proxysvpn-macos-aarch64` | `ProxysVPN_<версия>_aarch64.dmg` |
 | `proxysvpn-windows-x86_64` | `ProxysVPN_<версия>_x64-setup.exe` (установщик NSIS) |
-| `proxysvpn-linux-x86_64` | `ProxysVPN_<версия>_amd64.deb` и `ProxysVPN_<версия>_amd64.AppImage` |
+| `proxysvpn-linux-x86_64` | `ProxysVPN_<версия>_amd64.deb` |
 
 GitHub отдаёт артефакт одним zip-архивом — распаковать перед установкой.
 
@@ -71,24 +71,20 @@ Windows 11 содержит WebView2 изначально. На Windows 10 ус�
 
 ## 5. Linux x86_64
 
-`.deb` (Ubuntu/Debian, рекомендуется — ставит зависимости сам):
+`.deb` (Ubuntu/Debian, ставит зависимости сам):
 
 ```bash
 sudo apt install ./ProxysVPN_0.3.1_amd64.deb
 ```
 
-AppImage (любой дистрибутив, ничего не ставится в систему):
-
-```bash
-chmod +x ProxysVPN_0.3.1_amd64.AppImage
-./ProxysVPN_0.3.1_amd64.AppImage
-```
+AppImage не собирается: она работает из FUSE-монтирования, куда root не пускают, и помощник
+с правами через pkexec из неё не запускается — туннель там не поднялся бы никогда.
 
 Замечания:
 
 - Сборка идёт на Ubuntu 22.04, поэтому файлы работают на 22.04 и новее (glibc 2.35+).
-- Значок в трее требует пакета `libayatana-appindicator3-1`; `.deb` тянет его сам, для AppImage
-  поставить вручную.
+- Значок в трее требует `libayatana-appindicator3-1`, а запрос пароля — `pkexec` (polkit); `.deb`
+  тянет оба сам.
 - Туннелю нужны права на сеть (`CAP_NET_ADMIN`): при подключении система спросит пароль.
 
 ## 6. Что в этих сборках не проверено

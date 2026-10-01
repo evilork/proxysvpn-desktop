@@ -221,10 +221,12 @@ pub async fn start(
 
     // Before anything is changed: elevation on Windows, the polkit dialog on
     // Linux. A refusal here leaves the machine untouched, and it is the
-    // person's own answer, so it gets the code with that phrase.
+    // person's own answer, so it gets the code with that phrase — unless the
+    // machine cannot elevate at all (no pkexec, an AppImage), which gets its
+    // own code: no dialog would help there.
     net::preflight().await.map_err(|e| {
         crate::logger::log("error", "tun", &format!("no privileges: {e:#}"));
-        AppError::new(ErrorCode::PermissionDenied)
+        AppError::new(crate::errors::preflight_code(&e))
     })?;
 
     let tun2socks = tun2socks_path(app)?;

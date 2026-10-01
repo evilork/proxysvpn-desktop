@@ -25,7 +25,7 @@ Then, once:
 ```sh
 ./scripts/fetch-binaries.sh                 # sidecars for this host, sha256 pinned
 npm ci
-npm run tauri -- build --bundles deb,appimage
+npm run tauri -- build --bundles deb
 ```
 
 Build on **Ubuntu 22.04**, not 24.04: a binary linked against glibc 2.39 will not
@@ -33,12 +33,24 @@ start on 22.04, and 22.04 is still the most common desktop LTS. CI pins the
 runner image for the same reason.
 
 Runtime packages (what the `.deb` asks for): `libwebkit2gtk-4.1-0`, `libgtk-3-0`,
-`iproute2`; recommended `libayatana-appindicator3-1` (tray icon) and
-`systemd-resolved` (clean per-link DNS).
+`iproute2`, `pkexec | policykit-1` and
+`libayatana-appindicator3-1 | libappindicator3-1`; recommended `systemd-resolved`
+(clean per-link DNS).
 
-`pkexec` (polkit) is **not** in `Depends` on purpose — the package name moved
-between Ubuntu releases, and an unsatisfiable dependency breaks installation for
-everyone. Without it the app starts and says so instead of failing silently.
+`pkexec` is a dependency with both package names as alternatives: it moved from
+`policykit-1` (Ubuntu 22.04) into a package of its own (Debian 12, Ubuntu 23.04+),
+and either satisfies apt. Without pkexec there is no way to start the helper;
+if it is missing anyway, the window says so with its own error
+(`ELEVATION_UNAVAILABLE`) instead of offering a Retry that cannot work. The tray
+library is a dependency too: with neither of the two present, `libappindicator`
+panics while the tray is built.
+
+**No AppImage.** An AppImage runs from a FUSE mount that only the user who
+mounted it may access — root included, since it is mounted without
+`allow_other`. pkexec would ask for the password and then fail to execute the
+helper from that mount (exit 127), so the tunnel could never come up. The app
+recognises that case (statfs reports FUSE for its own executable) and shows
+`ELEVATION_UNAVAILABLE` before any password dialog; CI builds only the `.deb`.
 
 ## How the tunnel is put together
 
@@ -90,16 +102,14 @@ Why not the alternatives:
 * **GUI as root** — impossible on Wayland: a root process cannot talk to the
   user's compositor, so no window appears. On X11 it needs `xhost +si:localuser:root`.
 * **File capabilities** (`setcap cap_net_admin+ep`) — not inherited by children,
-  so tun2socks would still fail; and capabilities do not survive an AppImage
-  mount, which would mean two different privilege models for `.deb` and AppImage.
+  so tun2socks would still fail.
 
 The polkit action is `com.proxysvpn.desktop.helper`
 (`src-tauri/linux/com.proxysvpn.desktop.policy`, installed by the `.deb` to
 `/usr/share/polkit-1/actions/`). It only makes the dialog readable and lets
 `auth_admin_keep` cache the answer: when no action matches the program path,
 `pkexec` falls back to the built-in `org.freedesktop.policykit.exec` action and
-everything still works with a generic prompt. That is what happens in the
-AppImage, which cannot install a policy file.
+everything still works with a generic prompt.
 
 The action's `exec.path` is `/usr/bin/proxysvpn-desktop`. Note that this is the
 **Cargo package name**, not `productName`: Tauri uses productName only for the
@@ -122,9 +132,6 @@ the machine goes once the half-defaults are installed, and a request line is
 bounded at 64 KiB. polkit's `auth_admin_keep` means an authorization earned by
 one connect is reusable without a password for the rest of the keep window, so
 the helper assumes its peer may not be our GUI.
-
-Prefer the `.deb` for the strongest posture: in an AppImage the executable that
-pkexec runs lives in a user-writable file.
 
 ### Teardown
 
@@ -241,7 +248,7 @@ Verified here:
 * that `tun2socks -device tun://proxysvpn0` creates the device under the name we
   then configure;
 * `pkexec` behaviour in a real desktop session (Wayland and X11), with and
-  without our policy file, and inside an AppImage;
+  without our policy file;
 * ~~that the `.deb` installs the binary where the policy expects~~ — confirmed on
   the first CI build: `usr/bin/proxysvpn-desktop`, root:root 0755, and the
   sidecars beside it are root-owned too, so the helper's trust check passes;
@@ -252,4 +259,5 @@ Verified here:
   allowed to quit there, instead of hiding into a tray that does not exist);
 * aarch64 Linux end to end; the matrix builds x86_64 only, since ARM runners are
   not reliably available;
-* the AppImage interior — it builds, but it was not unpacked on the build Mac.
+* the AppImage refusal (`ELEVATION_UNAVAILABLE` from statfs on a FUSE mount) —
+  reasoned from the kernel's FUSE access rule, never seen on a machine.

@@ -71,6 +71,11 @@ pub enum ErrorCode {
     // ── Bringing the tunnel up ─────────────────────────────────────────────
     /// The user dismissed the administrator prompt.
     PermissionDenied,
+    /// This machine has no way to grant the rights at all: no pkexec, or the
+    /// app runs from an AppImage that root cannot execute from (Linux). Not
+    /// a refusal, so not "press Retry and allow it".
+    #[cfg_attr(not(desktop), allow(dead_code))]
+    ElevationUnavailable,
     /// Engine binary missing or refused to start.
     EngineStartFailed,
     /// Engine was running and died under us.
@@ -196,6 +201,21 @@ pub fn classify(err: &anyhow::Error) -> AppError {
     AppError::with_detail(code, text)
 }
 
+/// The code for a failed preflight on Windows and Linux (tun_platform.rs).
+///
+/// Only a machine that cannot elevate at all gets its own code: the platform
+/// layer says so with a type (`ElevationUnavailable`), and everything else a
+/// preflight reports is the person's own answer to the system dialog.
+#[cfg(desktop)]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn preflight_code(err: &anyhow::Error) -> ErrorCode {
+    if pvpn_platform::privilege::is_elevation_unavailable(err) {
+        ErrorCode::ElevationUnavailable
+    } else {
+        ErrorCode::PermissionDenied
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,6 +262,25 @@ mod tests {
         ] {
             assert_eq!(AppError::new(code).to_payload(), format!(r#"{{"code":"{wire}"}}"#));
         }
+    }
+
+    /// A machine that cannot elevate at all (no pkexec, an AppImage) is not
+    /// a refusal the person takes back by pressing Retry, so it does not get
+    /// PERMISSION_DENIED and its button.
+    #[cfg(desktop)]
+    #[test]
+    fn a_machine_that_cannot_elevate_is_not_a_refusal() {
+        use pvpn_platform::privilege::ElevationUnavailable;
+        for reason in [ElevationUnavailable::NoPkexec, ElevationUnavailable::FuseMount] {
+            let err = anyhow::Error::new(reason).context("spawn the privileged helper");
+            assert_eq!(preflight_code(&err), ErrorCode::ElevationUnavailable);
+        }
+        let refused = anyhow::anyhow!("запрос прав отменён");
+        assert_eq!(preflight_code(&refused), ErrorCode::PermissionDenied);
+        assert_eq!(
+            AppError::new(ErrorCode::ElevationUnavailable).to_payload(),
+            r#"{"code":"ELEVATION_UNAVAILABLE"}"#
+        );
     }
 
     #[test]

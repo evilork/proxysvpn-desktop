@@ -141,11 +141,13 @@ fn spawn_command() -> Result<Command> {
         // just fork the helper.
         Command::new(&exe)
     } else {
+        // Typed, not text: the GUI tells "this machine cannot elevate" apart
+        // from "the person said no" by this type (ELEVATION_UNAVAILABLE).
         if let Some(reason) = privilege::elevation_blocker() {
-            return Err(anyhow!("{}", reason));
+            return Err(anyhow::Error::new(reason));
         }
-        let pkexec =
-            privilege::which("pkexec").ok_or_else(|| anyhow!("pkexec not found in PATH"))?;
+        let pkexec = privilege::which("pkexec")
+            .ok_or_else(|| anyhow::Error::new(privilege::ElevationUnavailable::NoPkexec))?;
         let mut c = Command::new(pkexec);
         c.arg(&exe);
         c

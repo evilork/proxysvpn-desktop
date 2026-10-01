@@ -78,22 +78,89 @@ fn windows_is_elevated() -> anyhow::Result<bool> {
     Ok(elevation.TokenIsElevated != 0)
 }
 
-/// Human-readable reason why we cannot gain privileges, or `None` when we can.
+/// Why this machine cannot give the tunnel the rights it needs.
+///
+/// Not the person's refusal: "press Retry and allow it in the system dialog"
+/// would not help, because no dialog can succeed. The GUI finds this type in
+/// an error chain (`is_elevation_unavailable`) and shows its own code for it
+/// instead of the permission one. The texts are Russian, like every other
+/// message of this layer that reaches the log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ElevationUnavailable {
+    /// pkexec (polkit) is not installed: there is no system dialog to show.
+    NoPkexec,
+    /// This executable lives on a FUSE mount — an AppImage. The kernel lets
+    /// nobody but the user who mounted it execute from there, root included,
+    /// so pkexec would ask for the password and then fail to start the helper.
+    FuseMount,
+}
+
+impl std::fmt::Display for ElevationUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NoPkexec => {
+                "не найден pkexec (polkit) — установите пакет pkexec или policykit-1 либо запустите приложение от root"
+            }
+            Self::FuseMount => {
+                "приложение запущено из AppImage, а root не может запустить файл из её монтирования — установите пакет .deb"
+            }
+        })
+    }
+}
+
+impl std::error::Error for ElevationUnavailable {}
+
+/// Does `err`, anywhere in its chain, say that this machine cannot elevate?
+pub fn is_elevation_unavailable(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| cause.is::<ElevationUnavailable>())
+}
+
+/// Why we cannot gain privileges, or `None` when we can.
 ///
 /// Linux only: it is the one platform where elevation happens at connect time
 /// rather than at launch, so the reason has to be reportable mid-session.
 #[cfg(target_os = "linux")]
-pub fn elevation_blocker() -> Option<String> {
+pub fn elevation_blocker() -> Option<ElevationUnavailable> {
     if is_elevated() {
         return None;
     }
     if which("pkexec").is_none() {
-        return Some(
-            "не найден pkexec (пакет polkit) — установите polkit или запустите приложение от root"
-                .to_string(),
-        );
+        return Some(ElevationUnavailable::NoPkexec);
+    }
+    let on_fuse = std::env::current_exe()
+        .map(|exe| on_fuse_mount(&exe))
+        .unwrap_or(false);
+    if on_fuse {
+        return Some(ElevationUnavailable::FuseMount);
     }
     None
+}
+
+/// `FUSE_SUPER_MAGIC` from linux/magic.h: what statfs(2) reports for a FUSE
+/// file system, which is what an AppImage mounts itself as.
+#[cfg(target_os = "linux")]
+const FUSE_SUPER_MAGIC: libc::__fsword_t = 0x6573_5546;
+
+/// Is `path` on a FUSE file system? Asked of the kernel rather than guessed
+/// from `$APPIMAGE` or a `/tmp/.mount_` prefix: an AppImage extracted with
+/// --appimage-extract-and-run is a plain directory root can execute from, and
+/// the environment variable is inherited by whatever an AppImage starts.
+#[cfg(target_os = "linux")]
+fn on_fuse_mount(path: &std::path::Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: an all-zero `statfs` is a valid value of this plain C struct;
+    // statfs(2) only writes into it.
+    let mut info: libc::statfs = unsafe { std::mem::zeroed() };
+    // SAFETY: `c_path` is a NUL-terminated string and `info` a live, writable
+    // struct, both valid for the duration of the call.
+    if unsafe { libc::statfs(c_path.as_ptr(), &mut info) } != 0 {
+        return false;
+    }
+    info.f_type == FUSE_SUPER_MAGIC
 }
 
 /// Minimal `which`: a PATH lookup without pulling in a crate.
@@ -143,6 +210,31 @@ mod tests {
     #[test]
     fn message_is_not_empty() {
         assert!(!missing_privileges_message().is_empty());
+    }
+
+    /// The GUI tells "this machine cannot elevate" apart from "the person
+    /// said no" by the type in the chain, however much context the platform
+    /// layer wraps around it on the way up.
+    #[test]
+    fn an_unavailable_elevation_is_found_through_context() {
+        for reason in [ElevationUnavailable::NoPkexec, ElevationUnavailable::FuseMount] {
+            let err = anyhow::Error::new(reason)
+                .context("spawn the privileged helper")
+                .context("preflight");
+            assert!(is_elevation_unavailable(&err), "{reason:?}");
+            assert!(!reason.to_string().is_empty());
+        }
+        let refused = anyhow::anyhow!("запрос прав отменён");
+        assert!(!is_elevation_unavailable(&refused));
+    }
+
+    /// The AppImage text sends the person to the package that works, and the
+    /// pkexec one names both package spellings the .deb depends on.
+    #[test]
+    fn each_reason_names_its_way_out() {
+        assert!(ElevationUnavailable::FuseMount.to_string().contains(".deb"));
+        let pkexec = ElevationUnavailable::NoPkexec.to_string();
+        assert!(pkexec.contains("pkexec") && pkexec.contains("policykit-1"), "{pkexec}");
     }
 
     #[cfg(target_os = "linux")]
