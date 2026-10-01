@@ -57,6 +57,10 @@ pub struct ServerInfo {
 }
 
 /// Парсит ВСЕ vless-серверы из подписки (hy2 пока пропускается — нужен др. движок).
+// Superseded by fetch_all_servers, which returns vless and hy2 in one list.
+// Kept because the VLESS-only path is still the fallback used while debugging a
+// subscription that mixes protocols; remove it once that is no longer needed.
+#[allow(dead_code)]
 pub async fn fetch_all_vless(sub_url: &str) -> Result<Vec<VlessConfig>> {
     let body = reqwest::Client::builder()
         .user_agent("ProxysVPN-Desktop/0.1")
@@ -409,4 +413,228 @@ pub fn build_xray_config(cfg: &VlessConfig) -> Value {
             ]
         }
     })
+}
+
+/// Sample configs for tests in this crate.
+///
+/// All values are deliberately fake (RFC 2606 / RFC 5737 reserved names and
+/// addresses, a nil-ish UUID, placeholder keys) because this repository is
+/// public: no real node address, UUID or password may ever appear here.
+#[cfg(test)]
+pub mod test_support {
+    use super::{Hy2Config, VlessConfig};
+
+    pub fn sample_vless() -> VlessConfig {
+        VlessConfig {
+            uuid: "00000000-0000-4000-8000-000000000000".into(),
+            host: "node.example.invalid".into(),
+            port: 443,
+            encryption: "none".into(),
+            public_key: "EXAMPLE-PUBLIC-KEY-NOT-A-REAL-ONE".into(),
+            short_id: "0123abcd".into(),
+            sni: "cover.example.invalid".into(),
+            fingerprint: "chrome".into(),
+            flow: "xtls-rprx-vision".into(),
+            spider_x: "/".into(),
+            remark: "Example node".into(),
+        }
+    }
+
+    pub fn sample_hy2() -> Hy2Config {
+        Hy2Config {
+            password: "example-password-not-a-real-one".into(),
+            host: "node.example.invalid".into(),
+            port: 8443,
+            sni: "cover.example.invalid".into(),
+            pin_sha256: "AA:BB:CC".into(),
+            insecure: true,
+            remark: "Example hy2 node".into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FIXTURE: &str = include_str!("fixtures/xray_vless_config.json");
+
+    /// Line endings are normalised before comparing: git checks the fixture out
+    /// with CRLF on Windows (core.autocrlf defaults to true there), while
+    /// serde_json always emits LF, so a byte comparison fails on the Windows
+    /// runner for a config that is in fact identical.
+    fn lf(text: &str) -> String {
+        text.replace("\r\n", "\n").trim().to_string()
+    }
+
+    /// The generated xray config is a user-visible contract: a change here
+    /// changes how every client routes traffic. The fixture is the
+    /// pre-platform-split output; regenerate it on purpose with
+    ///   cargo test -p proxysvpn-desktop -- --ignored dump_xray_config_fixture
+    /// and review the diff.
+    #[test]
+    fn generated_xray_config_matches_fixture() {
+        let generated = serde_json::to_string_pretty(&build_xray_config(
+            &test_support::sample_vless(),
+        ))
+        .expect("serialize config");
+        assert_eq!(lf(&generated), lf(FIXTURE));
+    }
+
+    #[test]
+    #[ignore = "writes the fixture; run deliberately after an intended config change"]
+    fn dump_xray_config_fixture() {
+        let generated = serde_json::to_string_pretty(&build_xray_config(
+            &test_support::sample_vless(),
+        ))
+        .expect("serialize config");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/fixtures/xray_vless_config.json");
+        std::fs::write(&path, format!("{}\n", generated)).expect("write fixture");
+    }
+
+    #[test]
+    fn xray_inbound_is_the_socks_port_tun2socks_dials() {
+        let cfg = build_xray_config(&test_support::sample_vless());
+        assert_eq!(cfg["inbounds"][0]["listen"], "127.0.0.1");
+        assert_eq!(cfg["inbounds"][0]["port"], 10808);
+        assert_eq!(cfg["inbounds"][0]["protocol"], "socks");
+    }
+
+    /// Unmatched traffic goes to the first outbound, so "proxy" must stay first.
+    #[test]
+    fn proxy_outbound_is_first() {
+        let cfg = build_xray_config(&test_support::sample_vless());
+        assert_eq!(cfg["outbounds"][0]["tag"], "proxy");
+        assert_eq!(cfg["outbounds"][0]["protocol"], "vless");
+    }
+
+    /// QUIC must be blocked before anything else can match it: Vision is
+    /// TCP-only, so UDP/443 would otherwise leak outside the tunnel.
+    #[test]
+    fn quic_is_blocked_by_the_first_rule() {
+        let cfg = build_xray_config(&test_support::sample_vless());
+        let first = &cfg["routing"]["rules"][0];
+        assert_eq!(first["outboundTag"], "block");
+        assert_eq!(first["network"], "udp");
+        assert_eq!(first["port"], "443");
+    }
+
+    #[test]
+    fn empty_flow_is_omitted_not_sent_as_empty_string() {
+        let mut cfg = test_support::sample_vless();
+        cfg.flow = String::new();
+        let json = build_xray_config(&cfg);
+        let user = &json["outbounds"][0]["settings"]["vnext"][0]["users"][0];
+        assert!(user.get("flow").is_none(), "empty flow must not be emitted");
+        assert_eq!(user["id"], cfg.uuid);
+    }
+
+    #[test]
+    fn empty_spider_x_is_omitted() {
+        let mut cfg = test_support::sample_vless();
+        cfg.spider_x = String::new();
+        let json = build_xray_config(&cfg);
+        let reality = &json["outbounds"][0]["streamSettings"]["realitySettings"];
+        assert!(reality.get("spiderX").is_none());
+        assert_eq!(reality["serverName"], cfg.sni);
+    }
+
+    // ------------------------------------------------------------- parsing
+
+    #[test]
+    fn parses_a_vless_url() {
+        let url = "vless://00000000-0000-4000-8000-000000000000@node.example.invalid:443?encryption=none&security=reality&pbk=EXAMPLEKEY&sid=0123abcd&sni=cover.example.invalid&fp=chrome&flow=xtls-rprx-vision&spx=%2F#Example%20node";
+        let cfg = parse_vless_url(url).expect("parse");
+        assert_eq!(cfg.uuid, "00000000-0000-4000-8000-000000000000");
+        assert_eq!(cfg.host, "node.example.invalid");
+        assert_eq!(cfg.port, 443);
+        assert_eq!(cfg.public_key, "EXAMPLEKEY");
+        assert_eq!(cfg.short_id, "0123abcd");
+        assert_eq!(cfg.sni, "cover.example.invalid");
+        assert_eq!(cfg.flow, "xtls-rprx-vision");
+        assert_eq!(cfg.spider_x, "/");
+        assert_eq!(cfg.remark, "Example node");
+    }
+
+    #[test]
+    fn vless_sni_defaults_to_the_host() {
+        let url = "vless://uuid@node.example.invalid:443?pbk=EXAMPLEKEY";
+        let cfg = parse_vless_url(url).expect("parse");
+        assert_eq!(cfg.sni, "node.example.invalid");
+        assert_eq!(cfg.fingerprint, "chrome", "default fingerprint");
+        assert_eq!(cfg.encryption, "none", "default encryption");
+    }
+
+    #[test]
+    fn vless_rejects_incomplete_urls() {
+        // no public key — REALITY cannot be configured
+        assert!(parse_vless_url("vless://uuid@node.example.invalid:443").is_err());
+        // no uuid
+        assert!(parse_vless_url("vless://node.example.invalid:443?pbk=K").is_err());
+        // no port
+        assert!(parse_vless_url("vless://uuid@node.example.invalid?pbk=K").is_err());
+        // not a url at all
+        assert!(parse_vless_url("not a url").is_err());
+    }
+
+    #[test]
+    fn parses_a_hy2_url() {
+        let url = "hy2://example-password@node.example.invalid:8443/?sni=cover.example.invalid&insecure=1#RU%20node";
+        let cfg = parse_hy2_url(url).expect("parse");
+        assert_eq!(cfg.password, "example-password");
+        assert_eq!(cfg.port, 8443);
+        assert_eq!(cfg.sni, "cover.example.invalid");
+        assert!(cfg.insecure);
+        assert_eq!(cfg.remark, "RU node");
+    }
+
+    /// With a certificate pin the fingerprint is the verification, and the
+    /// standard x509 check breaks self-signed nodes — so a pin implies insecure.
+    #[test]
+    fn hy2_pin_forces_insecure() {
+        let url = "hy2://pw@node.example.invalid:8443/?pinSHA256=AA%3ABB";
+        let cfg = parse_hy2_url(url).expect("parse");
+        assert_eq!(cfg.pin_sha256, "AA:BB");
+        assert!(cfg.insecure);
+    }
+
+    /// The backend has shipped SNI as a Markdown link; take the host out of it
+    /// instead of handing xray a bracketed string.
+    #[test]
+    fn hy2_sni_is_cleaned_of_markdown() {
+        let url = "hy2://pw@node.example.invalid:8443/?sni=%5Bcover.example.invalid%5D(https%3A%2F%2Fx)";
+        let cfg = parse_hy2_url(url).expect("parse");
+        assert_eq!(cfg.sni, "cover.example.invalid");
+    }
+
+    #[test]
+    fn hy2_rejects_incomplete_urls() {
+        assert!(parse_hy2_url("hy2://@node.example.invalid:8443").is_err());
+        assert!(parse_hy2_url("hy2://pw@node.example.invalid").is_err());
+        assert!(parse_hy2_url("").is_err());
+    }
+
+    #[test]
+    fn subscription_body_is_decoded_from_base64_or_taken_as_is() {
+        let plain = "vless://uuid@node.example.invalid:443?pbk=K\n";
+        let encoded = base64::Engine::encode(&B64, plain.as_bytes());
+        assert_eq!(decode_subscription_body(&encoded), plain);
+        assert_eq!(decode_subscription_body(plain), plain);
+        // Whitespace inside the base64 payload must not break decoding.
+        let wrapped = format!("{}\n{}", &encoded[..8], &encoded[8..]);
+        assert_eq!(decode_subscription_body(&wrapped), plain);
+    }
+
+    #[test]
+    fn server_config_exposes_a_uniform_view() {
+        let vless = ServerConfig::Vless(test_support::sample_vless());
+        let hy2 = ServerConfig::Hy2(test_support::sample_hy2());
+        assert_eq!(vless.proto(), "VLESS");
+        assert_eq!(hy2.proto(), "Hysteria2");
+        assert_eq!(vless.port(), 443);
+        assert_eq!(hy2.port(), 8443);
+        assert_eq!(vless.host(), hy2.host());
+        assert_eq!(hy2.remark(), "Example hy2 node");
+    }
 }

@@ -1,24 +1,55 @@
 // src-tauri/src/tun.rs
-// TUN setup assuming the parent process already has root privileges.
+// Portable tunnel orchestration.
+//
+// Everything platform-specific lives in the pvpn-platform crate — see
+// crates/pvpn-platform/src/net/mod.rs for the contract and for why it is shaped
+// the way it is. This file holds only what is the same on every OS: resolving
+// the node name, assembling the plan, and the 5 s supervisor.
+//
+// The order of operations used to live here. It moved into the platform layer
+// when Linux arrived, because there the whole sequence runs inside a root helper
+// and has to be atomic on the far side of an IPC boundary. macOS and Windows
+// share one copy of that sequence in `net::local`, transcribed step for step
+// from what this file used to do.
+
+use std::net::{IpAddr, Ipv4Addr};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use std::path::PathBuf;
-use std::process::Stdio;
-use std::sync::Arc;
+use pvpn_platform::net::{self, TunPlan};
+use pvpn_platform::triple;
 use tauri::Manager;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
-pub const TUN_NAME: &str = "utun225";
-pub const TUN_ADDR: &str = "198.18.0.1";
+/// Name of the TUN device on this platform.
+pub const TUN_NAME: &str = net::DEVICE;
+/// Address assigned to the device; the same on every platform.
+///
+/// Re-exported rather than re-declared: the platform layer owns the value and
+/// the test below pins the two together, so the device cannot be addressed here
+/// with one number and configured there with another.
+#[allow(dead_code)]
+pub const TUN_ADDR: Ipv4Addr = net::DEVICE_ADDR;
+/// SOCKS inbound that xray exposes and tun2socks dials.
+/// Must stay equal to the inbound port in subscription::build_xray_config.
 pub const SOCKS_PORT: u16 = 10808;
+
+/// How often the supervisor re-checks the routes.
+const WATCHDOG_PERIOD: Duration = Duration::from_secs(5);
+
+/// Resolvers published on the tunnel interface, on the platforms that need them
+/// (Linux does; macOS and Windows let the system resolver's queries be proxied
+/// as ordinary traffic — see `configure_dns` in each platform module).
+/// Override with `PROXYSVPN_DNS=9.9.9.9,149.112.112.112`.
+const DEFAULT_DNS: &[&str] = &["1.1.1.1", "1.0.0.1"];
 
 #[derive(Default)]
 pub struct TunState {
-    child: Option<Child>,
-    server_ip: Option<String>,
-    original_gateway: Option<String>,
+    /// The plan of the tunnel that is up, if any. Also what the supervisor
+    /// re-asserts, so it must stay exactly what `up` was given.
+    plan: Option<TunPlan>,
     watchdog: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -28,98 +59,87 @@ pub fn new_state() -> SharedTunState {
     Arc::new(Mutex::new(TunState::default()))
 }
 
-pub fn tun2socks_path(app: &tauri::AppHandle) -> Result<PathBuf> {
-    let triple = current_target_triple();
-    let mut candidates: Vec<PathBuf> = Vec::new();
+/// Directories a sidecar may live in, most specific first: next to the
+/// executable (how a bundle ships it), then Tauri's resource directory, then
+/// the repo layout used by `cargo tauri dev`.
+pub fn sidecar_dirs(app: &tauri::AppHandle) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("tun2socks"));
-            candidates.push(dir.join(format!("tun2socks-{}", triple)));
+            dirs.push(dir.to_path_buf());
+            // In a macOS bundle the sidecars sit in Contents/MacOS next to the
+            // executable, while Tauri's own resources land in Contents/Resources.
+            if let Some(contents) = dir.parent() {
+                dirs.push(contents.join("Resources"));
+                dirs.push(contents.join("Resources").join("_up_").join("binaries"));
+            }
         }
     }
-
     if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(resource_dir.join("tun2socks"));
-        candidates.push(resource_dir.join(format!("tun2socks-{}", triple)));
-        candidates.push(resource_dir.join("binaries").join("tun2socks"));
-        candidates.push(resource_dir.join("binaries").join(format!("tun2socks-{}", triple)));
+        dirs.push(resource_dir.clone());
+        dirs.push(resource_dir.join("binaries"));
+        dirs.push(resource_dir.join("_up_").join("binaries"));
     }
-
     if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        let base = PathBuf::from(manifest_dir);
-        candidates.push(base.join("binaries").join(format!("tun2socks-{}", triple)));
+        dirs.push(PathBuf::from(manifest_dir).join("binaries"));
     }
-
-    candidates
-        .iter()
-        .find(|p| p.exists())
-        .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
-        .ok_or_else(|| anyhow!("tun2socks binary not found; tried: {:?}", candidates))
+    dirs
 }
 
-fn current_target_triple() -> &'static str {
-    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        "aarch64-apple-darwin"
-    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-        "x86_64-apple-darwin"
-    } else {
-        "unknown"
+pub fn tun2socks_path(app: &tauri::AppHandle) -> Result<PathBuf> {
+    triple::find_sidecar("tun2socks", &sidecar_dirs(app))
+}
+
+/// Parse a comma separated resolver list, dropping anything unusable.
+fn parse_dns_list(raw: &str) -> Vec<IpAddr> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse::<IpAddr>().ok())
+        // A loopback or unspecified resolver cannot be reached through a
+        // tunnel, and on Linux it would be published on the device and break
+        // every lookup on the machine.
+        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
+        .collect()
+}
+
+fn dns_servers() -> Vec<IpAddr> {
+    if let Ok(raw) = std::env::var("PROXYSVPN_DNS") {
+        let parsed = parse_dns_list(&raw);
+        if !parsed.is_empty() {
+            return parsed;
+        }
+        crate::logger::log(
+            "warn",
+            "tun",
+            "PROXYSVPN_DNS is set but holds no usable address — falling back to the default",
+        );
     }
+    parse_dns_list(&DEFAULT_DNS.join(","))
 }
 
-pub fn is_root() -> bool {
-    unsafe { libc::getuid() == 0 }
-}
-
-async fn resolve_host(host: &str) -> Result<String> {
+/// Resolves the node name to a single IPv4 address.
+///
+/// IPv4 only: the tunnel installs IPv4 half-defaults, so an IPv6 node address
+/// would be routed outside it.
+async fn resolve_host(host: &str) -> Result<Ipv4Addr> {
     let lookup = format!("{}:443", host);
-    let addrs: Vec<_> = tokio::task::spawn_blocking(move || {
+    let addrs = tokio::task::spawn_blocking(move || {
         use std::net::ToSocketAddrs;
         lookup.to_socket_addrs().ok().map(|it| it.collect::<Vec<_>>())
     })
-    .await?
+    .await
+    .context("dns lookup task panicked")?
     .ok_or_else(|| anyhow!("dns lookup failed for {}", host))?;
-    let addr = addrs
+
+    addrs
         .into_iter()
-        .find(|a| a.is_ipv4())
-        .ok_or_else(|| anyhow!("no ipv4 address for {}", host))?;
-    Ok(addr.ip().to_string())
-}
-
-async fn current_default_gateway() -> Result<String> {
-    let out = Command::new("route").args(["-n", "get", "default"]).output().await?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut iface: Option<String> = None;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("gateway:") {
-            return Ok(rest.trim().to_string());
-        }
-        if let Some(rest) = trimmed.strip_prefix("interface:") {
-            iface = Some(rest.trim().to_string());
-        }
-    }
-    if let Some(i) = iface {
-        if i.starts_with("utun") {
-            return Err(anyhow!("default route goes through {} — отключите другой VPN", i));
-        }
-    }
-    Err(anyhow!("could not parse default gateway"))
-}
-
-async fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(program)
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .with_context(|| format!("spawn {} {:?}", program, args))?;
-    if !status.success() {
-        return Err(anyhow!("{} {:?} failed: {}", program, args, status));
-    }
-    Ok(())
+        .find_map(|a| match a.ip() {
+            IpAddr::V4(v4) => Some(v4),
+            IpAddr::V6(_) => None,
+        })
+        .ok_or_else(|| anyhow!("no ipv4 address for {}", host))
 }
 
 pub async fn start(
@@ -128,166 +148,49 @@ pub async fn start(
     server_host: &str,
     socks_port: u16,
 ) -> Result<()> {
-    if !is_root() {
-        return Err(anyhow!(
-            "приложение не запущено от root — перезапустите через ProxysVPN Launcher"
-        ));
-    }
-
     let mut guard = state.lock().await;
-    if guard.child.is_some() {
+    if guard.plan.is_some() {
         return Err(anyhow!("tun already running"));
     }
 
+    // Before anything is changed: privileges on macOS and Windows, the polkit
+    // dialog on Linux. A refusal here leaves the machine untouched.
+    net::preflight().await?;
+
     let tun2socks = tun2socks_path(app)?;
     let server_ip = resolve_host(server_host).await?;
-    let original_gw = current_default_gateway().await?;
+    let plan = TunPlan {
+        server_ip,
+        socks_port,
+        tun2socks,
+        dns: dns_servers(),
+    };
 
-    crate::logger::log("info", "tun", &format!("server {} -> {}", server_host, server_ip));
-    crate::logger::log("info", "tun", &format!("original gateway: {}", original_gw));
-    println!("[tun] tun2socks: {}", tun2socks.display());
+    crate::logger::log("info", "tun", &format!("device {}", TUN_NAME));
+    net::up(&plan).await?;
 
-    let _ = run_cmd("/sbin/route", &["-n", "delete", "-host", &server_ip]).await;
-    run_cmd(
-        "/sbin/route",
-        &["-n", "add", "-host", &server_ip, &original_gw],
-    )
-    .await
-    .context("add host route for VPN server")?;
-
-    let mut cmd = Command::new(&tun2socks);
-    cmd.args([
-        "-device", TUN_NAME,
-        "-proxy", &format!("socks5://127.0.0.1:{}", socks_port),
-        "-loglevel", "info",
-    ])
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .kill_on_drop(true);
-
-    let mut child = cmd.spawn().context("spawn tun2socks")?;
-
-    if let Some(out) = child.stdout.take() {
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(out).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                crate::logger::log("info", "tun2socks", &line);
-            }
-        });
-    }
-    if let Some(err) = child.stderr.take() {
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(err).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                crate::logger::log("warn", "tun2socks", &line);
-            }
-        });
-    }
-
-    let mut ready = false;
-    for _ in 0..50 {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let out = Command::new("/sbin/ifconfig").arg(TUN_NAME).output().await.ok();
-        if let Some(o) = out {
-            if o.status.success() {
-                ready = true;
-                break;
-            }
-        }
-    }
-    if !ready {
-        let _ = child.kill().await;
-        let _ = run_cmd("/sbin/route", &["-n", "delete", "-host", &server_ip]).await;
-        return Err(anyhow!("utun225 did not come up within 5s"));
-    }
-
-    run_cmd(
-        "/sbin/ifconfig",
-        &[TUN_NAME, TUN_ADDR, TUN_ADDR, "up"],
-    )
-    .await
-    .context("assign IP to utun225")?;
-
-    run_cmd(
-        "/sbin/route",
-        &["-n", "add", "-net", "0.0.0.0/1", "-interface", TUN_NAME],
-    )
-    .await
-    .context("add route 0.0.0.0/1")?;
-    run_cmd(
-        "/sbin/route",
-        &["-n", "add", "-net", "128.0.0.0/1", "-interface", TUN_NAME],
-    )
-    .await
-    .context("add route 128.0.0.0/1")?;
-
-    guard.child = Some(child);
-    guard.server_ip = Some(server_ip.clone());
-    guard.original_gateway = Some(original_gw);
-
-    let wd = tokio::spawn(watchdog_loop(server_ip));
-    guard.watchdog = Some(wd);
+    guard.watchdog = Some(tokio::spawn(watchdog_loop(plan.clone())));
+    guard.plan = Some(plan);
     Ok(())
 }
 
-/// Каждые 5с проверяет, живы ли маршруты VPN, и переустанавливает пропавшие.
-/// Решает «отвал через время»: смена сети / wake из сна сносит таблицу маршрутов.
-async fn watchdog_loop(server_ip: String) {
+/// Every 5 s: is the engine alive, and are our routes still in place?
+///
+/// Waking from sleep, a Wi-Fi change or a DHCP renewal can wipe our entries
+/// while the engine stays alive; without this the app looks connected and
+/// nothing flows.
+async fn watchdog_loop(plan: TunPlan) {
     loop {
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        tokio::time::sleep(WATCHDOG_PERIOD).await;
 
-        // tun2socks жив?
-        let alive = Command::new("pgrep").arg("-x").arg("tun2socks").output().await
-            .map(|o| !o.stdout.is_empty()).unwrap_or(false);
-        if !alive {
-            crate::logger::log("warn", "watchdog", "tun2socks died, stopping watchdog");
+        if !net::engine_alive().await {
+            crate::logger::log("warn", "watchdog", "engine died, stopping watchdog");
             return;
         }
-
-        // host-route на сервер жив? нет — переустановить через текущий шлюз
-        if !route_exists(&server_ip).await {
-            if let Ok(gw) = current_default_gateway().await {
-                let _ = run_cmd("/sbin/route", &["-n", "delete", "-host", &server_ip]).await;
-                let _ = run_cmd("/sbin/route", &["-n", "add", "-host", &server_ip, &gw]).await;
-                crate::logger::log("warn", "watchdog", &format!("re-added host route {} via {}", server_ip, gw));
-            }
-        }
-
-        // split-default жив? проверяем по utun225
-        if !tun_default_routes_ok().await {
-            let _ = run_cmd("/sbin/route", &["-n", "add", "-net", "0.0.0.0/1", "-interface", TUN_NAME]).await;
-            let _ = run_cmd("/sbin/route", &["-n", "add", "-net", "128.0.0.0/1", "-interface", TUN_NAME]).await;
-            crate::logger::log("warn", "watchdog", "re-added split-default routes");
+        if let Err(e) = net::ensure(&plan).await {
+            crate::logger::log("warn", "watchdog", &format!("route repair failed: {}", e));
         }
     }
-}
-
-/// host-route на server_ip присутствует в таблице?
-async fn route_exists(ip: &str) -> bool {
-    let out = Command::new("/sbin/route").args(["-n", "get", "-host", ip]).output().await;
-    if let Ok(o) = out {
-        let t = String::from_utf8_lossy(&o.stdout);
-        // если gateway резолвится и это не сам utun — маршрут до сервера есть
-        for line in t.lines() {
-            if line.trim().starts_with("interface:") && line.contains(TUN_NAME) {
-                return false; // ушёл в туннель = host-route потерян
-            }
-        }
-        return t.contains("gateway:") || t.contains("interface:");
-    }
-    false
-}
-
-/// оба half-default маршрута указывают на utun225?
-async fn tun_default_routes_ok() -> bool {
-    let out = Command::new("netstat").args(["-rn", "-f", "inet"]).output().await;
-    if let Ok(o) = out {
-        let t = String::from_utf8_lossy(&o.stdout);
-        let has_low = t.lines().any(|l| l.starts_with("0/1") && l.contains(TUN_NAME));
-        let has_high = t.lines().any(|l| l.starts_with("128.0/1") && l.contains(TUN_NAME));
-        return has_low && has_high;
-    }
-    false
 }
 
 pub async fn stop(state: &SharedTunState) -> Result<()> {
@@ -295,37 +198,87 @@ pub async fn stop(state: &SharedTunState) -> Result<()> {
     if let Some(wd) = guard.watchdog.take() {
         wd.abort();
     }
-    let server_ip = guard.server_ip.clone();
+    let server_ip = guard.plan.as_ref().map(|p| p.server_ip);
+    guard.plan = None;
+    // The lock is released before teardown: `down` runs external commands and
+    // may wait on a child, and the status poll must not block behind it.
+    drop(guard);
 
-    let _ = run_cmd("/sbin/route", &["-n", "delete", "-net", "0.0.0.0/1"]).await;
-    let _ = run_cmd("/sbin/route", &["-n", "delete", "-net", "128.0.0.0/1"]).await;
-
-    if let Some(ref ip) = server_ip {
-        let _ = run_cmd("/sbin/route", &["-n", "delete", "-host", ip]).await;
-    }
-
-    let _ = run_cmd("/sbin/ifconfig", &[TUN_NAME, "down"]).await;
-
-    if let Some(mut child) = guard.child.take() {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-    }
-    let _ = run_cmd("/usr/bin/pkill", &["-x", "tun2socks"]).await;
-
-    guard.server_ip = None;
-    guard.original_gateway = None;
-    Ok(())
+    net::down(server_ip).await
 }
 
-/// Lock-free status check — pgrep doesn't need our state.
+/// Lock-free status check: asks the platform, so it stays right even if our own
+/// state drifted (a crashed engine, an external kill).
 pub async fn is_running(_state: &SharedTunState) -> bool {
-    if let Ok(out) = Command::new("pgrep").arg("-x").arg("tun2socks").output().await {
-        !out.stdout.is_empty()
-    } else {
-        false
-    }
+    net::engine_alive().await
 }
 
-pub async fn get_server_ip(state: &SharedTunState) -> Option<String> {
-    state.lock().await.server_ip.clone()
+pub async fn get_server_ip(state: &SharedTunState) -> Option<Ipv4Addr> {
+    state.lock().await.plan.as_ref().map(|p| p.server_ip)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// tun2socks dials the port xray listens on. The two constants live in
+    /// different modules, so nothing but a test keeps them together.
+    #[test]
+    fn socks_port_matches_generated_xray_inbound() {
+        let cfg = crate::subscription::build_xray_config(
+            &crate::subscription::test_support::sample_vless(),
+        );
+        let port = cfg["inbounds"][0]["port"]
+            .as_u64()
+            .expect("inbound port in generated config");
+        assert_eq!(port, SOCKS_PORT as u64);
+    }
+
+    /// The device name in this module and the one the platform layer configures
+    /// must be the same string, or we would address an interface that tun2socks
+    /// never created.
+    #[test]
+    fn device_name_comes_from_the_platform_layer() {
+        assert_eq!(TUN_NAME, net::DEVICE);
+        assert!(net::is_our_device(TUN_NAME));
+    }
+
+    #[test]
+    fn device_address_is_the_shared_one() {
+        assert_eq!(TUN_ADDR, net::DEVICE_ADDR);
+        assert_eq!(TUN_ADDR.to_string(), "198.18.0.1");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_device_name_is_unchanged() {
+        assert_eq!(TUN_NAME, "utun225");
+    }
+
+    #[tokio::test]
+    async fn resolve_host_accepts_a_literal_v4() {
+        let ip = resolve_host("203.0.113.7").await.expect("literal resolves");
+        assert_eq!(ip, Ipv4Addr::new(203, 0, 113, 7));
+    }
+
+    #[test]
+    fn default_dns_list_is_usable() {
+        let got = dns_servers();
+        assert!(!got.is_empty());
+        assert!(got.iter().all(|ip| !ip.is_loopback()));
+    }
+
+    #[test]
+    fn dns_list_parsing_drops_junk() {
+        assert_eq!(
+            parse_dns_list(" 9.9.9.9 , nonsense ,,127.0.0.1, 2620:fe::fe "),
+            vec![
+                "9.9.9.9".parse::<IpAddr>().expect("ip"),
+                "2620:fe::fe".parse::<IpAddr>().expect("ip"),
+            ]
+        );
+        assert!(parse_dns_list("").is_empty());
+        assert!(parse_dns_list("0.0.0.0").is_empty());
+        assert!(parse_dns_list("127.0.0.53").is_empty());
+    }
 }

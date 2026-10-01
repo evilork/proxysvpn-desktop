@@ -1,7 +1,7 @@
 // src-tauri/src/logger.rs
 // Lightweight in-process logger:
 //   • Ring buffer (last N lines kept in memory) — for live UI
-//   • Mirror to ~/Library/Logs/ProxysVPN/app.log (rotated daily) — for support
+//   • Mirror to a per-platform file (pvpn_platform::paths::log_file) — for support
 //   • Thread-safe, lock-free fast path
 
 use std::collections::VecDeque;
@@ -44,9 +44,10 @@ fn get_state() -> &'static Mutex<LoggerState> {
 }
 
 fn compute_log_path() -> Option<PathBuf> {
-    // ~/Library/Logs/ProxysVPN/app.log on macOS
-    let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join("Library/Logs/ProxysVPN/app.log"))
+    // macOS: $HOME/Library/Logs/ProxysVPN/app.log (unchanged)
+    // Windows: %LOCALAPPDATA%\ProxysVPN\logs\app.log
+    // Linux: $XDG_STATE_HOME (or ~/.local/state)/ProxysVPN/app.log
+    pvpn_platform::paths::log_file()
 }
 
 fn now_ms() -> u128 {
@@ -164,7 +165,7 @@ pub fn export_text(include_system_info: bool) -> String {
     let mut out = String::new();
     if include_system_info {
         out.push_str("=== ProxysVPN Diagnostic Report ===\n");
-        out.push_str(&format!("Generated: {}\n", format_iso(now_ms() as u128 / 1000)));
+        out.push_str(&format!("Generated: {}\n", format_iso(now_ms() / 1000)));
         out.push_str(&format!(
             "App version: {}\n",
             env!("CARGO_PKG_VERSION")
