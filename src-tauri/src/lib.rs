@@ -1,4 +1,5 @@
 // src-tauri/src/lib.rs
+mod helper;
 mod paths;
 mod ping;
 mod privilege;
@@ -275,6 +276,13 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Linux: the same binary doubles as the privileged helper, started through
+    // pkexec. It must branch before any GUI or logging setup happens.
+    #[cfg(target_os = "linux")]
+    if helper::is_helper_invocation() {
+        helper::run_helper();
+    }
+
     logger::init();
 
     sync_cleanup();
