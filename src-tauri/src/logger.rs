@@ -30,6 +30,7 @@
 // $XDG_STATE_HOME (or ~/.local/state)/ProxysVPN/app.log on Linux.
 
 use std::collections::VecDeque;
+use std::ffi::OsString;
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -689,7 +690,8 @@ pub fn redact(input: &str, nodes: &[String]) -> String {
 // ---------------------------------------------------------------------------
 
 struct FileSink {
-    path: PathBuf,
+    dir: LogDir,
+    name: OsString,
     handle: File,
     written: u64,
     /// Days since the epoch of the content currently in the file.
@@ -709,10 +711,17 @@ impl FileSink {
         max_bytes: u64,
         keep: usize,
     ) -> std::io::Result<Self> {
-        if let Some(dir) = path.parent() {
-            create_dir_all(dir)?;
-        }
-        let handle = log_file_options().append(true).open(&path)?;
+        let (dir_path, name) = match (path.parent(), path.file_name()) {
+            (Some(dir), Some(name)) => (dir.to_path_buf(), name.to_os_string()),
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "log path has no folder or no name",
+                ))
+            }
+        };
+        let dir = LogDir::open(&dir_path)?;
+        let handle = dir.open_file(&name, false)?;
         let meta = handle.metadata()?;
         // Adopt the existing file's day, not today's: a machine started the
         // next morning must roll yesterday's file rather than append to it.
@@ -726,7 +735,8 @@ impl FileSink {
                 .unwrap_or_else(|| day_of(now_ms))
         };
         Ok(Self {
-            path,
+            dir,
+            name,
             handle,
             written: meta.len(),
             day,
@@ -741,25 +751,22 @@ impl FileSink {
         let archives = self.keep.saturating_sub(1);
         if archives == 0 {
             // Degenerate configuration: keep only the live file.
-            self.handle = log_file_options()
-                .write(true)
-                .truncate(true)
-                .open(&self.path)?;
+            self.handle = self.dir.open_file(&self.name, true)?;
             self.written = 0;
             self.day = day_of(now_ms);
             return Ok(());
         }
-        let _ = std::fs::remove_file(archive_path(&self.path, archives));
+        let _ = self.dir.remove(&archive_name(&self.name, archives));
         for n in (1..archives).rev() {
-            let from = archive_path(&self.path, n);
-            if from.exists() {
-                let _ = std::fs::rename(&from, archive_path(&self.path, n + 1));
+            let from = archive_name(&self.name, n);
+            if self.dir.exists(&from) {
+                let _ = self.dir.rename(&from, &archive_name(&self.name, n + 1));
             }
         }
         // Rename, do not copy: the old handle keeps pointing at the renamed
         // inode, so nothing is lost if another write is already in flight.
-        std::fs::rename(&self.path, archive_path(&self.path, 1))?;
-        self.handle = log_file_options().append(true).open(&self.path)?;
+        self.dir.rename(&self.name, &archive_name(&self.name, 1))?;
+        self.handle = self.dir.open_file(&self.name, false)?;
         self.written = 0;
         self.day = day_of(now_ms);
         Ok(())
@@ -782,29 +789,164 @@ impl FileSink {
     }
 }
 
-/// How the mirror file is created.
+/// Mode of a newly created log file.
 ///
-/// Linux gets mode 0600 on creation. There the GUI is unprivileged, so the file
-/// belongs to the user who runs it and `~/.local/state/ProxysVPN/app.log` would
-/// otherwise be created world-readable at the usual umask — the log carries
-/// sidecar paths, interface names and whatever a node sends us.
+/// Linux: 0600. There the GUI is unprivileged, so the file belongs to the user
+/// who runs it and `~/.local/state/ProxysVPN/app.log` would otherwise be
+/// created world-readable at the usual umask — the log carries sidecar paths,
+/// interface names and whatever a node sends us.
 ///
-/// macOS is deliberately left alone: the process is root there and the file
-/// sits in the user's own `~/Library/Logs`, so a root-owned 0600 file would stop
-/// the owner from opening the log the support UI points them at. Windows needs
-/// nothing — `%LOCALAPPDATA%` already inherits an owner-only ACL — and iOS keeps
-/// it inside the app sandbox.
-fn log_file_options() -> OpenOptions {
-    let mut opts = OpenOptions::new();
-    opts.create(true);
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    opts
+/// macOS: 0644, as before. The process is root there and the file sits in the
+/// user's own `~/Library/Logs`, so a root-owned 0600 file would stop the owner
+/// from opening the log the support UI points them at.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const LOG_MODE: u32 = if cfg!(target_os = "linux") { 0o600 } else { 0o644 };
+
+/// The folder the log files live in, held open so that every later step —
+/// open, rotate, delete — happens in that very folder.
+///
+/// macOS and Linux: the folder is opened once with O_NOFOLLOW and every file
+/// operation is `*at()` relative to it, with O_NOFOLLOW on the file and a
+/// check that the file is a plain file with a single link. On macOS the
+/// process writing here is root and the folder sits in the user's own
+/// `~/Library/Logs`: by path, a program of that user could swap the folder or
+/// plant `app.log` as a symlink or hard link to a system file (a sudoers.d
+/// entry, a shell startup file) and have root create it or append log lines to
+/// it. Now a link is refused and the log simply has no file.
+///
+/// Windows and iOS keep plain paths: %LOCALAPPDATA% has an owner-only ACL, and
+/// the iOS file is inside the app's sandbox.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+struct LogDir {
+    fd: File,
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl LogDir {
+    fn open(dir: &Path) -> std::io::Result<Self> {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        create_dir_all(dir)?;
+        let fd = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(dir)?;
+        Ok(Self { fd })
+    }
+
+    fn c_name(name: &std::ffi::OsStr) -> std::io::Result<std::ffi::CString> {
+        use std::os::unix::ffi::OsStrExt;
+        std::ffi::CString::new(name.as_bytes())
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in a log file name"))
+    }
+
+    /// Open `name` for appending (or for a rewrite from empty), refusing
+    /// anything but a plain file with exactly one link.
+    fn open_file(&self, name: &std::ffi::OsStr, empty_it: bool) -> std::io::Result<File> {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::unix::fs::MetadataExt;
+
+        let c = Self::c_name(name)?;
+        // No O_TRUNC here even for `empty_it`: the checks below must run
+        // before anything is changed in whatever this name turns out to be.
+        let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: `self.fd` is an open directory for the whole call, `c` is a
+        // NUL-terminated name, and the mode is passed as the variadic third
+        // argument openat(2) reads when O_CREAT is set.
+        let raw = unsafe { libc::openat(self.fd.as_raw_fd(), c.as_ptr(), flags, LOG_MODE as libc::c_uint) };
+        if raw < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `raw` is a descriptor openat just returned to us and nothing
+        // else owns it.
+        let file = unsafe { File::from_raw_fd(raw) };
+        let meta = file.metadata()?;
+        if !meta.file_type().is_file() || meta.nlink() != 1 {
+            return Err(std::io::Error::other("the log file is not a plain file with a single link"));
+        }
+        if empty_it {
+            file.set_len(0)?;
+        }
+        Ok(file)
+    }
+
+    fn rename(&self, from: &std::ffi::OsStr, to: &std::ffi::OsStr) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let (a, b) = (Self::c_name(from)?, Self::c_name(to)?);
+        let dir = self.fd.as_raw_fd();
+        // SAFETY: both names are NUL-terminated and the directory stays open.
+        if unsafe { libc::renameat(dir, a.as_ptr(), dir, b.as_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    fn remove(&self, name: &std::ffi::OsStr) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let c = Self::c_name(name)?;
+        // SAFETY: as in `rename`. unlinkat never follows a final symlink.
+        if unsafe { libc::unlinkat(self.fd.as_raw_fd(), c.as_ptr(), 0) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    fn exists(&self, name: &std::ffi::OsStr) -> bool {
+        use std::os::fd::AsRawFd;
+        let Ok(c) = Self::c_name(name) else {
+            return false;
+        };
+        // SAFETY: `stat` is a plain C struct; zeroed is a valid value for it,
+        // and fstatat only writes into it.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: as in `rename`; `st` outlives the call.
+        unsafe { libc::fstatat(self.fd.as_raw_fd(), c.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) == 0 }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+struct LogDir {
+    path: PathBuf,
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+impl LogDir {
+    fn open(dir: &Path) -> std::io::Result<Self> {
+        create_dir_all(dir)?;
+        Ok(Self { path: dir.to_path_buf() })
+    }
+
+    fn open_file(&self, name: &std::ffi::OsStr, empty_it: bool) -> std::io::Result<File> {
+        let mut opts = OpenOptions::new();
+        opts.create(true);
+        if empty_it {
+            opts.write(true).truncate(true);
+        } else {
+            opts.append(true);
+        }
+        opts.open(self.path.join(name))
+    }
+
+    fn rename(&self, from: &std::ffi::OsStr, to: &std::ffi::OsStr) -> std::io::Result<()> {
+        std::fs::rename(self.path.join(from), self.path.join(to))
+    }
+
+    fn remove(&self, name: &std::ffi::OsStr) -> std::io::Result<()> {
+        std::fs::remove_file(self.path.join(name))
+    }
+
+    fn exists(&self, name: &std::ffi::OsStr) -> bool {
+        self.path.join(name).exists()
+    }
+}
+
+fn archive_name(name: &std::ffi::OsStr, n: usize) -> OsString {
+    let mut archived = name.to_os_string();
+    archived.push(format!(".{n}"));
+    archived
+}
+
+#[cfg(test)]
 fn archive_path(base: &Path, n: usize) -> PathBuf {
     let mut name = base.as_os_str().to_os_string();
     name.push(format!(".{n}"));
@@ -1340,6 +1482,81 @@ mod tests {
         sink.day = 10;
         sink.write_line("new run", DAY_MS * 11).expect("write");
         assert!(archive_path(&path, 1).exists());
+    }
+
+    // ---- links planted where the log goes -------------------------------
+
+    /// On macOS the log is written by root into the user's own
+    /// ~/Library/Logs. A symlink planted as app.log must not be followed: it
+    /// would have root create or append to any file on the machine.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_symlink_planted_as_the_log_file_is_not_written_through() {
+        let dir = TmpDir::new("symlog");
+        let victim = dir.file("victim");
+        std::fs::write(&victim, b"keep\n").expect("victim");
+        let path = dir.file("app.log");
+        std::os::unix::fs::symlink(&victim, &path).expect("link");
+
+        assert!(FileSink::open_with(path.clone(), DAY_MS, 10_000, 3).is_err());
+        assert_eq!(std::fs::read(&victim).expect("victim"), b"keep\n");
+
+        // A link to a file that does not exist yet must not be created either.
+        let absent = dir.file("absent");
+        std::fs::remove_file(&path).expect("unlink");
+        std::os::unix::fs::symlink(&absent, &path).expect("link");
+        assert!(FileSink::open_with(path, DAY_MS, 10_000, 3).is_err());
+        assert!(!absent.exists(), "root must not create the link's target");
+    }
+
+    /// A hard link survives O_NOFOLLOW; the single-link check is what stops it.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_hard_link_planted_as_the_log_file_is_refused() {
+        let dir = TmpDir::new("hardlog");
+        let victim = dir.file("victim");
+        std::fs::write(&victim, b"keep\n").expect("victim");
+        let path = dir.file("app.log");
+        std::fs::hard_link(&victim, &path).expect("hard link");
+
+        assert!(FileSink::open_with(path, DAY_MS, 10_000, 3).is_err());
+        assert_eq!(std::fs::read(&victim).expect("victim"), b"keep\n");
+    }
+
+    /// The folder itself swapped for a link to somewhere else.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_log_folder_that_is_a_symlink_is_refused() {
+        let dir = TmpDir::new("symdir");
+        let elsewhere = dir.file("elsewhere");
+        std::fs::create_dir(&elsewhere).expect("dir");
+        let logs = dir.file("ProxysVPN");
+        std::os::unix::fs::symlink(&elsewhere, &logs).expect("link");
+
+        assert!(FileSink::open_with(logs.join("app.log"), DAY_MS, 10_000, 3).is_err());
+        assert!(!elsewhere.join("app.log").exists());
+    }
+
+    /// Rotation stays inside the folder that was opened: swapping the folder
+    /// for a link afterwards moves nothing anywhere else.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn rotation_after_the_folder_was_swapped_stays_in_the_original_folder() {
+        let dir = TmpDir::new("swaprot");
+        let logs = dir.file("ProxysVPN");
+        let mut sink = FileSink::open_with(logs.join("app.log"), DAY_MS, 100, 3).expect("open");
+        sink.write_line(&"a".repeat(60), DAY_MS).expect("write");
+
+        let moved = dir.file("moved");
+        std::fs::rename(&logs, &moved).expect("move the folder away");
+        let elsewhere = dir.file("elsewhere");
+        std::fs::create_dir(&elsewhere).expect("dir");
+        std::fs::write(elsewhere.join("app.log.2"), b"keep").expect("bait");
+        std::os::unix::fs::symlink(&elsewhere, &logs).expect("link in its place");
+
+        sink.write_line(&"b".repeat(60), DAY_MS).expect("rotating write");
+        assert_eq!(std::fs::read(elsewhere.join("app.log.2")).expect("bait"), b"keep");
+        assert!(moved.join("app.log.1").exists(), "the rotation happened where the folder really is");
     }
 
     // ---- the addresses ---------------------------------------------------
