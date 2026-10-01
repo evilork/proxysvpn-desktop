@@ -1324,6 +1324,19 @@ impl Session {
             })
     }
 
+    /// Record that the engines now run on `index`, which the window calls
+    /// `label`. Answers whether anything the state event carries (location,
+    /// protocol) changed, i.e. whether the window is owed one right now.
+    fn adopt_node(&mut self, index: usize, label: String, proto: &str) -> bool {
+        let shown_before = (self.location.clone(), self.proto.clone());
+        self.current = Some(index);
+        self.location = Some(label);
+        self.proto = Some(proto.to_string());
+        self.remember_use(index);
+        self.meter.reset();
+        shown_before != (self.location.clone(), self.proto.clone())
+    }
+
     fn remember_use(&mut self, index: usize) {
         let Some(id) = self.id_of(index) else { return };
         self.recents.retain(|existing| *existing != id);
@@ -2128,12 +2141,25 @@ impl Core {
         // answers "не применимо" at once instead of timing out twice.
         ping::set_target_proto(server.host().to_string(), server.port(), server.proto());
 
-        let mut s = self.session.lock().await;
-        s.current = Some(index);
-        s.location = Some(label);
-        s.proto = Some(server.proto().to_string());
-        s.remember_use(index);
-        s.meter.reset();
+        let (moved, phase) = {
+            let mut s = self.session.lock().await;
+            let moved = s.adopt_node(index, label, server.proto());
+            (moved, s.phase)
+        };
+        if moved {
+            // The engines already carry the new node, so the main screen and
+            // the tray say so now. Nothing else would: `settle` emits only
+            // when the PHASE changes, and a switch from On stays On, so the
+            // window kept the previous country until some later probe moved
+            // the phase (Windows VM, 02.10.2026: "Netherlands" for one more
+            // probe period after the log already read «узел: Германия …
+            // (туннель не трогаем)»).
+            self.emit_state().await;
+            #[cfg(desktop)]
+            self.refresh_tray(phase).await;
+            #[cfg(not(desktop))]
+            let _ = phase;
+        }
         Ok(())
     }
 
@@ -4975,6 +5001,37 @@ mod tests {
         assert_eq!(after_switch(true, true, Some(ProbeVerdict::Blocked)), AfterSwitch::Heal(ErrorCode::Blocked));
         assert_eq!(after_switch(true, true, Some(ProbeVerdict::NoRoute)), AfterSwitch::Heal(ErrorCode::NoRoute));
         assert_eq!(after_switch(true, true, None), AfterSwitch::NoVerdict);
+    }
+
+    /// A switch on a live tunnel keeps the phase (On stays On), so `settle`
+    /// emits nothing; `adopt_node` is what tells `start_on` that the state
+    /// the window shows changed and must be sent at once. Windows VM,
+    /// 02.10.2026: the main screen read "Netherlands" for one more probe
+    /// period after the engines had moved to Germany.
+    #[test]
+    fn a_switch_to_another_location_owes_the_window_a_state_event() {
+        let mut s = session_with(vec![vless("🇳🇱 Нидерланды"), vless("🇩🇪 Германия"), hy2("🇳🇱 Нидерланды")]);
+        s.phase = VpnPhase::On;
+
+        assert!(s.adopt_node(0, "Нидерланды".into(), "vless"), "first node of the session");
+        assert_eq!(s.state_payload().location.as_deref(), Some("Нидерланды"));
+
+        assert!(s.adopt_node(1, "Германия".into(), "vless"), "another country is news");
+        let shown = s.state_payload();
+        assert_eq!(shown.location.as_deref(), Some("Германия"));
+        assert_eq!(shown.phase, VpnPhase::On, "the phase did not move, so only this can tell the window");
+        assert_eq!(s.current, Some(1));
+        assert_eq!(s.recents.front(), s.id_of(1).as_ref(), "the switch is remembered as recent");
+
+        assert!(
+            !s.adopt_node(1, "Германия".into(), "vless"),
+            "a repair that restarts the same node changes nothing on screen"
+        );
+        assert!(
+            s.adopt_node(2, "Нидерланды".into(), "hy2"),
+            "the protocol is part of the state event too"
+        );
+        assert_eq!(s.state_payload().proto.as_deref(), Some("hy2"));
     }
 
     /// Checked before and again under the operation lock: a click during a
