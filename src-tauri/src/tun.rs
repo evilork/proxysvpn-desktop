@@ -200,10 +200,20 @@ pub async fn stop(state: &SharedTunState) -> Result<()> {
     }
     let server_ip = guard.plan.as_ref().map(|p| p.server_ip);
     guard.plan = None;
-    // The lock is released before teardown: `down` runs external commands and
-    // may wait on a child, and the status poll must not block behind it.
-    drop(guard);
 
+    // The guard is deliberately held across `down`. An earlier version dropped
+    // it here "so the status poll does not block behind teardown", which was
+    // wrong on both counts: `is_running` below never takes this lock, so the
+    // early drop bought nothing, and it let a concurrent `start` pass the
+    // `plan.is_some()` check and run `up` *while* this `down` was still
+    // deleting routes and killing the engine. The tray's "Отключить VPN" spawns
+    // this function in its own task (see lib.rs), so a user who clicks it and
+    // then immediately reconnects hit exactly that interleaving: either the
+    // split defaults were removed from under a live engine — traffic leaving in
+    // the clear while the UI said "connected" — or the fresh engine was killed
+    // by the old teardown's stray sweep, leaving routes pointing at a dead
+    // device. Before the platform split, `stop` held its lock the whole way
+    // through for the same reason.
     net::down(server_ip).await
 }
 
