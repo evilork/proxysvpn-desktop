@@ -459,8 +459,16 @@ mod tests {
 
     const FIXTURE: &str = include_str!("fixtures/xray_vless_config.json");
 
+    /// Line endings are normalised before comparing: git checks the fixture out
+    /// with CRLF on Windows (core.autocrlf defaults to true there), while
+    /// serde_json always emits LF, so a byte comparison fails on the Windows
+    /// runner for a config that is in fact identical.
+    fn lf(text: &str) -> String {
+        text.replace("\r\n", "\n").trim().to_string()
+    }
+
     /// The generated xray config is a user-visible contract: a change here
-    /// changes how every macOS client routes traffic. The fixture is the
+    /// changes how every client routes traffic. The fixture is the
     /// pre-platform-split output; regenerate it on purpose with
     ///   cargo test -p proxysvpn-desktop -- --ignored dump_xray_config_fixture
     /// and review the diff.
@@ -470,7 +478,7 @@ mod tests {
             &test_support::sample_vless(),
         ))
         .expect("serialize config");
-        assert_eq!(generated.trim(), FIXTURE.trim());
+        assert_eq!(lf(&generated), lf(FIXTURE));
     }
 
     #[test]

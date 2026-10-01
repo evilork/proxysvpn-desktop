@@ -173,17 +173,38 @@ mod tests {
         assert!(yaml.contains(&format!("127.0.0.1:{}", HY2_SOCKS_PORT)), "{}", yaml);
     }
 
-    /// The config carries the node password, so it must never land in a
-    /// world-readable place.
+    /// The config carries the node password, so it must never land somewhere a
+    /// different local user could read or replace it.
+    ///
+    /// The path differs per platform, and deliberately so: macOS keeps the
+    /// pre-split literal in /tmp (a fixed path, because TMPDIR changes under
+    /// sudo) and relies on mode 0600, while Windows and Linux put it in a
+    /// per-user directory, which is strictly better. So this asserts the
+    /// invariant that actually matters rather than one hard-coded string.
     #[test]
     fn config_path_is_app_private() {
         let path = pvpn_platform::paths::hy2_config_file().expect("config path");
-        if cfg!(target_os = "windows") {
-            let text = path.to_string_lossy().to_ascii_lowercase();
+        let text = path.to_string_lossy().to_ascii_lowercase();
+
+        #[cfg(target_os = "macos")]
+        assert_eq!(path, std::path::PathBuf::from("/tmp/proxysvpn-hy2.yaml"));
+
+        #[cfg(target_os = "windows")]
+        {
             assert!(text.contains("proxysvpn"), "{}", text);
             assert!(!text.starts_with(r"c:\windows\temp"), "{}", text);
-        } else {
-            assert_eq!(path, std::path::PathBuf::from("/tmp/proxysvpn-hy2.yaml"));
         }
+
+        // Linux must not fall back to a world-writable directory: unlike macOS
+        // there is no reason to, and a predictable name in /tmp invites a
+        // symlink swap by another local user.
+        #[cfg(target_os = "linux")]
+        {
+            assert!(text.contains("proxysvpn"), "{}", text);
+            assert!(!text.starts_with("/tmp/"), "{}", text);
+        }
+
+        assert!(path.is_absolute(), "{}", text);
+        assert_eq!(path.extension().and_then(|e| e.to_str()), Some("yaml"));
     }
 }
