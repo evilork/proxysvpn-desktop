@@ -875,14 +875,19 @@ const LOG_MODE: u32 = if cfg!(target_os = "linux") { 0o600 } else { 0o644 };
 /// The folder the log files live in, held open so that every later step —
 /// open, rotate, delete — happens in that very folder.
 ///
-/// macOS and Linux: the folder is opened once with O_NOFOLLOW and every file
-/// operation is `*at()` relative to it, with O_NOFOLLOW on the file and a
-/// check that the file is a plain file with a single link. On macOS the
-/// process writing here is root and the folder sits in the user's own
-/// `~/Library/Logs`: by path, a program of that user could swap the folder or
-/// plant `app.log` as a symlink or hard link to a system file (a sudoers.d
-/// entry, a shell startup file) and have root create it or append log lines to
-/// it. Now a link is refused and the log simply has no file.
+/// macOS and Linux: the folder is reached one component at a time below the
+/// home folder (`LogDir::open_beneath`), each component opened with
+/// O_DIRECTORY|O_NOFOLLOW (and created with mkdirat when missing) relative to
+/// the one before, and each owned by the home folder's owner or by root.
+/// Every file operation is then `*at()` relative to the folder, with
+/// O_NOFOLLOW on the file and a check that the file is a plain file with a
+/// single link. On macOS the process writing here is root and the folder sits
+/// in the user's own `~/Library/Logs`: by path, a program of that user could
+/// swap any folder on the way (`~/Library/Logs` itself, not only
+/// `ProxysVPN`) for a link, or plant `app.log` as a symlink or hard link to a
+/// system file (a sudoers.d entry, a shell startup file), and have root
+/// create folders and files there or append log lines to them. Now a link
+/// anywhere below the home folder is refused and the log simply has no file.
 ///
 /// Windows and iOS keep plain paths: %LOCALAPPDATA% has an owner-only ACL, and
 /// the iOS file is inside the app's sandbox.
@@ -891,17 +896,93 @@ struct LogDir {
     fd: File,
 }
 
+/// Mode of a log folder this process creates (before the umask).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const LOG_DIR_MODE: u32 = 0o755;
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 impl LogDir {
+    /// Open `dir`, walking every component below `$HOME` without following
+    /// a link. A folder outside the home folder (only tests use one) is
+    /// walked from its parent, which is created by path as before.
     fn open(dir: &Path) -> std::io::Result<Self> {
-        use std::os::unix::fs::OpenOptionsExt;
+        let home = std::env::var_os("HOME")
+            .filter(|h| !h.is_empty())
+            .map(PathBuf::from);
+        if let Some(home) = home {
+            if let Ok(rel) = dir.strip_prefix(&home) {
+                if !rel.as_os_str().is_empty() {
+                    return Self::open_beneath(&home, rel);
+                }
+            }
+        }
+        let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "log folder has no parent or no name",
+            ));
+        };
+        create_dir_all(parent)?;
+        Self::open_beneath(parent, Path::new(name))
+    }
 
-        create_dir_all(dir)?;
-        let fd = OpenOptions::new()
+    /// Open `anchor` (links followed: it is the home folder the launcher
+    /// named, in a parent only root can write), then each component of `rel`
+    /// relative to the one before with O_DIRECTORY|O_NOFOLLOW, creating a
+    /// missing one with mkdirat. Every component must belong to the anchor's
+    /// owner or to root, and `rel` may hold plain names only.
+    fn open_beneath(anchor: &Path, rel: &Path) -> std::io::Result<Self> {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        use std::path::Component;
+
+        let mut current = OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(dir)?;
-        Ok(Self { fd })
+            .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+            .open(anchor)?;
+        let owner = current.metadata()?.uid();
+        let mut walked = 0usize;
+        for component in rel.components() {
+            let Component::Normal(name) = component else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "the log folder must be plain names below the home folder",
+                ));
+            };
+            let c = Self::c_name(name)?;
+            // SAFETY: `current` is an open directory for the whole call and
+            // `c` is a NUL-terminated name. mkdirat never follows a final link.
+            if unsafe { libc::mkdirat(current.as_raw_fd(), c.as_ptr(), LOG_DIR_MODE as libc::mode_t) } != 0 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(err);
+                }
+            }
+            let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+            // SAFETY: as above; openat takes no mode without O_CREAT.
+            let raw = unsafe { libc::openat(current.as_raw_fd(), c.as_ptr(), flags) };
+            if raw < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // SAFETY: `raw` is a descriptor openat just returned to us and
+            // nothing else owns it.
+            let next = unsafe { File::from_raw_fd(raw) };
+            let uid = next.metadata()?.uid();
+            if uid != owner && uid != 0 {
+                return Err(std::io::Error::other(format!(
+                    "a folder on the way to the log belongs to uid {uid}, not {owner} or root"
+                )));
+            }
+            current = next;
+            walked += 1;
+        }
+        if walked == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "the log folder cannot be the home folder itself",
+            ));
+        }
+        Ok(Self { fd: current })
     }
 
     fn c_name(name: &std::ffi::OsStr) -> std::io::Result<std::ffi::CString> {
@@ -1605,6 +1686,37 @@ mod tests {
 
         assert!(FileSink::open_with(logs.join("app.log"), DAY_MS, 10_000, 3).is_err());
         assert!(!elsewhere.join("app.log").exists());
+    }
+
+    /// Not only the last folder: ~/Library/Logs itself swapped for a link
+    /// (its owner can do that) must not lead root anywhere else either.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_link_anywhere_below_home_is_refused() {
+        let home = TmpDir::new("homelink");
+        std::fs::create_dir(home.file("Library")).expect("Library");
+        let elsewhere = home.file("elsewhere");
+        std::fs::create_dir(&elsewhere).expect("elsewhere");
+        std::os::unix::fs::symlink(&elsewhere, home.file("Library/Logs")).expect("Logs is a link");
+
+        assert!(LogDir::open_beneath(&home.0, Path::new("Library/Logs/ProxysVPN")).is_err());
+        assert!(!elsewhere.join("ProxysVPN").exists(), "nothing is created through the link");
+
+        // The same chain of real folders works, and missing ones are made.
+        std::fs::remove_file(home.file("Library/Logs")).expect("unlink");
+        let dir = LogDir::open_beneath(&home.0, Path::new("Library/Logs/ProxysVPN")).expect("real folders");
+        let file = dir.open_file(std::ffi::OsStr::new("app.log"), false).expect("app.log");
+        drop(file);
+        assert!(home.file("Library/Logs/ProxysVPN/app.log").is_file());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn the_log_folder_walk_takes_plain_names_only() {
+        let home = TmpDir::new("homedots");
+        assert!(LogDir::open_beneath(&home.0, Path::new("../escape")).is_err());
+        assert!(LogDir::open_beneath(&home.0, Path::new("/etc")).is_err());
+        assert!(LogDir::open_beneath(&home.0, Path::new("")).is_err());
     }
 
     /// Rotation stays inside the folder that was opened: swapping the folder
