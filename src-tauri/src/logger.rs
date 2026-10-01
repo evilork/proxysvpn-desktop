@@ -823,6 +823,7 @@ impl FileSink {
             }
         };
         let dir = LogDir::open(&dir_path)?;
+        redact_files_from_older_versions(&dir, &name, keep);
         let handle = dir.open_file(&name, false)?;
         let meta = handle.metadata()?;
         // Adopt the existing file's day, not today's: a machine started the
@@ -889,6 +890,97 @@ impl FileSink {
         self.written += text.len() as u64 + 1;
         Ok(())
     }
+}
+
+/// Bump when the masking rules change in a way that makes lines already on
+/// disk worth masking again: the files of the folder are then re-redacted
+/// once, on the first start of the new version.
+const REDACTION_GENERATION: u32 = 2;
+
+/// A log file bigger than this was not written by our rotation (5 MiB);
+/// rather than rewrite part of it, it is removed.
+const REDACT_READ_CAP: u64 = MAX_FILE_BYTES * 3;
+
+/// Lines written by an older version were masked by older rules: 0.3.1 wrote
+/// `app/dns: failed to retrieve response for <a real site>` and hysteria's
+/// `reqAddr` as they came, and rotation keeps those files for days. Once per
+/// `REDACTION_GENERATION`, every file of the folder is put through today's
+/// `redact` (and stripped of per-connection records), the marker is written,
+/// and nothing is done on later starts. Best effort: a file that cannot be
+/// rewritten is left as it was, and the marker is not written, so the next
+/// start tries again.
+fn redact_files_from_older_versions(dir: &LogDir, name: &std::ffi::OsStr, keep: usize) {
+    let marker = OsString::from(format!(".redacted-{REDACTION_GENERATION}"));
+    if dir.exists(&marker) {
+        return;
+    }
+    let mut names = vec![name.to_os_string()];
+    names.extend((1..keep).map(|n| archive_name(name, n)));
+    let mut all_done = true;
+    for file in &names {
+        if dir.exists(file) && rewrite_redacted(dir, file).is_err() {
+            all_done = false;
+        }
+    }
+    if all_done {
+        let _ = dir.open_file(&marker, false);
+    }
+}
+
+/// One file of `redact_files_from_older_versions`: rewritten through a temp
+/// file and renamed over the original, its modification time kept so the
+/// day-based rotation still sees the day it was written.
+fn rewrite_redacted(dir: &LogDir, file: &std::ffi::OsStr) -> std::io::Result<()> {
+    let (bytes, modified) = dir.read_all(file, REDACT_READ_CAP)?;
+    let Some(bytes) = bytes else {
+        // Too big to be ours: gone rather than half rewritten.
+        return dir.remove(file);
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let (prefix, message) = split_file_line(line);
+        if connection_kind(message).is_some() {
+            continue;
+        }
+        out.push_str(prefix);
+        out.push_str(&redact(message, &[]));
+        out.push('\n');
+    }
+    if out.as_bytes() == bytes.as_slice() {
+        return Ok(());
+    }
+    let mut tmp = OsString::from(".");
+    tmp.push(file);
+    tmp.push(".redacting");
+    let written = (|| -> std::io::Result<()> {
+        let mut handle = dir.open_file(&tmp, true)?;
+        handle.write_all(out.as_bytes())?;
+        if let Some(when) = modified {
+            handle.set_modified(when)?;
+        }
+        dir.rename(&tmp, file)
+    })();
+    if written.is_err() {
+        let _ = dir.remove(&tmp);
+    }
+    written
+}
+
+/// `"<time> [<level>] [<source>] "` and the message after it, as `emit`
+/// writes a line. A line of another shape (torn, or from a much older
+/// version) is all message.
+fn split_file_line(line: &str) -> (&str, &str) {
+    let Some(level_at) = line.find(" [") else {
+        return ("", line);
+    };
+    let Some(source_at) = line[level_at + 2..].find("] [").map(|i| i + level_at + 2) else {
+        return ("", line);
+    };
+    let Some(message_at) = line[source_at + 3..].find("] ").map(|i| i + source_at + 3 + 2) else {
+        return ("", line);
+    };
+    line.split_at(message_at)
 }
 
 /// Mode of a newly created log file.
@@ -1053,6 +1145,40 @@ impl LogDir {
         Ok(file)
     }
 
+    /// The whole of `name` and its modification time, read through the
+    /// same checks as `open_file` (no link followed, one link only), or
+    /// `None` for the bytes when the file is bigger than `cap`.
+    fn read_all(
+        &self,
+        name: &std::ffi::OsStr,
+        cap: u64,
+    ) -> std::io::Result<(Option<Vec<u8>>, Option<SystemTime>)> {
+        use std::io::Read;
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::unix::fs::MetadataExt;
+
+        let c = Self::c_name(name)?;
+        let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
+        // SAFETY: as in `open_file`; openat takes no mode without O_CREAT.
+        let raw = unsafe { libc::openat(self.fd.as_raw_fd(), c.as_ptr(), flags) };
+        if raw < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `raw` is a descriptor openat just returned to us and nothing
+        // else owns it.
+        let file = unsafe { File::from_raw_fd(raw) };
+        let meta = file.metadata()?;
+        if !meta.file_type().is_file() || meta.nlink() != 1 {
+            return Err(std::io::Error::other("the log file is not a plain file with a single link"));
+        }
+        if meta.len() > cap {
+            return Ok((None, meta.modified().ok()));
+        }
+        let mut bytes = Vec::new();
+        file.take(cap).read_to_end(&mut bytes)?;
+        Ok((Some(bytes), meta.modified().ok()))
+    }
+
     fn rename(&self, from: &std::ffi::OsStr, to: &std::ffi::OsStr) -> std::io::Result<()> {
         use std::os::fd::AsRawFd;
         let (a, b) = (Self::c_name(from)?, Self::c_name(to)?);
@@ -1108,6 +1234,26 @@ impl LogDir {
             opts.append(true);
         }
         opts.open(self.path.join(name))
+    }
+
+    fn read_all(
+        &self,
+        name: &std::ffi::OsStr,
+        cap: u64,
+    ) -> std::io::Result<(Option<Vec<u8>>, Option<SystemTime>)> {
+        use std::io::Read;
+
+        let path = self.path.join(name);
+        let meta = std::fs::symlink_metadata(&path)?;
+        if !meta.file_type().is_file() {
+            return Err(std::io::Error::other("the log file is not a plain file"));
+        }
+        if meta.len() > cap {
+            return Ok((None, meta.modified().ok()));
+        }
+        let mut bytes = Vec::new();
+        File::open(&path)?.take(cap).read_to_end(&mut bytes)?;
+        Ok((Some(bytes), meta.modified().ok()))
     }
 
     fn rename(&self, from: &std::ffi::OsStr, to: &std::ffi::OsStr) -> std::io::Result<()> {
@@ -1718,6 +1864,58 @@ mod tests {
 
         assert!(FileSink::open_with(logs.join("app.log"), DAY_MS, 10_000, 3).is_err());
         assert!(!elsewhere.join("app.log").exists());
+    }
+
+    /// The files a previous version wrote, with sites its rules did not
+    /// mask, are masked once on the first start of this one — and only once.
+    #[test]
+    fn files_written_by_an_older_version_are_redacted_once() {
+        let dir = TmpDir::new("reredact");
+        let live = dir.file("app.log");
+        let archive = dir.file("app.log.1");
+        let old_line = "2026-09-30T10:00:00Z [error] [xray] [Error] app/dns: failed to retrieve response for my_host.private-site.org.";
+        let ours = "2026-09-30T10:00:01Z [info] [vpn] подписка: получена за 812 мс";
+        let hy2 = r#"2026-09-29T10:00:00Z [warn] [hysteria] SOCKS5 TCP error {"reqAddr": "a-site-the-user-opened.example:443", "error": "EOF"}"#;
+        std::fs::write(&live, format!("{old_line}
+{ours}
+")).expect("live");
+        std::fs::write(&archive, format!("{hy2}
+")).expect("archive");
+        let yesterday = SystemTime::now() - std::time::Duration::from_secs(86_400);
+        File::options()
+            .write(true)
+            .open(&live)
+            .and_then(|f| f.set_modified(yesterday))
+            .expect("age the live file");
+
+        let sink = FileSink::open_with(live.clone(), DAY_MS * 20_000, 10_000, 3).expect("open");
+        drop(sink);
+        let text = std::fs::read_to_string(&live).expect("live");
+        assert!(!text.contains("private-site"), "{text}");
+        assert!(text.contains("2026-09-30T10:00:00Z [error] [xray] [Error] app/dns: failed to retrieve response for <site>."), "{text}");
+        assert!(text.contains(ours), "our own line stays as it was: {text}");
+        let archived = std::fs::read_to_string(&archive).expect("archive");
+        assert!(!archived.contains("a-site-the-user-opened"), "{archived}");
+        let modified = std::fs::metadata(&live).and_then(|m| m.modified()).expect("mtime");
+        let drift = modified.duration_since(yesterday).unwrap_or_default();
+        assert!(drift < std::time::Duration::from_secs(2), "the day the file was written is kept");
+
+        // Once: a line put back afterwards is left alone (a new version only
+        // ever writes masked lines; this proves the pass does not run again).
+        std::fs::write(&archive, format!("{hy2}
+")).expect("archive again");
+        drop(FileSink::open_with(live, DAY_MS * 20_000, 10_000, 3).expect("reopen"));
+        assert!(std::fs::read_to_string(&archive).expect("archive").contains("a-site-the-user-opened"));
+    }
+
+    #[test]
+    fn a_file_line_splits_into_its_prefix_and_message() {
+        assert_eq!(
+            split_file_line("2026-09-30T10:00:00Z [warn] [xray] [Error] app/dns: x"),
+            ("2026-09-30T10:00:00Z [warn] [xray] ", "[Error] app/dns: x")
+        );
+        assert_eq!(split_file_line("torn half of a line"), ("", "torn half of a line"));
+        assert_eq!(split_file_line("x [y] z"), ("", "x [y] z"));
     }
 
     /// Not only the last folder: ~/Library/Logs itself swapped for a link
