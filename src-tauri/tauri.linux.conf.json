@@ -1,12 +1,21 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBundleCommand": "cargo build --release --locked --manifest-path src-tauri/Cargo.toml -p pvpn-platform --bin proxysvpn-helper"
+  },
   "bundle": {
-    "targets": ["deb"],
+    "targets": ["deb", "appimage"],
     "category": "Utility",
     "shortDescription": "ProxysVPN desktop client",
     "longDescription": "Desktop client for the ProxysVPN service: routes the system's traffic through a VLESS or Hysteria2 node with split routing. Remove with: sudo apt remove proxys-vpn",
     "homepage": "https://proxysvpn.com",
     "linux": {
+      "appimage": {
+        "bundleMediaFramework": false,
+        "files": {
+          "/usr/bin/proxysvpn-helper": "target/release/proxysvpn-helper"
+        }
+      },
       "deb": {
         "section": "net",
         "postRemoveScript": "linux/postrm",

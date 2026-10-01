@@ -5260,6 +5260,58 @@ mod tests {
         assert_eq!(fitted_inner_height(800, 720, 720, 520), None);
     }
 
+    /// The Linux build merges tauri.linux.conf.json over tauri.conf.json (a
+    /// JSON merge patch). The result must be a config Tauri accepts — its
+    /// structs refuse unknown keys, so this is the check a Mac can make — and
+    /// the AppImage must carry the helper the build hook produces, while the
+    /// .deb, whose polkit policy names its own executable, must not.
+    #[cfg(desktop)]
+    #[test]
+    fn the_linux_config_puts_the_helper_into_the_appimage_only() {
+        use std::path::Path;
+        use tauri::utils::config::{BundleTarget, BundleType, Config, HookCommand};
+
+        fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
+            match (base, patch) {
+                (serde_json::Value::Object(base), serde_json::Value::Object(patch)) => {
+                    for (key, value) in patch {
+                        if value.is_null() {
+                            base.remove(key);
+                        } else {
+                            merge(base.entry(key.clone()).or_insert(serde_json::Value::Null), value);
+                        }
+                    }
+                }
+                (base, patch) => *base = patch.clone(),
+            }
+        }
+        let mut conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        let linux: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.linux.conf.json")).expect("tauri.linux.conf.json");
+        merge(&mut conf, &linux);
+        let conf: Config = serde_json::from_value(conf).expect("a config Tauri accepts");
+
+        let hook = match conf.build.before_bundle_command {
+            Some(HookCommand::Script(script)) => script,
+            other => panic!("no build hook for the helper: {other:?}"),
+        };
+        assert!(hook.contains("--release") && hook.contains("-p pvpn-platform --bin proxysvpn-helper"), "{hook}");
+        assert_eq!(
+            conf.bundle.linux.appimage.files.get(Path::new("/usr/bin/proxysvpn-helper")).map(|p| p.as_path()),
+            Some(Path::new("target/release/proxysvpn-helper")),
+            "the AppImage takes what the hook built"
+        );
+        assert!(!conf.bundle.linux.deb.files.keys().any(|path| path.ends_with("proxysvpn-helper")));
+        assert!(!conf.bundle.external_bin.unwrap_or_default().iter().any(|bin| bin.contains("proxysvpn-helper")));
+        match conf.bundle.targets {
+            BundleTarget::List(list) => {
+                assert!(list.contains(&BundleType::Deb) && list.contains(&BundleType::AppImage), "{list:?}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
     /// Only a gamescope session switches the renderer, and never over the
     /// person's own setting.
     #[test]
