@@ -15,7 +15,11 @@
         "title": "ProxysVPN",
         "width": 480,
         "height": 720,
-        "resizable": false,
+        "minWidth": 400,
+        "minHeight": 520,
+        "maxWidth": 720,
+        "resizable": true,
+        "center": true,
         "fullscreen": false
       }
     ],

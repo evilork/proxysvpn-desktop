@@ -4356,6 +4356,70 @@ fn reveal_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// Smallest inner height the window may be fitted down to, in logical
+/// pixels. Matches `minHeight` in tauri.conf.json: every screen body scrolls
+/// above its pinned footer, so this is enough for a heading, a little body
+/// and the footer.
+#[cfg(desktop)]
+const MIN_WINDOW_HEIGHT: f64 = 520.0;
+
+/// The inner height (physical pixels) that makes a window whose frame is
+/// `outer` tall fit a work area `work_area` tall, or `None` when it already
+/// fits. Never below `min_inner`.
+#[cfg(desktop)]
+fn fitted_inner_height(work_area: u32, outer: u32, inner: u32, min_inner: u32) -> Option<u32> {
+    if outer <= work_area {
+        return None;
+    }
+    let frame = outer.saturating_sub(inner);
+    Some(work_area.saturating_sub(frame).max(min_inner))
+}
+
+/// Shrink the window to the screen it opened on when 720 px plus the frame
+/// does not fit there.
+///
+/// The window is 480x720 logical px. On a 1366x768 screen, or a 1080p laptop
+/// at 150 % (672 px of work area under the taskbar), its bottom 30-80 px sat
+/// under the taskbar, and the layout pins every footer to the bottom of the
+/// viewport: the data notice's only button, "Continue", was unreachable on
+/// first run, and later the Country/Check bar was cut off. The window is now
+/// resizable too (tauri.conf.json), but nobody should have to discover that
+/// before they can press the first button.
+#[cfg(desktop)]
+fn fit_main_window_to_screen(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return;
+    };
+    let (Ok(outer), Ok(inner), Ok(scale)) =
+        (window.outer_size(), window.inner_size(), window.scale_factor())
+    else {
+        return;
+    };
+    let work = monitor.work_area();
+    // Rounded, positive and far below u32::MAX: a few hundred logical px at a
+    // scale factor of at most a handful.
+    let min_inner = (MIN_WINDOW_HEIGHT * scale).round().max(0.0) as u32;
+    let Some(height) = fitted_inner_height(work.size.height, outer.height, inner.height, min_inner) else {
+        return;
+    };
+    if let Err(e) = window.set_size(tauri::PhysicalSize::new(inner.width, height)) {
+        logger::log("warn", "app", &format!("could not fit the window to the screen: {e}"));
+        return;
+    }
+    // Top of the work area, centred across it: `center` uses the whole
+    // monitor on some platforms and would put the bottom back under the bar.
+    let x = work.position.x + (i64::from(work.size.width) - i64::from(outer.width)).max(0) as i32 / 2;
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, work.position.y));
+    logger::log(
+        "info",
+        "app",
+        &format!("window fitted to a {} px tall work area", work.size.height),
+    );
+}
+
 /// The red X with a tray icon present: hide, the VPN keeps running.
 ///
 /// Linux asks first whether the icon can be seen at all (pvpn-platform
@@ -4470,6 +4534,8 @@ pub fn run() {
             }
             #[cfg(desktop)]
             install_signal_handlers();
+            #[cfg(desktop)]
+            fit_main_window_to_screen(app.handle());
 
             Ok(())
         });
@@ -4550,6 +4616,36 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+
+    /// 1366x768 at 100 % leaves a 720 px work area under the taskbar, a 1080p
+    /// laptop at 150 % 672 px; the 720 px window plus its caption did not fit
+    /// either, and the first-run "Continue" button sat under the taskbar.
+    #[test]
+    fn the_window_is_fitted_to_a_short_work_area_and_left_alone_otherwise() {
+        // Fits: untouched.
+        assert_eq!(fitted_inner_height(1040, 751, 720, 520), None);
+        assert_eq!(fitted_inner_height(751, 751, 720, 520), None);
+        // 672 px work area, 31 px caption: the content shrinks to 641.
+        assert_eq!(fitted_inner_height(672, 751, 720, 520), Some(641));
+        // At 150 %: physical pixels throughout.
+        assert_eq!(fitted_inner_height(1008, 1127, 1080, 780), Some(961));
+        // Never below the minimum, even on an absurd screen.
+        assert_eq!(fitted_inner_height(400, 751, 720, 520), Some(520));
+    }
+
+    /// The window must be resizable and allowed below 720 px: with the old
+    /// fixed 480x720 nobody on a short screen could reach the pinned footer.
+    #[test]
+    fn the_window_config_lets_a_short_screen_reach_the_footer() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json parses");
+        let window = &conf["app"]["windows"][0];
+        assert_eq!(window["resizable"], true, "{window}");
+        let min_height = window["minHeight"].as_f64().expect("minHeight");
+        assert!(min_height < 720.0, "{window}");
+        assert!((min_height - MIN_WINDOW_HEIGHT).abs() < f64::EPSILON, "fit and config agree");
+        assert!(window["minWidth"].as_f64().is_some_and(|w| w <= 480.0), "{window}");
+    }
 
     #[test]
     fn green_by_warm_up_is_checked_at_the_warm_up_pace_until_a_probe_answers() {
