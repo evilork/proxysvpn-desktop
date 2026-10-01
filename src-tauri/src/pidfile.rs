@@ -1134,7 +1134,9 @@ mod tests {
 
         let results = file.reap(std::slice::from_ref(&ours_dir), None, Duration::from_secs(2));
         assert_eq!(outcome_of(&results, ours.pid()), Some(Outcome::Terminated));
-        assert!(!ours.is_alive());
+        // Terminated means the kernel no longer shows our binary at that pid;
+        // the exit itself can land a moment later.
+        assert!(ours.exits_within(Duration::from_secs(2)));
         assert!(
             theirs.is_alive(),
             "another program's sing-box is not ours to stop"
@@ -1242,7 +1244,7 @@ mod tests {
 
         let results = file.reap(std::slice::from_ref(&base), Some("xray"), Duration::from_secs(2));
         assert_eq!(results.len(), 1);
-        assert!(!xray.is_alive());
+        assert!(xray.exits_within(Duration::from_secs(2)));
         assert!(tun.is_alive());
         assert_eq!(
             file.load(),
