@@ -51,7 +51,13 @@ struct Link {
     stdin: ChildStdin,
     out: Lines<BufReader<ChildStdout>>,
     next_id: u64,
+    /// The start of pkexec's stderr, for telling "no polkit agent" apart from
+    /// a refusal when the handshake fails (`privilege::pkexec_unavailable`).
+    stderr: std::sync::Arc<std::sync::Mutex<String>>,
 }
+
+/// How much of pkexec's stderr is kept for that diagnosis.
+const STDERR_KEEP: usize = 4096;
 
 static LINK: OnceLock<Mutex<Option<Link>>> = OnceLock::new();
 
@@ -177,11 +183,19 @@ async fn spawn_helper() -> Result<Link> {
         .stdout
         .take()
         .ok_or_else(|| anyhow!("helper stdout not captured"))?;
+    let stderr_seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
     if let Some(err) = child.stderr.take() {
         // pkexec reports authorization problems on stderr.
+        let seen = std::sync::Arc::clone(&stderr_seen);
         tokio::spawn(async move {
             let mut lines = BufReader::new(err).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                if let Ok(mut kept) = seen.lock() {
+                    if kept.len() < STDERR_KEEP {
+                        kept.push_str(&line);
+                        kept.push('\n');
+                    }
+                }
                 crate::log::warn("helper", &line);
             }
         });
@@ -192,6 +206,7 @@ async fn spawn_helper() -> Result<Link> {
         stdin,
         out: BufReader::new(stdout).lines(),
         next_id: 0,
+        stderr: stderr_seen,
     };
 
     match request(&mut link, Request::Hello, HANDSHAKE_TIMEOUT).await {
@@ -209,10 +224,20 @@ async fn describe_handshake_failure(link: &mut Link, cause: anyhow::Error) -> an
     match code {
         // pkexec(1): 126 — the dialog was dismissed or authorization failed.
         Some(126) => anyhow!("запрос прав отменён — без пароля администратора туннель не поднять"),
-        // 127 — pkexec could not run at all (no polkit agent, no policy, …).
-        Some(127) => anyhow!(
-            "polkit отказал в правах (нет агента авторизации?) — запустите приложение из рабочего стола или от root"
-        ),
+        // 127 — not authorized, or pkexec could not ask at all. Only its own
+        // stderr says which; give the reader a moment to catch up with it.
+        Some(127) => {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let stderr = link.stderr.lock().map(|s| s.clone()).unwrap_or_default();
+            match privilege::pkexec_unavailable(Some(127), &stderr) {
+                // Typed, so the window says "this system cannot ask" instead
+                // of "press Retry and allow it in the system dialog".
+                Some(reason) => anyhow::Error::new(reason),
+                None => anyhow!(
+                    "polkit отказал в правах — запустите приложение из рабочего стола или от root"
+                ),
+            }
+        }
         _ => cause.context("helper handshake failed"),
     }
 }

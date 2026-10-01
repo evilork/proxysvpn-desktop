@@ -377,7 +377,7 @@ const ru = {
     "Без него приложение не может направить интернет через защищённое соединение. Нажмите «Повторить» и разрешите в системном окне.",
   "err.ELEVATION_UNAVAILABLE.title": "Системе нечем выдать права",
   "err.ELEVATION_UNAVAILABLE.body":
-    "Туннелю нужны права администратора, а запросить их здесь нечем: нет pkexec (polkit) или приложение запущено из AppImage. Установите приложение пакетом .deb — он поставит всё нужное.",
+    "Туннелю нужны права администратора, а запросить их здесь нечем: нет pkexec (polkit), в сеансе не запущен агент авторизации polkit (так бывает в i3, sway, Openbox) или приложение запущено из AppImage. Установите приложение пакетом .deb и запустите агент polkit (например, polkit-gnome или lxpolkit) или войдите в полноценный рабочий стол.",
   "err.ENGINE_START_FAILED.title": "Соединение не запустилось",
   "err.ENGINE_START_FAILED.body":
     "Внутренняя часть приложения не поднялась. Обычно помогает повторное нажатие.",
@@ -930,7 +930,7 @@ const en: Partial<Record<MsgKey, string>> = {
     "Without it we cannot route the internet through a secure connection. Tap Retry and allow it in the system dialog.",
   "err.ELEVATION_UNAVAILABLE.title": "This system cannot grant the rights",
   "err.ELEVATION_UNAVAILABLE.body":
-    "The tunnel needs administrator rights, and there is no way to ask for them here: pkexec (polkit) is missing, or the app runs from an AppImage. Install the app from the .deb package — it brings everything it needs.",
+    "The tunnel needs administrator rights, and there is no way to ask for them here: pkexec (polkit) is missing, no polkit authentication agent runs in this session (common in i3, sway, Openbox), or the app runs from an AppImage. Install the app from the .deb package and start a polkit agent (for example polkit-gnome or lxpolkit), or log in to a full desktop session.",
   "err.ENGINE_START_FAILED.title": "The connection did not start",
   "err.ENGINE_START_FAILED.body":
     "The internal part did not come up. Tapping again usually helps.",
