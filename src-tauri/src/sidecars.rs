@@ -59,6 +59,10 @@ pub fn dirs(app: &tauri::AppHandle) -> Vec<PathBuf> {
 /// The sidecar called `stem`, or ENGINE_START_FAILED with every path that was
 /// tried in the log under `source`. The list is a diagnostic, not a sentence
 /// for a person: the window shows the translated phrase with one button.
+///
+/// macOS: ENGINE_STAGE_FAILED instead when the launch-time copy into the
+/// root-owned folder failed — pressing Connect again cannot help there, and
+/// the window says what can.
 pub fn find(app: &tauri::AppHandle, stem: &str, source: &str) -> Result<PathBuf, AppError> {
     #[cfg(target_os = "macos")]
     if let Some(Err(reason)) = crate::engine_stage::staged() {
@@ -67,7 +71,7 @@ pub fn find(app: &tauri::AppHandle, stem: &str, source: &str) -> Result<PathBuf,
             source,
             &format!("{stem} not started: the engines were not copied at launch ({reason}); relaunch the app"),
         );
-        return Err(AppError::new(ErrorCode::EngineStartFailed));
+        return Err(AppError::new(ErrorCode::EngineStageFailed));
     }
     pvpn_platform::triple::find_sidecar(stem, &dirs(app)).map_err(|e| {
         crate::logger::log("error", source, &format!("{e:#}"));

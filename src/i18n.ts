@@ -381,6 +381,9 @@ const ru = {
   "err.ENGINE_START_FAILED.title": "Соединение не запустилось",
   "err.ENGINE_START_FAILED.body":
     "Внутренняя часть приложения не поднялась. Обычно помогает повторное нажатие.",
+  "err.ENGINE_STAGE_FAILED.title": "Приложение не подготовило свои файлы",
+  "err.ENGINE_STAGE_FAILED.body":
+    "При запуске приложение не смогло скопировать свои компоненты в защищённую системную папку, поэтому соединение не запустится. Освободите место на диске, закройте ProxysVPN и откройте снова. Если повторится — напишите в поддержку: в отчёте будет причина.",
   "err.ENGINE_DIED.title": "Соединение оборвалось",
   "err.ENGINE_DIED.body": "Мы уже поднимаем его заново — делать ничего не нужно.",
   "err.PORT_BUSY.title": "Предыдущий запуск ещё не закрылся",
@@ -934,6 +937,9 @@ const en: Partial<Record<MsgKey, string>> = {
   "err.ENGINE_START_FAILED.title": "The connection did not start",
   "err.ENGINE_START_FAILED.body":
     "The internal part did not come up. Tapping again usually helps.",
+  "err.ENGINE_STAGE_FAILED.title": "The app could not prepare its files",
+  "err.ENGINE_STAGE_FAILED.body":
+    "At launch the app could not copy its components into the protected system folder, so the connection cannot start. Free some disk space, quit ProxysVPN and open it again. If it happens again, contact support — the report shows the reason.",
   "err.ENGINE_DIED.title": "The connection dropped",
   "err.ENGINE_DIED.body": "We are already bringing it back — there is nothing to do.",
   "err.PORT_BUSY.title": "The previous run has not closed yet",
