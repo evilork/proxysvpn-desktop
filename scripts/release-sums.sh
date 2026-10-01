@@ -126,8 +126,8 @@ release_ci_names() {
 #   ones that are there.
 #
 #   Required: the macOS dmg, the x64 Windows installer, the deb. Optional:
-#   the arm64 Windows installer (CI builds it since 02.10.2026) and an
-#   AppImage, should Linux get one again; each is summed and attached when
+#   the arm64 Windows installer and the AppImage (the Steam Deck build;
+#   CI builds both since 02.10.2026); each is summed and attached when
 #   it is there, and the release goes out without it when it is not, which
 #   is said on stderr. An optional installer that the CI sums files list
 #   but the folder lacks is an error, though: that run built it, so the

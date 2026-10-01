@@ -18,13 +18,16 @@
 #   windows-latest  x86_64 -> NSIS installer
 #   windows-11-arm  arm64  -> NSIS installer for Windows on ARM, built and
 #                             tested natively (see its matrix entry)
-#   ubuntu-22.04    x86_64 -> .deb. Pinned to 22.04 on purpose: a bundle
-#                             built on 24.04 needs glibc 2.39 and will not
-#                             start on 22.04 machines. If GitHub retires this
-#                             image, switch to ubuntu-24.04; the bundle then
-#                             requires glibc 2.39+. No AppImage: root cannot
-#                             execute from its FUSE mount, so the pkexec helper
-#                             never starts there (docs/LINUX.md).
+#   ubuntu-22.04    x86_64 -> .deb, and in its own job the AppImage (the
+#                             Steam Deck build, docs/STEAMDECK.md). Pinned to
+#                             22.04 on purpose: a bundle built on 24.04 needs
+#                             glibc 2.39 and will not start on 22.04 machines.
+#                             If GitHub retires this image, switch to
+#                             ubuntu-24.04; the bundles then require glibc
+#                             2.39+. The AppImage's root helper cannot run
+#                             from its FUSE mount, so the app copies it into a
+#                             root-owned folder on the first connect
+#                             (pvpn-platform helper/install.rs).
 name: desktop-build
 
 on:
@@ -144,6 +147,18 @@ jobs:
             bundle_root: src-tauri/target/release/bundle
             bundle_dir: deb
             artifact_path: src-tauri/target/release/bundle/deb/*.deb
+          # The AppImage: the Steam Deck build (SteamOS cannot take a .deb, its
+          # /usr is a read-only image) and any other x86_64 Linux. Same runner
+          # and glibc floor as the .deb. tauri.linux.conf.json builds the
+          # standalone root helper before the bundle and puts it in usr/bin;
+          # the "AppImage carries the helper" step below checks that it did.
+          - label: Linux x86_64 (AppImage)
+            runner: ubuntu-22.04
+            artifact: proxysvpn-linux-appimage
+            bundles: appimage
+            bundle_root: src-tauri/target/release/bundle
+            bundle_dir: appimage
+            artifact_path: src-tauri/target/release/bundle/appimage/*.AppImage
 
     env:
       # "--target <triple>" for an entry that names one, empty for the others,
@@ -258,6 +273,32 @@ jobs:
         if: runner.os != 'macOS'
         run: npx tauri build --bundles ${{ matrix.bundles }} $TARGET_ARGS
 
+      - name: AppImage carries the helper (AppImage only)
+        # The first connect from the AppImage copies usr/bin/proxysvpn-helper
+        # and usr/bin/tun2socks out of it (helper/install.rs); without them
+        # every connect fails, and nothing before this step would notice.
+        # The runtime extracts without FUSE. readelf prints what linuxdeploy
+        # left in the helper — its libraries and RUNPATH — which the
+        # root-owned copy keeps; docs/STEAMDECK.md says what to look for.
+        if: matrix.bundles == 'appimage'
+        env:
+          ARTIFACT_PATH: ${{ matrix.artifact_path }}
+        run: |
+          # Unquoted on purpose: the pattern has to expand to the one file.
+          # shellcheck disable=SC2086
+          image="$(ls $ARTIFACT_PATH)"
+          work="$(mktemp -d)"
+          ( cd "$work" && "$GITHUB_WORKSPACE/$image" --appimage-extract >/dev/null )
+          ls -l "$work/squashfs-root/usr/bin"
+          for f in proxysvpn-desktop proxysvpn-helper tun2socks xray hysteria; do
+            if [ ! -f "$work/squashfs-root/usr/bin/$f" ]; then
+              echo "::error::usr/bin/$f is missing from the AppImage"
+              exit 1
+            fi
+          done
+          readelf -d "$work/squashfs-root/usr/bin/proxysvpn-helper" | grep -E 'NEEDED|RUNPATH|RPATH' || true
+          rm -rf "$work"
+
       - name: List bundle output with checksums
         # The checksums go into the log on purpose: nothing here is signed, so a
         # sha256 printed by the very run that produced the file is the only way
@@ -281,14 +322,14 @@ jobs:
             sha256() { shasum -a 256 "$@"; }
           fi
           find "$BUNDLE_ROOT" -maxdepth 2 -type f \
-            \( -name '*.dmg' -o -name '*.exe' -o -name '*.deb' \) \
+            \( -name '*.dmg' -o -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' \) \
             -print0 | while IFS= read -r -d '' f; do sha256 "$f"; done
           # The same sums as a file that travels in the artifact, so they do
           # not expire with the log. Bare file names, so `sha256sum -c` works
           # in the folder the installers are downloaded to.
-          for dir in "$BUNDLE_ROOT/dmg" "$BUNDLE_ROOT/nsis" "$BUNDLE_ROOT/deb"; do
+          for dir in "$BUNDLE_ROOT/dmg" "$BUNDLE_ROOT/nsis" "$BUNDLE_ROOT/deb" "$BUNDLE_ROOT/appimage"; do
             [ -d "$dir" ] || continue
-            ( cd "$dir" && for f in *.dmg *.exe *.deb; do if [ -f "$f" ]; then sha256 "$f"; fi; done ) >> "$dir/SHA256SUMS-${{ matrix.artifact }}.txt"
+            ( cd "$dir" && for f in *.dmg *.exe *.deb *.AppImage; do if [ -f "$f" ]; then sha256 "$f"; fi; done ) >> "$dir/SHA256SUMS-${{ matrix.artifact }}.txt"
           done
 
       - name: Upload installers
