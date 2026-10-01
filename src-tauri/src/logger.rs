@@ -1036,7 +1036,19 @@ impl LogDir {
         if let Some(home) = home {
             if let Ok(rel) = dir.strip_prefix(&home) {
                 if !rel.as_os_str().is_empty() {
-                    return Self::open_beneath(&home, rel);
+                    let walked = Self::open_beneath(&home, rel);
+                    // On Linux only the GUI writes this log, as the user. It
+                    // gains nothing from refusing links in its own home, and
+                    // a symlinked ~/.local (dotfile managers) must not cost
+                    // the log silently. Root always keeps the strict walk.
+                    #[cfg(target_os = "linux")]
+                    {
+                        // SAFETY: geteuid has no preconditions and cannot fail.
+                        if walked.is_err() && unsafe { libc::geteuid() } != 0 {
+                            return Self::open_following(dir);
+                        }
+                    }
+                    return walked;
                 }
             }
         }
@@ -1107,6 +1119,18 @@ impl LogDir {
             ));
         }
         Ok(Self { fd: current })
+    }
+
+    /// Linux, non-root only: create `dir` and open it following links.
+    #[cfg(target_os = "linux")]
+    fn open_following(dir: &Path) -> std::io::Result<Self> {
+        use std::os::unix::fs::OpenOptionsExt;
+        create_dir_all(dir)?;
+        let fd = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+            .open(dir)?;
+        Ok(Self { fd })
     }
 
     fn c_name(name: &std::ffi::OsStr) -> std::io::Result<std::ffi::CString> {
@@ -1938,6 +1962,23 @@ mod tests {
         let file = dir.open_file(std::ffi::OsStr::new("app.log"), false).expect("app.log");
         drop(file);
         assert!(home.file("Library/Logs/ProxysVPN/app.log").is_file());
+    }
+
+    /// Linux: the GUI runs as the user, so a symlinked ~/.local/state (dotfile
+    /// managers do that) is followed instead of losing the log.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_user_follows_a_symlinked_state_folder() {
+        let home = TmpDir::new("statelink");
+        let real = home.file("dotfiles-state");
+        std::fs::create_dir(&real).expect("real state");
+        std::fs::create_dir(home.file(".local")).expect(".local");
+        std::os::unix::fs::symlink(&real, home.file(".local/state")).expect("state is a link");
+
+        assert!(LogDir::open_beneath(&home.0, Path::new(".local/state/ProxysVPN")).is_err());
+        let dir = LogDir::open_following(&home.file(".local/state/ProxysVPN")).expect("followed");
+        drop(dir.open_file(std::ffi::OsStr::new("app.log"), false).expect("app.log"));
+        assert!(real.join("ProxysVPN/app.log").is_file());
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
