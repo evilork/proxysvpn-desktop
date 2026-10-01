@@ -9,7 +9,7 @@
 //
 // Pure, with no build-time input: node --test imports it as is.
 
-export type NoticePlatform = "ios" | "macos";
+export type NoticePlatform = "ios" | "macos" | "windows" | "linux";
 
 export type NoticeKind = "engine" | "font" | "cargo" | "go" | "npm";
 
@@ -43,7 +43,7 @@ export interface NoticeGroup {
 }
 
 const KINDS: ReadonlySet<string> = new Set<NoticeKind>(["engine", "font", "cargo", "go", "npm"]);
-const PLATFORMS: ReadonlySet<string> = new Set<NoticePlatform>(["ios", "macos"]);
+const PLATFORMS: ReadonlySet<string> = new Set<NoticePlatform>(["ios", "macos", "windows", "linux"]);
 
 function isKind(value: unknown): value is NoticeKind {
   return typeof value === "string" && KINDS.has(value);
@@ -107,8 +107,10 @@ export function parseNotices(value: unknown): NoticeComponent[] {
 
 /**
  * Groups by licence, for the build this is: an iOS screen does not list what
- * only the Mac app carries, and the other way round. An unknown platform
- * lists everything — more than needed is fine, less is not.
+ * only the desktop apps carry, a Windows screen lists the crates only the
+ * Windows build links (windows, webview2-com, …) and not the iOS engine, and
+ * so on. An unknown platform lists everything — more than needed is fine,
+ * less is not.
  *
  * Largest group first (that is where most people look for "MIT"), then by
  * name; components by name. O(n log n).
@@ -118,8 +120,8 @@ export function groupByLicense(
   platform: string | undefined,
 ): NoticeGroup[] {
   const shown =
-    platform === "ios" || platform === "macos"
-      ? components.filter((component) => component.platforms.includes(platform))
+    platform !== undefined && PLATFORMS.has(platform)
+      ? components.filter((component) => component.platforms.includes(platform as NoticePlatform))
       : components;
   const groups = new Map<string, NoticeComponent[]>();
   for (const component of shown) {

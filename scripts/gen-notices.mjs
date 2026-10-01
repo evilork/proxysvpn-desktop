@@ -14,14 +14,18 @@
 //
 // ── What goes in ─────────────────────────────────────────────────────────────
 //   • Rust crates the app links, from `cargo metadata --filter-platform` for
-//     aarch64-apple-ios and aarch64-apple-darwin, walking NORMAL dependencies
-//     from the app crate only: build scripts and dev-dependencies do not end
-//     up in the binary. Each crate records which of the two builds has it.
+//     aarch64-apple-ios, aarch64-apple-darwin, x86_64-pc-windows-msvc and
+//     x86_64-unknown-linux-gnu, walking NORMAL dependencies from the app crate
+//     only: build scripts and dev-dependencies do not end up in the binary.
+//     Each crate records which of the builds has it.
 //   • npm packages of the window, from `npm ls --omit=dev --all`, with the
 //     licence from each package's own package.json.
 //   • What neither tool sees: the tunnel engines (Xray-core and libXray in the
 //     Apple builds; Xray-core, Hysteria and tun2socks beside the desktop app,
-//     fetched by scripts/fetch-binaries.sh) and the Rubik font.
+//     fetched by scripts/fetch-binaries.sh at the versions in
+//     scripts/sidecars.lock), the GPL-3.0-or-later Go modules linked into
+//     the stock desktop Xray-core and Hysteria, and the Rubik font. Wintun is
+//     not listed here: its own licence file is installed beside wintun.dll.
 //   • The Go modules inside libXray, when scripts/libxray-notices.json exists
 //     (written by scripts/build-libxray.sh with the Apple engine). Two of them
 //     ARE the engines above: their pinned version, source and our patch go
@@ -72,8 +76,12 @@ const ENGINE_MODULES = new Map([
 const CARGO_TARGETS = [
   ["ios", "aarch64-apple-ios"],
   ["macos", "aarch64-apple-darwin"],
+  ["windows", "x86_64-pc-windows-msvc"],
+  ["linux", "x86_64-unknown-linux-gnu"],
 ];
-const ALL_PLATFORMS = ["ios", "macos"];
+const ALL_PLATFORMS = ["ios", "macos", "windows", "linux"];
+/** The three desktop builds, which ship the same three engine sidecars. */
+const DESKTOP = ["macos", "windows", "linux"];
 
 /**
  * Components no package manager here knows about. Versions are absent where
@@ -84,10 +92,12 @@ const STATIC_COMPONENTS = [
   {
     kind: "engine",
     name: "Xray-core",
-    version: null,
+    // The desktop sidecar pinned in scripts/sidecars.lock. The iOS row gets
+    // its own version, source and patch from the libXray build.
+    version: "26.3.27",
     license: "MPL-2.0",
     source: "https://github.com/XTLS/Xray-core",
-    platforms: ["ios", "macos"],
+    platforms: ["ios", ...DESKTOP],
   },
   {
     kind: "engine",
@@ -101,20 +111,61 @@ const STATIC_COMPONENTS = [
   {
     kind: "engine",
     name: "Hysteria",
-    version: null,
+    version: "2.9.3",
     license: "MIT",
     source: "https://github.com/apernet/hysteria",
     copyright: "Copyright 2023 Toby",
-    platforms: ["macos"],
+    platforms: DESKTOP,
   },
   {
     kind: "engine",
     name: "tun2socks",
-    version: null,
+    version: "2.6.0",
     license: "MIT",
     source: "https://github.com/xjasonlyu/tun2socks",
     copyright: "Copyright (c) 2019 Jason Lyu",
-    platforms: ["macos"],
+    platforms: DESKTOP,
+  },
+  // GPL-3.0-or-later code statically linked into the stock desktop engines
+  // (`go version -m` on the pinned releases). The desktop sidecars are the
+  // unmodified upstream releases, so their exact-tag sources are the
+  // upstream repositories; the iOS engine is built without these modules
+  // (scripts/libxray/xray-core-no-gpl.patch).
+  {
+    kind: "go",
+    name: "github.com/sagernet/sing (in Xray-core)",
+    version: "v0.5.1",
+    license: "GPL-3.0-or-later",
+    source: "https://github.com/SagerNet/sing/tree/v0.5.1",
+    copyright: "Copyright (C) 2022 by nekohasekai",
+    platforms: DESKTOP,
+  },
+  {
+    kind: "go",
+    name: "github.com/sagernet/sing-shadowsocks (in Xray-core)",
+    version: "v0.2.7",
+    license: "GPL-3.0-or-later",
+    source: "https://github.com/SagerNet/sing-shadowsocks/tree/v0.2.7",
+    copyright: "Copyright (C) 2022 by nekohasekai",
+    platforms: DESKTOP,
+  },
+  {
+    kind: "go",
+    name: "github.com/sagernet/sing (in Hysteria)",
+    version: "v0.3.2",
+    license: "GPL-3.0-or-later",
+    source: "https://github.com/SagerNet/sing/tree/v0.3.2",
+    copyright: "Copyright (C) 2022 by nekohasekai",
+    platforms: DESKTOP,
+  },
+  {
+    kind: "go",
+    name: "github.com/apernet/sing-tun (in Hysteria)",
+    version: "v0.2.6-0.20250920121535-299f04629986",
+    license: "GPL-3.0-or-later",
+    source: "https://github.com/apernet/sing-tun/tree/299f04629986",
+    copyright: "Copyright (C) 2022 by nekohasekai",
+    platforms: DESKTOP,
   },
   {
     kind: "font",
@@ -123,7 +174,7 @@ const STATIC_COMPONENTS = [
     license: "OFL-1.1",
     source: "https://github.com/googlefonts/rubik",
     copyright: "Copyright 2015 The Rubik Project Authors (https://github.com/googlefonts/rubik)",
-    platforms: ["ios", "macos"],
+    platforms: ALL_PLATFORMS,
   },
 ];
 

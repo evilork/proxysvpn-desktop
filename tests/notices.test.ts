@@ -64,7 +64,7 @@ test("the iOS Xray-core names the pinned commit and our patch (MPL-2.0 source)",
   assert.ok(existsSync(new URL(patch, ROOT)), patch);
   const libxray = all.find((c) => c.name === "libXray");
   assert.match(libxray?.source ?? "", /^https:\/\/github\.com\/XTLS\/libXray\/tree\/[0-9a-f]{40}$/);
-  // The Mac app fetches the latest unpatched release: no version, no patch.
+  // The desktop apps ship the pinned unpatched release: no patch.
   const mac = all.find((c) => c.name === "Xray-core" && c.platforms.includes("macos"));
   assert.equal(mac?.source, "https://github.com/XTLS/Xray-core");
   assert.equal(mac?.changes, undefined);
@@ -79,13 +79,47 @@ test("the engines are not listed twice, and our own code not at all", () => {
   assert.ok(names.includes("golang.org/x/crypto"), "the other Go modules are");
 });
 
-test("no GPL component ships in any build", () => {
-  for (const component of committed()) {
+test("no GPL component ships in the iOS build", () => {
+  for (const component of committed().filter((c) => c.platforms.includes("ios"))) {
     assert.ok(!component.licenseIds.some((id) => id.startsWith("GPL")), component.name);
   }
 });
 
-test("an iOS screen leaves out what only the Mac app carries", () => {
+// The stock desktop Xray-core and Hysteria link sagernet/sing and friends,
+// which are GPL-3.0-or-later; the notices must say so and carry the text.
+test("every desktop build names the GPL code inside its engines", () => {
+  for (const platform of ["macos", "windows", "linux"] as const) {
+    const gpl = groupByLicense(committed(), platform).find((g) => g.license === "GPL-3.0-or-later");
+    const names = gpl?.components.map((c) => c.name) ?? [];
+    assert.ok(names.some((n) => n.startsWith("github.com/sagernet/sing ") && n.includes("Xray-core")), `${platform}: ${names}`);
+    assert.ok(names.some((n) => n.includes("Hysteria")), `${platform}: ${names}`);
+  }
+  assert.ok(existsSync(new URL("src/assets/licenses/GPL-3.0-or-later.txt", ROOT)));
+});
+
+test("tun2socks is MIT, as upstream says", () => {
+  const tun = committed().find((c) => c.name === "tun2socks");
+  assert.equal(tun?.license, "MIT");
+});
+
+// Windows and Linux link crates the Apple builds do not; their screens must
+// list them, and must not list the iOS-only engine.
+test("Windows and Linux list their own crates, not the iOS engine", () => {
+  const names = (platform: string) =>
+    groupByLicense(committed(), platform).flatMap((g) => g.components.map((c) => c.name));
+  const windows = names("windows");
+  assert.ok(windows.includes("windows"), "the windows crate");
+  assert.ok(windows.includes("webview2-com"));
+  assert.ok(windows.includes("tauri-plugin-single-instance"));
+  assert.ok(!windows.includes("libXray"));
+  const linux = names("linux");
+  assert.ok(linux.includes("gtk"));
+  assert.ok(linux.includes("webkit2gtk"));
+  assert.ok(!linux.includes("libXray"));
+  assert.ok(!linux.includes("webview2-com"));
+});
+
+test("an iOS screen leaves out what only the desktop apps carry", () => {
   const groups = groupByLicense(committed(), "ios");
   const names = groups.flatMap((g) => g.components.map((c) => c.name));
   assert.ok(names.includes("Xray-core"));
