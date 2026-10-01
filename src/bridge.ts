@@ -34,7 +34,8 @@
 //   sub_refresh    -> SubMeta
 //   pair_start     -> PairSession
 //   pair_poll{ token } -> PairStatus
-//   redeem_pair_code{ code } -> ()   pair code v1; rejects with PAIR_* codes
+//   redeem_pair_code{ code } -> ()   pair code v1.1; rejects with PAIR_* codes;
+//                                    the core adds and keeps the request id
 //   routing_get    -> RoutingState
 //   routing_set{ inRussia } -> ()
 //   traffic_split  -> TrafficSplit | null   connection counts, never addresses
@@ -324,7 +325,9 @@ export interface CoreBridge {
    * Redeem the eight-character code from the cabinet or the bot. Resolves
    * once the link is stored, exactly as a scanned QR stores it; rejects with
    * PAIR_CODE_NOT_FOUND, PAIR_CODE_MALFORMED, PAIR_RATE_LIMITED (Retry-After
-   * seconds in `detail`), SUB_UNREACHABLE or SUB_INVALID.
+   * seconds in `detail`), SUB_UNREACHABLE or SUB_INVALID. Calling it again
+   * with the same code after SUB_UNREACHABLE is safe: the core resends the
+   * same request id, and the service repeats a link it already gave.
    */
   redeemPairCode(code: string): Promise<void>;
 
@@ -680,6 +683,8 @@ class MockBridge implements CoreBridge {
   private healingSince = 0;
   private metricTimer: number | undefined;
   private pairIssuedAt = 0;
+  /** NNNN-NNNN has lost its first answer; the next press is repeated. */
+  private pairAnswerLost = false;
 
   constructor(scenario: MockScenario) {
     this.scenario = scenario;
@@ -1108,9 +1113,11 @@ class MockBridge implements CoreBridge {
   }
 
   /**
-   * Any well-formed code signs in after a pause, except two that play the
-   * refusals: ZZZZ-ZZZZ (wrong, expired or used) and RRRR-RRRR (too many
-   * attempts). `?mock=SUB_UNREACHABLE` plays every site name being down.
+   * Any well-formed code signs in after a pause, except three that play the
+   * refusals: ZZZZ-ZZZZ (wrong, expired or used), RRRR-RRRR (too many
+   * attempts) and NNNN-NNNN (the answer lost on the way: the first press
+   * hears no name, the next one gets the link the service repeats).
+   * `?mock=SUB_UNREACHABLE` plays every site name being down.
    */
   async redeemPairCode(code: string): Promise<void> {
     await this.pause(900);
@@ -1119,6 +1126,10 @@ class MockBridge implements CoreBridge {
     if (this.scenario === "SUB_UNREACHABLE") throw new CoreError({ code: "SUB_UNREACHABLE" });
     if (normal === "ZZZZZZZZ") throw new CoreError({ code: "PAIR_CODE_NOT_FOUND" });
     if (normal === "RRRRRRRR") throw new CoreError({ code: "PAIR_RATE_LIMITED", detail: "60" });
+    if (normal === "NNNNNNNN" && !this.pairAnswerLost) {
+      this.pairAnswerLost = true;
+      throw new CoreError({ code: "SUB_UNREACHABLE" });
+    }
     this.hasLink = true;
     this.lastUpdatedAt = Date.now();
   }

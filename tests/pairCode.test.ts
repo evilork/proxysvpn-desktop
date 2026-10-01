@@ -14,6 +14,7 @@ import {
   normalisePairCode,
   pairCodeProblem,
   pairCodeProblemKey,
+  pairCodeRestMs,
   pastedPairCode,
   rateLimitPauseMs,
 } from "../src/pairCode.ts";
@@ -212,4 +213,43 @@ test("the button rests for Retry-After, at most the minute the line promises", (
   assert.equal(rateLimitPauseMs({ code: "PAIR_RATE_LIMITED" }), 60_000);
   assert.equal(rateLimitPauseMs({ code: "PAIR_RATE_LIMITED", detail: "soon" }), 60_000);
   assert.equal(rateLimitPauseMs({ code: "PAIR_RATE_LIMITED", detail: "-5" }), 60_000);
+});
+
+// ── pressing again (pair-code v1.1) ────────────────────────────────────────
+
+test("no answer from any site reads as the network, never as a spent code", () => {
+  // The answer may have been lost after the service spent the code; saying
+  // "Код не подошёл" then would send the person for a new code they do not need.
+  for (const code of ["SUB_UNREACHABLE", "NETWORK_OFFLINE"] as const) {
+    assert.equal(pairCodeProblem(code), "network", code);
+    for (const appstore of [false, true]) {
+      assert.equal(pairCodeProblemKey(code, appstore), "pair.code.network", `${code} ${appstore}`);
+    }
+  }
+  const t = makeT("ru");
+  assert.equal(
+    t("pair.code.network"),
+    "Не удалось связаться с сервисом. Проверьте интернет и попробуйте ещё раз.",
+  );
+});
+
+test("after a network failure the button can be pressed again at once", () => {
+  assert.equal(pairCodeRestMs({ code: "SUB_UNREACHABLE" }), 0);
+  assert.equal(pairCodeRestMs({ code: "NETWORK_OFFLINE" }), 0);
+});
+
+test("only too many attempts rests the button", () => {
+  assert.equal(pairCodeRestMs({ code: "PAIR_RATE_LIMITED", detail: "12" }), 12_000);
+  assert.equal(pairCodeRestMs({ code: "PAIR_RATE_LIMITED" }), 60_000);
+  for (const code of [
+    "PAIR_CODE_NOT_FOUND",
+    "PAIR_CODE_MALFORMED",
+    "SUB_INVALID",
+    "SUB_MALFORMED",
+    "UNKNOWN",
+  ] as const) {
+    assert.equal(pairCodeRestMs({ code }), 0, code);
+  }
+  // A Retry-After in the detail of anything but a 429 is not a reason to wait.
+  assert.equal(pairCodeRestMs({ code: "SUB_UNREACHABLE", detail: "60" }), 0);
 });
