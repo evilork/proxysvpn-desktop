@@ -24,6 +24,12 @@
 // server the source of this person's settings, and the settings decide where
 // all of their traffic goes.
 //
+// What that check does not do: tell whose account a code is from. A code
+// someone issues on their own account and hands over brings their link, on
+// our name, and signs this device into their subscription. Only the service
+// can close that, by naming the account for the app to show before it keeps
+// the link; pair-code v1 does not.
+//
 // Never logged: the code, the link, the token in it.
 
 use url::{Host, Url};
