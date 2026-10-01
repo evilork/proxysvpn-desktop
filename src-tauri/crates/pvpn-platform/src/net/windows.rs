@@ -275,10 +275,51 @@ pub fn has_usable_link() -> bool {
     physical_default(device_index().ok()).is_ok()
 }
 
+/// Is there a /32 route to `dest` in the table, on any adapter?
+///
+/// Asked before the pre-install delete below so that the delete runs only
+/// when there is something to delete. Run blind, it failed on every connect
+/// and location change — there normally is no leftover — and each failure
+/// put a netsh command line naming the node into the log.
+fn host_route_present(dest: Ipv4Addr) -> bool {
+    let mut table: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
+    // SAFETY: `table` is an out-pointer that IP Helper allocates; it is freed
+    // with FreeMibTable below on every path that reaches it.
+    let err = unsafe { GetIpForwardTable2(AF_INET, &mut table) };
+    if err != NO_ERROR {
+        // Unknown: let the caller delete as before rather than add over a
+        // leftover and fail.
+        return true;
+    }
+    let wanted = u32::from_ne_bytes(dest.octets());
+    let mut found = false;
+    // SAFETY: the table is non-null (NO_ERROR) and NumEntries describes the
+    // length of the trailing Table array; nothing escapes the loop by pointer.
+    unsafe {
+        let entries = (*table).NumEntries as usize;
+        let rows = (*table).Table.as_ptr();
+        for i in 0..entries {
+            let row = &*rows.add(i);
+            if row.DestinationPrefix.PrefixLength == 32
+                && row.DestinationPrefix.Prefix.si_family == AF_INET
+                && row.DestinationPrefix.Prefix.Ipv4.sin_addr.S_un.S_addr == wanted
+            {
+                found = true;
+                break;
+            }
+        }
+        FreeMibTable(table as *const _);
+    }
+    found
+}
+
 pub async fn add_host_route(dest: Ipv4Addr, via: &PhysicalRoute) -> Result<()> {
     // Drop a leftover from an earlier run before installing ours, otherwise
-    // netsh refuses the duplicate prefix.
-    p::host_route_delete(dest).run_best_effort().await;
+    // netsh refuses the duplicate prefix. Only when there is one: see
+    // `host_route_present`.
+    if host_route_present(dest) {
+        p::host_route_delete(dest).run_best_effort().await;
+    }
     p::host_route_add(dest, via)?
         .run()
         .await

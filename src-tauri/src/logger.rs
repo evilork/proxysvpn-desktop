@@ -381,11 +381,30 @@ fn at_boundary(bytes: &[u8], i: usize) -> bool {
     !(p.is_ascii_alphanumeric() || p == b'.' || p == b'-' || p == b'_')
 }
 
+/// The prefix length after an IPv4 literal (`/1` in `128.0.0.0/1`), if the
+/// literal is followed by one.
+fn cidr_prefix(bytes: &[u8], end: usize) -> Option<u32> {
+    if bytes.get(end) != Some(&b'/') {
+        return None;
+    }
+    let digits = bytes[end + 1..]
+        .iter()
+        .take_while(|b| b.is_ascii_digit())
+        .count();
+    if digits == 0 || digits > 2 {
+        return None;
+    }
+    let text = std::str::from_utf8(&bytes[end + 1..end + 1 + digits]).ok()?;
+    text.parse().ok()
+}
+
 /// Replace public IPv4 literals with `<addr>`.
 ///
-/// A literal followed by `/` and a digit is a network, not a host
-/// (`128.0.0.0/1` is one half of our default route), so it is kept: node
-/// addresses never appear in CIDR form.
+/// A literal followed by a prefix shorter than /32 is a network, not a host
+/// (`128.0.0.0/1` is one half of our default route), so it is kept. A /32 is
+/// one host, and that is exactly how the Windows and Linux platform layer
+/// writes the route to the node (`prefix=<ip>/32`, `ip route … <ip>/32`), so
+/// it is masked like a bare address; the `/32` stays to show the form.
 fn mask_ipv4(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut out = String::with_capacity(input.len());
@@ -393,11 +412,8 @@ fn mask_ipv4(input: &str) -> String {
     while i < bytes.len() {
         if bytes[i].is_ascii_digit() && at_boundary(bytes, i) {
             if let Some((octets, end)) = scan_ipv4(bytes, i) {
-                let is_cidr = end < bytes.len()
-                    && bytes[end] == b'/'
-                    && end + 1 < bytes.len()
-                    && bytes[end + 1].is_ascii_digit();
-                if !is_cidr && !is_local_ipv4(octets) {
+                let is_network = matches!(cidr_prefix(bytes, end), Some(len) if len < 32);
+                if !is_network && !is_local_ipv4(octets) {
                     out.push_str(MASK_ADDR);
                     // Swallow a trailing :port so `<addr>` is not followed by
                     // a naked number that reads like part of the address.
@@ -1407,6 +1423,32 @@ mod tests {
     fn our_own_route_halves_are_not_addresses() {
         let out = redact("route -n add -net 128.0.0.0/1 -interface utun225", &[]);
         assert!(out.contains("128.0.0.0/1"), "{out}");
+    }
+
+    /// A host route is a node address written as a network: the Windows and
+    /// Linux platform layer names the node's /32 in netsh and `ip route`
+    /// command lines, and those reach this file through "ignored: …" and
+    /// failure messages.
+    #[test]
+    fn a_host_route_is_an_address_not_a_network() {
+        let netsh = redact(
+            r#"ignored: C:\Windows\System32\netsh.exe ["interface", "ipv4", "delete", "route", "prefix=203.0.113.7/32", "store=active"] failed: exit code: 1"#,
+            &[],
+        );
+        assert!(!netsh.contains("203.0.113.7"), "{netsh}");
+        assert!(netsh.contains("prefix=<addr>/32"), "{netsh}");
+
+        let ip = redact(
+            r#"tunnel did not come up: ip ["-4", "route", "replace", "203.0.113.7/32", "via", "192.168.1.1"] failed"#,
+            &[],
+        );
+        assert!(!ip.contains("203.0.113.7"), "{ip}");
+        assert!(ip.contains("192.168.1.1"), "the gateway is local and stays: {ip}");
+
+        // A real network keeps its form, a /32 of a local address too.
+        let nets = redact("route 203.0.113.0/24 and 10.0.0.1/32", &[]);
+        assert!(nets.contains("203.0.113.0/24"), "{nets}");
+        assert!(nets.contains("10.0.0.1/32"), "{nets}");
     }
 
     #[test]

@@ -123,8 +123,17 @@ pub async fn physical_default() -> Result<PhysicalRoute, AppError> {
 ///
 /// IPv4 only: the tunnel installs IPv4 half-defaults, so an IPv6 node address
 /// would be routed outside it. The name is NOT logged: it is a node address,
-/// and the log is a file support asks people to paste into a chat.
+/// and the log is a file support asks people to paste into a chat. The
+/// address it resolves to is taught to the log's redactor before anything
+/// can write it: the platform layer names it in route commands and their
+/// failures, in forms the structural rules may not recognise.
 async fn resolve_host(host: &str) -> Result<Ipv4Addr, AppError> {
+    let ip = resolve_v4(host).await?;
+    crate::logger::remember_node_host(&ip.to_string());
+    Ok(ip)
+}
+
+async fn resolve_v4(host: &str) -> Result<Ipv4Addr, AppError> {
     let lookup = format!("{host}:443");
     let resolved = tokio::task::spawn_blocking(move || {
         use std::net::ToSocketAddrs;
