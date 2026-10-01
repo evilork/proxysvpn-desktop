@@ -28,6 +28,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { bridge, type LocationEntry, type LocationQuality } from "../bridge";
 import { flagFor } from "../flags";
+import { displayLocation } from "../locationName";
 import { formatTime, type MsgKey } from "../i18n";
 import { Screen, Spinner, useLatest, useUi } from "./ui";
 
@@ -134,7 +135,7 @@ export default function LocationsScreen({
 
   /** The name exactly as the service wrote it: «Британия · XHTTP». */
   const titleOf = (entry: LocationEntry, index: number) => {
-    const base = entry.label || t("loc.unnamed", { n: index + 1 });
+    const base = entry.label ? displayLocation(entry.label, lang) : t("loc.unnamed", { n: index + 1 });
     return entry.note ? `${base} · ${entry.note}` : base;
   };
 
@@ -200,7 +201,7 @@ export default function LocationsScreen({
                 <span className="row-title">{t("loc.auto")}</span>
                 <span className="row-sub">
                   {t("loc.autoHint")}
-                  {currentLabel ? ` · ${t("loc.current", { location: currentLabel })}` : ""}
+                  {currentLabel ? ` · ${t("loc.current", { location: displayLocation(currentLabel, lang) })}` : ""}
                 </span>
               </span>
             </button>
