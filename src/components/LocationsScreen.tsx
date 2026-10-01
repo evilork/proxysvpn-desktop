@@ -15,6 +15,12 @@
 // числа НЕТ, и на их месте по-прежнему слово. Ноль, прочерк и «ошибка» там
 // недопустимы - именно так когда-то и родился вечный спиннер.
 //
+// С включённым VPN список показывал 1-5 мс у всех стран (02.10.2026): обычное
+// рукопожатие уходило в наш же туннель, и отвечал на него tun2socks. Теперь
+// ядро меряет мимо туннеля, через физический интерфейс, а где не может - не
+// меряет вовсе и оставляет прежнее число, снятое мимо туннеля. Такое число
+// показывается с возрастом («234 мс · замер 12 минут назад», src/latency.ts).
+//
 // Nothing here carries an address or a port — not in the row, not in
 // `aria-label`, not in a tooltip. An unnamed entry becomes "Сервер №3", never
 // its host name.
@@ -29,7 +35,8 @@ import { useCallback, useEffect, useState } from "react";
 import { bridge, type LocationEntry, type LocationQuality } from "../bridge";
 import { flagFor, rendersFlagEmoji } from "../flags";
 import { displayLocation } from "../locationName";
-import { formatTime, type MsgKey } from "../i18n";
+import { formatAge, formatTime, type MsgKey } from "../i18n";
+import { rttMeasuredAtToShow } from "../latency";
 import { Screen, Spinner, useLatest, useUi } from "./ui";
 
 const QUALITY_KEY: Record<LocationQuality, MsgKey> = {
@@ -145,6 +152,20 @@ export default function LocationsScreen({
     return entry.note ? `${base} · ${displayLocation(entry.note, lang)}` : base;
   };
 
+  /**
+   * The number, or the word when there is none. A number the core kept from
+   * an earlier round (it could not measure around the tunnel this time)
+   * carries its age.
+   */
+  const rttText = (entry: LocationEntry) => {
+    if (entry.rttMs === undefined) return t(QUALITY_KEY[entry.quality]);
+    const now = Date.now();
+    const at = rttMeasuredAtToShow(entry, now);
+    return at === null
+      ? t("loc.ms", { ms: entry.rttMs })
+      : t("loc.msAged", { ms: entry.rttMs, ago: formatAge(t, at, now) });
+  };
+
   const renderRow = (entry: LocationEntry, index: number) => (
     <button
       key={entry.id}
@@ -163,9 +184,7 @@ export default function LocationsScreen({
       <span className="row-main">
         <span className="row-title">{titleOf(entry, index)}</span>
         <span className="row-sub">
-          {entry.rttMs !== undefined
-            ? t("loc.ms", { ms: entry.rttMs })
-            : t(QUALITY_KEY[entry.quality])}
+          {rttText(entry)}
           {entry.protocol ? ` · ${entry.protocol}` : ""}
         </span>
       </span>

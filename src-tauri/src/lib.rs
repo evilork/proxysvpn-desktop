@@ -290,6 +290,11 @@ struct LocationEntry {
     /// его не бывает (порт UDP), либо узел не ответил, либо ещё не мерили.
     #[serde(skip_serializing_if = "Option::is_none")]
     rtt_ms: Option<u32>,
+    /// When `rtt_ms` was measured, Unix ms. Older than the round that just
+    /// ran when that round could not measure around the tunnel; the window
+    /// then shows the number's age next to it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rtt_at_ms: Option<u64>,
     /// A badge the SERVER wrote ("12,4 из 50 ГБ"), never assembled here.
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<String>,
@@ -507,8 +512,9 @@ struct Session {
     recents: VecDeque<String>,
     demoted: HashMap<String, Instant>,
     quality: HashMap<String, LocationQuality>,
-    /// Замеренные рукопожатия по локациям, для списка стран.
-    rtt: HashMap<String, u32>,
+    /// Замеренные рукопожатия по локациям, для списка стран, и когда каждое
+    /// снято. Только замеры МИМО туннеля (ping.rs, «The Countries list»).
+    rtt: HashMap<String, ping::RttSample>,
     /// Узел, который ПОСЛЕДНИМ действительно подтвердился пробой.
     ///
     /// Не то же самое, что «недавний»: в недавние узел попадает в момент
@@ -1151,10 +1157,12 @@ impl Session {
                     .unwrap_or(LocationQuality::Unknown)
             };
 
+            let rtt = self.rtt.get(&id).copied();
             out.push(LocationEntry {
                 recent: self.recents.contains(&id),
                 selected: self.pinned.as_ref().is_some_and(|p| p.id == id),
-                rtt_ms: self.rtt.get(&id).copied(),
+                rtt_ms: rtt.map(|sample| sample.ms),
+                rtt_at_ms: rtt.map(|sample| sample.at_ms),
                 id,
                 label,
                 flag,
@@ -1273,7 +1281,7 @@ impl Session {
             .filter(|index| healthy(*index) && wants(*index))
             .filter_map(|index| {
                 let id = self.id_of(index)?;
-                let ms = self.rtt.get(&id).copied()?;
+                let ms = self.rtt.get(&id)?.ms;
                 Some((ms, index))
             })
             .min();
@@ -1389,7 +1397,7 @@ impl Session {
                 let place = split_label(self.servers[i].remark()).1.to_lowercase();
                 let rtt = self
                     .id_of(i)
-                    .and_then(|id| self.rtt.get(&id).copied())
+                    .and_then(|id| self.rtt.get(&id).map(|sample| sample.ms))
                     .unwrap_or(u32::MAX);
                 (place != a_place, rtt, i)
             })
@@ -2319,11 +2327,18 @@ impl Core {
     /// Ни одного запроса к нашим сайтам и ни одного байта в туннель: только
     /// рукопожатие до узла и сразу разрыв. Поэтому это можно делать и в фоне,
     /// не боясь ни нагрузки на витрину, ни узнаваемого ритма в сети.
+    ///
+    /// При поднятом туннеле - только мимо него, сокетом, привязанным к
+    /// физическому интерфейсу: обычный сокет уходил в наш же туннель, и
+    /// tun2socks отвечал на рукопожатие сам, за 1-5 мс (ping.rs, «The
+    /// Countries list»). Где мимо туннеля не измерить, не меряем вовсе и
+    /// оставляем прежние числа с их возрастом.
     async fn measure_all_rtt(&self) {
         // Снимок того, что меряем: держать замок сессии через сеть нельзя.
-        let targets: Vec<(String, String, u16, String)> = {
+        let (targets, tunnel_may_be_up, generation) = {
             let s = self.session.lock().await;
-            s.locations()
+            let targets: Vec<(String, String, u16, String)> = s
+                .locations()
                 .into_iter()
                 .zip(s.servers.iter())
                 .map(|(entry, server)| {
@@ -2334,27 +2349,73 @@ impl Core {
                         server.proto().to_string(),
                     )
                 })
-                .collect()
+                .collect();
+            (targets, s.phase != VpnPhase::Off, s.generation)
         };
         if targets.is_empty() {
             return;
         }
 
+        let egress = if tunnel_may_be_up { self.rtt_egress().await } else { None };
+        let path = ping::rtt_path(tunnel_may_be_up, egress);
+        let ids: Vec<String> = targets.iter().map(|(id, ..)| id.clone()).collect();
+
         let mut jobs = tokio::task::JoinSet::new();
         for (id, host, port, proto) in targets {
+            let path = path.clone();
             // Рукопожатие блокирующее, поэтому уходит в отдельный поток.
-            jobs.spawn_blocking(move || (id, ping::rtt_of(&host, port, &proto)));
+            jobs.spawn_blocking(move || (id, ping::rtt_of(&host, port, &proto, &path)));
         }
-        let mut measured: HashMap<String, u32> = HashMap::new();
+        let mut fresh: HashMap<String, ping::RowRtt> = HashMap::new();
         while let Some(done) = jobs.join_next().await {
-            if let Ok((id, Some(ms))) = done {
-                measured.insert(id, ms);
+            if let Ok((id, row)) = done {
+                fresh.insert(id, row);
             }
         }
 
-        // Заменяем целиком: узел, переставший отвечать, обязан ПОТЕРЯТЬ прежнее
-        // число, а не показывать вчерашнее как сегодняшнее.
-        self.session.lock().await.rtt = measured;
+        let mut s = self.session.lock().await;
+        if !ping::round_counts(&path, s.generation == generation, s.phase == VpnPhase::Off) {
+            // Подключение началось, пока мерили: часть рукопожатий могла
+            // уйти уже в туннель. Ни одному числу этого захода не верим.
+            for row in fresh.values_mut() {
+                *row = ping::RowRtt::NotTaken;
+            }
+        }
+        let not_taken = fresh.values().filter(|row| **row == ping::RowRtt::NotTaken).count();
+        if not_taken > 0 && path != ping::RttPath::Direct {
+            logger::log(
+                "warn",
+                "rtt",
+                &format!(
+                    "задержки до узлов: {not_taken} из {} не измерить мимо туннеля ({}), числа прежние",
+                    ids.len(),
+                    match &path {
+                        ping::RttPath::Hold => "нет физического интерфейса",
+                        _ => "интерфейс не привязать",
+                    }
+                ),
+            );
+        }
+        // Узел, переставший отвечать, обязан ПОТЕРЯТЬ прежнее число, а не
+        // показывать вчерашнее как сегодняшнее; несостоявшийся замер его
+        // сохраняет вместе с возрастом.
+        s.rtt = ping::merge_rtt(&s.rtt, &ids, &fresh, now_ms());
+    }
+
+    /// How the machine leaves outside the tunnel, for `measure_all_rtt`: the
+    /// interface the engines bind their own sockets to.
+    #[cfg(desktop)]
+    async fn rtt_egress(&self) -> Option<ping::Egress> {
+        tun::physical_default()
+            .await
+            .ok()
+            .map(|route| ping::Egress { if_name: route.interface })
+    }
+
+    /// iOS: the Network Extension owns the tunnel and the way around it.
+    #[cfg(target_os = "ios")]
+    async fn rtt_egress(&self) -> Option<ping::Egress> {
+        None
     }
 
     /// Platform correction for a verdict built from interface counters.
@@ -5191,6 +5252,11 @@ mod tests {
     use super::*;
     use subscription::{Hy2Config, VlessConfig};
 
+    /// A list latency as `measure_all_rtt` stores it; when does not matter here.
+    fn sample(ms: u32) -> ping::RttSample {
+        ping::RttSample { ms, at_ms: 0 }
+    }
+
     fn vless(remark: &str) -> ServerConfig {
         ServerConfig::Vless(VlessConfig {
             uuid: "u".into(),
@@ -5374,9 +5440,9 @@ mod tests {
 
         // С замерами - самый быстрый, где бы он ни стоял.
         let ids: Vec<String> = (0..3).map(|i| s.id_of(i).expect("идентификатор есть")).collect();
-        s.rtt.insert(ids[0].clone(), 180);
-        s.rtt.insert(ids[1].clone(), 42);
-        s.rtt.insert(ids[2].clone(), 95);
+        s.rtt.insert(ids[0].clone(), sample(180));
+        s.rtt.insert(ids[1].clone(), sample(42));
+        s.rtt.insert(ids[2].clone(), sample(95));
         assert_eq!(s.choose_server(TransportPref::Auto), Some(1), "42 мс обязаны победить 180");
 
         // Использование САМО ПО СЕБЕ ничего не значит: мы весь вечер бились
@@ -5409,7 +5475,7 @@ mod tests {
         s.servers = vec![vless("🇩🇪 Германия"), vless("🇳🇱 Амстердам")];
         let ids: Vec<String> = (0..2).map(|i| s.id_of(i).expect("идентификатор есть")).collect();
         // Германию не мерили (или это Hysteria2, где рукопожатия TCP не бывает).
-        s.rtt.insert(ids[1].clone(), 60);
+        s.rtt.insert(ids[1].clone(), sample(60));
         assert_eq!(
             s.choose_server(TransportPref::Auto),
             Some(1),
