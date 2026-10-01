@@ -14,10 +14,12 @@
 //
 // ── What goes in ─────────────────────────────────────────────────────────────
 //   • Rust crates the app links, from `cargo metadata --filter-platform` for
-//     aarch64-apple-ios, aarch64-apple-darwin, x86_64-pc-windows-msvc and
-//     x86_64-unknown-linux-gnu, walking NORMAL dependencies from the app crate
-//     only: build scripts and dev-dependencies do not end up in the binary.
-//     Each crate records which of the builds has it.
+//     aarch64-apple-ios, aarch64-apple-darwin, x86_64-pc-windows-msvc,
+//     aarch64-pc-windows-msvc and x86_64-unknown-linux-gnu, walking NORMAL
+//     dependencies from the app crate only: build scripts and dev-dependencies
+//     do not end up in the binary. Each crate records which of the builds has
+//     it; both Windows builds count as "windows", the one licences screen they
+//     share.
 //   • npm packages of the window, from `npm ls --omit=dev --all`, with the
 //     licence from each package's own package.json.
 //   • What neither tool sees: the tunnel engines (Xray-core and libXray in the
@@ -72,11 +74,17 @@ const ENGINE_MODULES = new Map([
   ["github.com/xtls/libxray", "libXray"],
 ]);
 
-/** Build targets the notices cover, and the name the window uses for each. */
+/**
+ * Build targets the notices cover, and the name the window uses for each. The
+ * arm64 Windows installer (02.10.2026) links the windows-targets import
+ * libraries for its own CPU (windows_aarch64_msvc, not windows_x86_64_msvc),
+ * so its screen would otherwise miss crates it ships.
+ */
 const CARGO_TARGETS = [
   ["ios", "aarch64-apple-ios"],
   ["macos", "aarch64-apple-darwin"],
   ["windows", "x86_64-pc-windows-msvc"],
+  ["windows", "aarch64-pc-windows-msvc"],
   ["linux", "x86_64-unknown-linux-gnu"],
 ];
 const ALL_PLATFORMS = ["ios", "macos", "windows", "linux"];

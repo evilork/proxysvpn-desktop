@@ -7578,6 +7578,37 @@
     },
     {
       "kind": "cargo",
+      "name": "windows_aarch64_msvc",
+      "version": "0.52.6",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/microsoft/windows-rs",
+      "platforms": [
+        "windows"
+      ],
+      "authors": [
+        "Microsoft"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "windows_aarch64_msvc",
+      "version": "0.53.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/microsoft/windows-rs",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "kind": "cargo",
       "name": "windows_x86_64_msvc",
       "version": "0.53.1",
       "license": "Apache-2.0 OR MIT",
@@ -7829,6 +7860,23 @@
     {
       "kind": "cargo",
       "name": "windows-sys",
+      "version": "0.52.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/microsoft/windows-rs",
+      "platforms": [
+        "windows"
+      ],
+      "authors": [
+        "Microsoft"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "windows-sys",
       "version": "0.60.2",
       "license": "Apache-2.0 OR MIT",
       "licenseIds": [
@@ -7855,6 +7903,23 @@
       "source": "https://github.com/microsoft/windows-rs",
       "platforms": [
         "windows"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "windows-targets",
+      "version": "0.52.6",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/microsoft/windows-rs",
+      "platforms": [
+        "windows"
+      ],
+      "authors": [
+        "Microsoft"
       ]
     },
     {
