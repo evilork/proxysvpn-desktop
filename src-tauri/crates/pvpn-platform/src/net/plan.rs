@@ -194,6 +194,9 @@ pub mod windows {
     /// that is gone. Windows keeps such interfaces, alias included.
     pub const OPER_NOT_PRESENT: i32 = 6;
 
+    /// `IF_OPER_STATUS::IfOperStatusUp`.
+    pub const OPER_UP: i32 = 1;
+
     /// One row of the interface table: as much as choosing our adapter needs.
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct AdapterRow {
@@ -222,56 +225,17 @@ pub mod windows {
     /// The adapter to address: one that is present and ours by name, the
     /// exact name first, else the newest numbered one.
     ///
-    /// Present matters. tun2socks asks Wintun for a new adapter with a random
-    /// GUID on every start, and Windows keeps the interface of a removed one,
-    /// name and all. On a Windows VM (02.10.2026) such a leftover held
-    /// "ProxysVPN": the alias lookup found it, netsh answered «Элемент не
-    /// найден» and every connect failed.
+    /// Present matters: the alias resolves while the interface is still
+    /// arriving (or after its device is gone), and netsh cannot address an
+    /// interface that is not present — «Элемент не найден» on a Windows VM,
+    /// 02.10.2026. Numbered aliases cover Windows renaming a second adapter
+    /// while an old interface still holds the name.
     pub fn pick_device(rows: &[AdapterRow]) -> Option<u32> {
         let ours = || rows.iter().filter(|r| r.oper != OPER_NOT_PRESENT && is_our_alias(&r.alias));
         ours()
             .find(|r| r.alias == DEVICE)
             .or_else(|| ours().max_by_key(|r| r.index))
             .map(|r| r.index)
-    }
-
-    /// Interfaces under our name whose device is gone.
-    pub fn stale_devices(rows: &[AdapterRow]) -> Vec<&AdapterRow> {
-        rows.iter()
-            .filter(|r| r.oper == OPER_NOT_PRESENT && is_our_alias(&r.alias))
-            .collect()
-    }
-
-    /// `{` + 8-4-4-4-12 hex digits + `}`, and nothing else: the only shape
-    /// `remove_stale_device` puts into a device path.
-    pub fn is_registry_guid(text: &str) -> bool {
-        let Some(inner) = text.strip_prefix('{').and_then(|t| t.strip_suffix('}')) else {
-            return false;
-        };
-        let groups: Vec<&str> = inner.split('-').collect();
-        groups.len() == 5
-            && groups.iter().zip([8, 4, 4, 4, 12]).all(|(g, len)| {
-                g.len() == len && g.bytes().all(|b| b.is_ascii_hexdigit())
-            })
-    }
-
-    /// pnputil removing the Wintun device behind interface `guid`. Wintun
-    /// creates its adapters as software devices `SWD\WINTUN\{guid}` with the
-    /// interface GUID as instance id, so the path is known without asking
-    /// PnP. `None` for anything that is not a GUID.
-    ///
-    /// Not PowerShell + Get-PnpDevice, which this replaced: on the Windows 11
-    /// VM (02.10.2026) that pipeline never returned and the connect hung on
-    /// «Настраиваю сеть», Cancel included. pnputil answers at once, and a
-    /// device that is running is refused by it.
-    pub fn remove_stale_device(guid: &str) -> Option<Argv> {
-        if !is_registry_guid(guid) {
-            return None;
-        }
-        Some(Argv::new(
-            system32("pnputil.exe"),
-            ["/remove-device".to_string(), format!(r"SWD\WINTUN\{guid}")],
-        ))
     }
 
     /// Absolute path of a System32 tool.
@@ -985,7 +949,7 @@ mod tests {
 
     #[test]
     fn windows_picks_the_present_adapter_not_the_leftover_holding_the_name() {
-        const UP: i32 = 1;
+        const UP: i32 = windows::OPER_UP;
         let gone = windows::OPER_NOT_PRESENT;
         // The VM of 02.10.2026: only a leftover holds the name.
         assert_eq!(windows::pick_device(&[adapter("ProxysVPN", 15, gone)]), None);
@@ -1001,27 +965,8 @@ mod tests {
         // Names that only start like ours are someone else's.
         let rows = [adapter("ProxysVPN-old", 9, UP), adapter("ProxysVPN 2x", 10, UP), adapter("proxysvpn", 11, UP)];
         assert_eq!(windows::pick_device(&rows), None);
-        let rows = [adapter("ProxysVPN", 15, gone), adapter("ProxysVPN 2", 21, UP)];
-        let stale = windows::stale_devices(&rows);
-        assert_eq!(stale.len(), 1);
-        assert_eq!(stale[0].index, 15);
     }
 
-    #[test]
-    fn windows_removes_a_stale_device_only_by_a_well_formed_guid() {
-        let argv = windows::remove_stale_device("{6B29FC40-CA47-1067-B31D-00DD010662DA}").expect("a GUID");
-        assert!(argv.program.to_ascii_lowercase().ends_with(r"\system32\pnputil.exe"));
-        assert_eq!(argv.args, vec!["/remove-device", r"SWD\WINTUN\{6B29FC40-CA47-1067-B31D-00DD010662DA}"]);
-        for bad in [
-            "",
-            "6B29FC40-CA47-1067-B31D-00DD010662DA",
-            "{6B29FC40-CA47-1067-B31D-00DD010662D}",
-            "{6B29FC40-CA47-1067-B31D-00DD010662DA} /force",
-            "{*}",
-        ] {
-            assert!(windows::remove_stale_device(bad).is_none(), "{bad:?} must not reach pnputil");
-        }
-    }
 
     /// An elevated process must not let `CreateProcess` find these tools by
     /// searching, because the search starts in the directory of our own
