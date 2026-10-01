@@ -44,9 +44,8 @@ fn get_state() -> &'static Mutex<LoggerState> {
 }
 
 fn compute_log_path() -> Option<PathBuf> {
-    // ~/Library/Logs/ProxysVPN/app.log on macOS
-    let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join("Library/Logs/ProxysVPN/app.log"))
+    // Per-platform; see crate::paths.
+    crate::paths::log_file()
 }
 
 fn now_ms() -> u128 {

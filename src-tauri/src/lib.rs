@@ -1,11 +1,14 @@
 // src-tauri/src/lib.rs
+mod paths;
 mod ping;
+mod privilege;
 mod subscription;
 mod tun;
 mod xray_manager;
 mod hysteria_manager;
 
 mod logger;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use subscription::{build_xray_config, ServerInfo};
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
@@ -30,41 +33,17 @@ struct ConnectResult {
     port: u16,
 }
 
-const PID_FILE: &str = "/tmp/proxysvpn-desktop.pid";
+/// Set once the tray icon exists. Without a tray there is nowhere to restore
+/// the window from, so closing it must then really quit (matters on Linux
+/// desktops without an AppIndicator host).
+static TRAY_READY: AtomicBool = AtomicBool::new(false);
 
+/// Crash recovery: leftover engines from a previous run keep the SOCKS ports
+/// busy, and leftover routes break the network until they are removed. Runs at
+/// startup, on signals and on exit, so it must be synchronous.
 fn sync_cleanup() {
-    use std::process::Command;
-
-    let _ = Command::new("/usr/bin/pkill").args(["-9", "-x", "tun2socks"]).status();
-    let _ = Command::new("/usr/bin/pkill").args(["-9", "-x", "xray"]).status();
-    let _ = Command::new("/sbin/route")
-        .args(["-n", "delete", "-net", "0.0.0.0/1"])
-        .status();
-    let _ = Command::new("/sbin/route")
-        .args(["-n", "delete", "-net", "128.0.0.0/1"])
-        .status();
-    let _ = Command::new("/sbin/ifconfig").args([tun::TUN_NAME, "down"]).status();
-
-    if let Ok(contents) = std::fs::read_to_string(PID_FILE) {
-        for line in contents.lines() {
-            if let Some(ip) = line.strip_prefix("server_ip=") {
-                let _ = Command::new("/sbin/route")
-                    .args(["-n", "delete", "-host", ip])
-                    .status();
-            }
-        }
-        let _ = std::fs::remove_file(PID_FILE);
-    }
-}
-
-fn write_pid_file(server_ip: &str) {
-    let my_pid = std::process::id();
-    let contents = format!("pid={}\nserver_ip={}\n", my_pid, server_ip);
-    let _ = std::fs::write(PID_FILE, contents);
-}
-
-fn remove_pid_file() {
-    let _ = std::fs::remove_file(PID_FILE);
+    privilege::kill_leftover_engines();
+    tun::purge_stale();
 }
 
 #[tauri::command]
@@ -114,10 +93,6 @@ async fn vpn_connect(
         return Err(format!("tun start: {}", e));
     }
 
-    if let Some(ip) = tun::get_server_ip(&state.tun).await {
-        write_pid_file(&ip);
-    }
-
     ping::set_target(host.clone(), port);
 
     Ok(ConnectResult {
@@ -152,7 +127,6 @@ async fn vpn_disconnect(state: tauri::State<'_, Arc<VpnState>>) -> Result<(), St
     let _ = tun::stop(&state.tun).await;
     let _ = xray_manager::stop(&state.xray).await;
     let _ = hysteria_manager::stop(&state.hysteria).await;
-    remove_pid_file();
     Ok(())
 }
 
@@ -168,6 +142,7 @@ async fn vpn_ping() -> Result<u32, String> {
     ping::tcp_ping_async().await.map_err(|e| e.to_string())
 }
 
+#[cfg(unix)]
 fn install_signal_handlers() {
     tauri::async_runtime::spawn(async {
         use tokio::signal::unix::{signal, SignalKind};
@@ -191,6 +166,9 @@ fn install_signal_handlers() {
     });
 }
 
+/// The application menu is a macOS convention; on Linux it would render as an
+/// in-window menu bar, which this 480x720 window does not want.
+#[cfg(target_os = "macos")]
 fn build_menu(handle: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let app_submenu = Submenu::with_items(
         handle, "ProxysVPN", true,
@@ -229,8 +207,12 @@ fn build_menu(handle: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     Menu::with_items(handle, &[&app_submenu, &edit_submenu, &window_submenu])
 }
 
-/// Tray icon in the macOS menu bar with Show/Disconnect/Quit actions.
+/// Tray icon (macOS menu bar, Linux AppIndicator) with Show/Disconnect/Quit.
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let icon = app
+        .default_window_icon()
+        .ok_or_else(|| tauri::Error::Anyhow(anyhow::anyhow!("no default window icon")))?
+        .clone();
     let show_item = MenuItem::with_id(app, "show", "Показать окно", true, None::<&str>)?;
     let disconnect_item = MenuItem::with_id(app, "disconnect", "Отключить VPN", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
@@ -242,9 +224,9 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         &quit_item,
     ])?;
 
-    let _tray = TrayIconBuilder::with_id("main-tray")
+    let tray = TrayIconBuilder::with_id("main-tray")
         .tooltip("ProxysVPN")
-        .icon(app.default_window_icon().unwrap().clone())
+        .icon(icon)
         .menu(&tray_menu)
         .menu_on_left_click(false)
         .on_menu_event(|app, event: MenuEvent| match event.id.as_ref() {
@@ -261,7 +243,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                         ping::clear_target();
                         let _ = tun::stop(&state.tun).await;
                         let _ = xray_manager::stop(&state.xray).await;
-                        remove_pid_file();
+                        let _ = hysteria_manager::stop(&state.hysteria).await;
                     });
                 }
             }
@@ -286,6 +268,8 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         })
         .build(app)?;
 
+    let _tray = tray;
+    TRAY_READY.store(true, Ordering::Relaxed);
     Ok(())
 }
 
@@ -306,18 +290,28 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
-            let menu = build_menu(app.handle())?;
-            app.set_menu(menu)?;
-            build_tray(app.handle())?;
+            #[cfg(target_os = "macos")]
+            {
+                let menu = build_menu(app.handle())?;
+                app.set_menu(menu)?;
+            }
+            if let Err(e) = build_tray(app.handle()) {
+                logger::log("warn", "app", &format!("tray unavailable: {}", e));
+            }
+            #[cfg(unix)]
             install_signal_handlers();
             Ok(())
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 // Red-X / Cmd+W — hide to tray, VPN keeps running.
-                // Use tray → Quit or Cmd+Q to fully exit.
-                api.prevent_close();
-                let _ = window.hide();
+                // Use tray → Quit or Cmd+Q to fully exit. Without a tray the
+                // window would be unreachable, so then let the close through.
+                let recoverable = cfg!(target_os = "macos") || TRAY_READY.load(Ordering::Relaxed);
+                if recoverable {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![

@@ -6,7 +6,6 @@ use anyhow::{anyhow, Context, Result};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -27,42 +26,8 @@ pub fn new_state() -> SharedHysteriaState {
     Arc::new(Mutex::new(HysteriaState::default()))
 }
 
-fn current_target_triple() -> &'static str {
-    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        "aarch64-apple-darwin"
-    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-        "x86_64-apple-darwin"
-    } else {
-        "unknown"
-    }
-}
-
 pub fn hysteria_path(app: &tauri::AppHandle) -> Result<PathBuf> {
-    let triple = current_target_triple();
-    let mut candidates: Vec<PathBuf> = Vec::new();
-
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("hysteria"));
-            candidates.push(dir.join(format!("hysteria-{}", triple)));
-        }
-    }
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(resource_dir.join("hysteria"));
-        candidates.push(resource_dir.join(format!("hysteria-{}", triple)));
-        candidates.push(resource_dir.join("binaries").join("hysteria"));
-        candidates.push(resource_dir.join("binaries").join(format!("hysteria-{}", triple)));
-    }
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        let base = PathBuf::from(manifest_dir);
-        candidates.push(base.join("binaries").join(format!("hysteria-{}", triple)));
-    }
-
-    candidates
-        .iter()
-        .find(|p| p.exists())
-        .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
-        .ok_or_else(|| anyhow!("hysteria binary not found; tried: {:?}", candidates))
+    crate::paths::sidecar_path(app, "hysteria")
 }
 
 /// Build the hysteria client YAML config.
@@ -97,16 +62,29 @@ pub async fn start(
     let bin = hysteria_path(app)?;
     let yaml = build_config(cfg);
 
-    // Фиксированный путь (под sudo TMPDIR может отличаться).
-    let cfg_path = std::path::PathBuf::from("/tmp/proxysvpn-hy2.yaml");
+    // Fixed path per platform (под sudo TMPDIR может отличаться).
+    let cfg_path = crate::paths::hysteria_config();
+    if let Some(dir) = cfg_path.parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("create {}", dir.display()))?;
+    }
     std::fs::write(&cfg_path, &yaml).context("write hysteria config")?;
+    // The file holds the node password, so it must not be world readable.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cfg_path, std::fs::Permissions::from_mode(0o600))
+            .context("restrict hysteria config permissions")?;
+    }
 
     crate::logger::log("info", "hysteria", &format!("config written: {}", cfg_path.display()));
     crate::logger::log("info", "hysteria", &format!("server {}:{}", cfg.host, cfg.port));
     crate::logger::log("info", "hysteria", &format!("binary: {}", bin.display()));
 
     let mut cmd = Command::new(&bin);
-    cmd.args(["client", "-c", cfg_path.to_str().unwrap()])
+    cmd.arg("client")
+        .arg("-c")
+        .arg(&cfg_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -143,10 +121,18 @@ pub async fn stop(state: &SharedHysteriaState) -> Result<()> {
         let _ = child.kill().await;
         let _ = child.wait().await;
     }
-    let _ = Command::new("/usr/bin/pkill")
-        .args(["-x", "hysteria"])
-        .status()
-        .await;
+    // A leftover hysteria keeps the SOCKS port busy and the next connect fails.
+    #[cfg(target_os = "macos")]
+    let _ = Command::new("/usr/bin/pkill").args(["-x", "hysteria"]).status().await;
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: getuid() takes no arguments and cannot fail.
+        let uid = unsafe { libc::getuid() }.to_string();
+        let _ = Command::new("pkill")
+            .args(["-u", &uid, "-x", "hysteria"])
+            .status()
+            .await;
+    }
     Ok(())
 }
 

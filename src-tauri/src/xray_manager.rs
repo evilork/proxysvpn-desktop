@@ -21,72 +21,42 @@ pub fn new_state() -> SharedXrayState {
 }
 
 pub fn xray_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf)> {
-    let triple = current_target_triple();
-    let mut bin_candidates: Vec<PathBuf> = Vec::new();
-    let mut asset_dirs: Vec<PathBuf> = Vec::new();
+    let bin = crate::paths::sidecar_path(app, "xray")?;
 
-    // 1. Directory of the current executable (in .app: Contents/MacOS/)
+    // geoip.dat/geosite.dat ship as Tauri resources. Their directory differs per
+    // platform: Contents/Resources inside a .app, /usr/lib/<product> in a .deb,
+    // the squashfs root in an AppImage, src-tauri/binaries in dev.
+    let mut asset_dirs: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            bin_candidates.push(dir.join("xray"));
-            bin_candidates.push(dir.join(format!("xray-{}", triple)));
             asset_dirs.push(dir.to_path_buf());
-            // And sibling Resources/ — Tauri puts geoip.dat/geosite.dat there
             if let Some(contents) = dir.parent() {
                 asset_dirs.push(contents.join("Resources"));
                 asset_dirs.push(contents.join("Resources").join("_up_").join("binaries"));
             }
         }
     }
-
-    // 2. Tauri-provided resource_dir (Resources folder)
     if let Ok(resource_dir) = app.path().resource_dir() {
-        bin_candidates.push(resource_dir.join("xray"));
-        bin_candidates.push(resource_dir.join(format!("xray-{}", triple)));
-        bin_candidates.push(resource_dir.join("binaries").join("xray"));
-        bin_candidates.push(resource_dir.join("binaries").join(format!("xray-{}", triple)));
+        // Same order as before the platform split, so macOS keeps resolving to
+        // the directory it resolved to before.
         asset_dirs.push(resource_dir.clone());
         asset_dirs.push(resource_dir.join("binaries"));
-        // Tauri resource paths with _up_ prefix
         asset_dirs.push(resource_dir.join("_up_").join("binaries"));
     }
-
-    // 3. Dev mode — look relative to Cargo manifest
     if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        let base = PathBuf::from(manifest_dir);
-        bin_candidates.push(base.join("binaries").join(format!("xray-{}", triple)));
-        asset_dirs.push(base.join("binaries"));
+        asset_dirs.push(PathBuf::from(manifest_dir).join("binaries"));
     }
-
-    let bin = bin_candidates
-        .iter()
-        .find(|p| p.exists())
-        .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
-        .ok_or_else(|| anyhow!("xray binary not found; tried: {:?}", bin_candidates))?;
 
     let assets = asset_dirs
         .iter()
         .find(|p| p.join("geoip.dat").exists())
         .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
-        .unwrap_or_else(|| bin.parent().unwrap().to_path_buf());
+        .or_else(|| bin.parent().map(Path::to_path_buf))
+        .ok_or_else(|| anyhow!("could not locate the xray geo assets"))?;
 
-    println!("[xray] binary: {}", bin.display());
-    println!("[xray] assets: {}", assets.display());
+    crate::logger::log("info", "xray", &format!("binary: {}", bin.display()));
+    crate::logger::log("info", "xray", &format!("assets: {}", assets.display()));
     Ok((bin, assets))
-}
-
-fn current_target_triple() -> &'static str {
-    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        "aarch64-apple-darwin"
-    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-        "x86_64-apple-darwin"
-    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
-        "x86_64-pc-windows-msvc.exe"
-    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        "x86_64-unknown-linux-gnu"
-    } else {
-        "unknown"
-    }
 }
 
 pub async fn start(
