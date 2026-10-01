@@ -483,7 +483,14 @@ fn ladder_hosts(primary_host: &str, extra: &[String]) -> Vec<String> {
 /// of a server-side setting we do not control.
 ///
 /// `routing=inline` — see `parse_routing_line`.
-fn candidate_urls(sub_url: &str) -> Result<Vec<String>, AppError> {
+///
+/// `lang=en` — added only when the window is English and the link carries no
+/// `lang` of its own. The service writes its refusals ("link taken by another
+/// device", "no funds", the reserve notice) in the language the request asks
+/// for, Russian by default; the window shows that text under its own,
+/// translated heading, so an English window used to show the one sentence
+/// with the actual cure in Russian.
+fn candidate_urls(sub_url: &str, lang_en: bool) -> Result<Vec<String>, AppError> {
     let trimmed = sub_url.trim();
     if trimmed.is_empty() {
         return Err(AppError::new(ErrorCode::NoSubscription));
@@ -497,7 +504,7 @@ fn candidate_urls(sub_url: &str) -> Result<Vec<String>, AppError> {
         return Err(AppError::new(ErrorCode::SubMalformed));
     }
 
-    force_query(&mut primary);
+    force_query(&mut primary, lang_en.then_some("en"));
 
     let primary_host = primary.host_str().unwrap_or_default().to_ascii_lowercase();
     let mut urls = vec![primary.to_string()];
@@ -578,17 +585,22 @@ fn subscription_token(sub_url: &str) -> Option<String> {
 /// `lang` and `split` are the person's own choices and are never touched: the
 /// first decides the language of the texts the server writes, the second is
 /// how someone abroad turns split routing off.
-fn force_query(url: &mut Url) {
+fn force_query(url: &mut Url, ui_lang: Option<&str>) {
     let kept: Vec<(String, String)> = url
         .query_pairs()
         .filter(|(k, _)| k != "format" && k != "routing")
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
         .collect();
+    let has_lang = kept.iter().any(|(k, _)| k == "lang");
 
     let mut qs = url.query_pairs_mut();
     qs.clear();
     for (k, v) in kept {
         qs.append_pair(&k, &v);
+    }
+    // The person's own `lang` always wins; the window's is only a default.
+    if let (false, Some(lang)) = (has_lang, ui_lang) {
+        qs.append_pair("lang", lang);
     }
     qs.append_pair("format", "vless");
     qs.append_pair("routing", "inline");
@@ -701,10 +713,10 @@ type Headers = HashMap<String, String>;
 /// Russian — see `manifest::build_location`.
 pub async fn fetch_subscription(sub_url: &str, lang_en: bool) -> Result<Subscription, AppError> {
     if !manifest::manifest_enabled() {
-        return fetch_subscription_only(sub_url).await;
+        return fetch_subscription_only(sub_url, lang_en).await;
     }
     let (sub_result, manifest_result) = tokio::join!(
-        fetch_subscription_only(sub_url),
+        fetch_subscription_only(sub_url, lang_en),
         fetch_manifest_servers(sub_url, lang_en)
     );
     manifest::merge(sub_result, manifest_result)
@@ -713,8 +725,8 @@ pub async fn fetch_subscription(sub_url: &str, lang_en: bool) -> Result<Subscrip
 /// Today's fetch, unchanged — pulled out of `fetch_subscription` so the
 /// manifest branch above can run it CONCURRENTLY with
 /// `fetch_manifest_servers` instead of after it.
-async fn fetch_subscription_only(sub_url: &str) -> Result<Subscription, AppError> {
-    let urls = candidate_urls(sub_url)?;
+async fn fetch_subscription_only(sub_url: &str, lang_en: bool) -> Result<Subscription, AppError> {
+    let urls = candidate_urls(sub_url, lang_en)?;
     let answer = race_hosts(&urls).await?;
 
     let parsed = interpret_response(
@@ -2725,7 +2737,7 @@ mod tests {
 
     #[test]
     fn the_ladder_keeps_the_path_and_the_token() {
-        let urls = candidate_urls("https://proxysvpn.com/api/sub/abcdef0123456789").unwrap();
+        let urls = candidate_urls("https://proxysvpn.com/api/sub/abcdef0123456789", false).unwrap();
         assert!(urls.len() >= 4);
         for url in &urls {
             assert!(
@@ -2742,7 +2754,7 @@ mod tests {
     #[test]
     fn a_link_already_on_a_reserve_does_not_repeat_it() {
         let urls =
-            candidate_urls("https://proxysvnovich.vercel.app/api/sub/token12345678").unwrap();
+            candidate_urls("https://proxysvnovich.vercel.app/api/sub/token12345678", false).unwrap();
         let first_hosts: Vec<String> = urls
             .iter()
             .filter_map(|u| Url::parse(u).ok()?.host_str().map(str::to_string))
@@ -2758,13 +2770,27 @@ mod tests {
     #[test]
     fn the_persons_own_query_survives_and_ours_wins() {
         let urls =
-            candidate_urls("https://proxysvpn.com/api/sub/tok12345?split=0&lang=en&format=xray")
+            candidate_urls("https://proxysvpn.com/api/sub/tok12345?split=0&lang=en&format=xray", false)
                 .unwrap();
         let first = &urls[0];
         assert!(first.contains("split=0"), "{first}");
         assert!(first.contains("lang=en"), "{first}");
         assert!(first.contains("format=vless"), "{first}");
         assert!(!first.contains("format=xray"), "{first}");
+    }
+
+    /// The service writes its refusals in the language the request asks for;
+    /// an English window asks for English unless the link already says.
+    #[test]
+    fn an_english_window_asks_for_english_texts_unless_the_link_says_otherwise() {
+        let en = candidate_urls("https://proxysvpn.com/api/sub/tok12345", true).unwrap();
+        assert!(en.iter().all(|u| u.contains("lang=en")), "{en:?}");
+
+        let ru = candidate_urls("https://proxysvpn.com/api/sub/tok12345", false).unwrap();
+        assert!(ru.iter().all(|u| !u.contains("lang=")), "{ru:?}");
+
+        let own = candidate_urls("https://proxysvpn.com/api/sub/tok12345?lang=ru", true).unwrap();
+        assert!(own[0].contains("lang=ru") && !own[0].contains("lang=en"), "{}", own[0]);
     }
 
     #[test]
@@ -2794,19 +2820,19 @@ mod tests {
     #[test]
     fn a_link_that_is_not_ours_is_refused_before_any_request() {
         assert_eq!(
-            candidate_urls("").expect_err("empty").code,
+            candidate_urls("", false).expect_err("empty").code,
             ErrorCode::NoSubscription
         );
         assert_eq!(
-            candidate_urls("   ").expect_err("blank").code,
+            candidate_urls("   ", false).expect_err("blank").code,
             ErrorCode::NoSubscription
         );
         assert_eq!(
-            candidate_urls("not a url").expect_err("garbage").code,
+            candidate_urls("not a url", false).expect_err("garbage").code,
             ErrorCode::SubMalformed
         );
         assert_eq!(
-            candidate_urls("ftp://proxysvpn.com/api/sub/x").expect_err("scheme").code,
+            candidate_urls("ftp://proxysvpn.com/api/sub/x", false).expect_err("scheme").code,
             ErrorCode::SubMalformed
         );
     }
