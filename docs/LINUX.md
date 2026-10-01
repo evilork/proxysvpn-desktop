@@ -124,14 +124,22 @@ The action's `exec.path` is `/usr/bin/proxysvpn-desktop`. Note that this is the
 the first CI build, so the dialog gets our wording rather than the generic
 fallback.
 
-The helper refuses to exec a sidecar that is group- or world-writable, that is a
-symlink, that is not named `tun2socks`, or that is neither root-owned nor sitting
-in its own directory. `PROXYSVPN_HELPER_DEV=1` relaxes the last rule for
-`cargo run` — **in a debug build only**: the flag that asks for it is an argument
-of the helper, and the helper's argv comes from an unprivileged peer, so a
-release build ignores it outright instead of trusting that no bundle sets the
-variable. The invariant is "no easier to tamper with than the helper binary
-itself".
+The peer does not tell the helper which binary to run. Until 0.3.2 the `Up`
+request carried a tun2socks path, which the helper checked and then exec'd by
+name again later; only the last path component was protected against symlinks,
+so a path through a directory the peer controlled could pass the check against
+`/usr/bin` and resolve to another file at exec time — root code execution with no
+dialog inside the `auth_admin_keep` window. Now the helper finds `tun2socks`
+next to its own executable (`/proc/self/exe`, on the `.deb` the root-owned
+`/usr/bin`), and a request that still names a path is refused by
+`deny_unknown_fields`. It also refuses a sidecar that is group- or
+world-writable, that is a symlink, or that is neither root-owned nor sitting in
+its own directory. `PROXYSVPN_HELPER_DEV=1` adds the repo's `binaries`
+directory (a compile-time path) and relaxes the ownership rule for `cargo run` —
+**in a debug build only**: the flag that asks for it is an argument of the
+helper, and the helper's argv comes from an unprivileged peer, so a release
+build ignores it outright instead of trusting that no bundle sets the variable.
+The invariant is "no easier to tamper with than the helper binary itself".
 
 The same reasoning applies to the rest of the request: the SOCKS port is checked
 against this app's own two engine ports, because it decides where every packet on

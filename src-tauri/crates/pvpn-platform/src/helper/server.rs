@@ -120,9 +120,38 @@ fn beside_helper(path: &std::path::Path) -> bool {
     }
 }
 
-/// The helper execs a path it was handed by an unprivileged peer, so the file
-/// must be no easier to tamper with than the helper binary itself. See
-/// `proto::sidecar_is_trusted`.
+/// The repo's `binaries` directory, for a debug `--dev` run only. A path baked
+/// in at compile time, never read from the environment: in a release build
+/// the branch does not exist at all.
+fn dev_sidecar_dir() -> Option<std::path::PathBuf> {
+    #[cfg(debug_assertions)]
+    if dev_mode() {
+        return Some(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("binaries"),
+        );
+    }
+    None
+}
+
+/// The tun2socks this helper runs: found next to its own executable, never
+/// named by the peer (see `proto::UpParams`). `current_exe` is
+/// `/proc/self/exe`, already canonical, and on the .deb its directory is the
+/// root-owned `/usr/bin`, so nothing between this lookup and the exec can be
+/// swapped by an unprivileged process.
+fn own_sidecar() -> Result<std::path::PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("cannot locate the helper: {e}"))?;
+    let dev = dev_sidecar_dir();
+    let dirs = proto::sidecar_dirs(&exe, dev.as_deref());
+    let path = crate::triple::find_sidecar(proto::SIDECAR_NAME, &dirs).map_err(|e| format!("{e:#}"))?;
+    check_sidecar(&path)?;
+    Ok(path)
+}
+
+/// The sidecar must be no easier to tamper with than the helper binary
+/// itself. See `proto::sidecar_is_trusted`.
 fn check_sidecar(path: &std::path::Path) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
 
@@ -182,12 +211,12 @@ fn handle(req: Request) -> Result<bool, String> {
         }
         Request::Up(params) => {
             let valid = validate_up(&params)?;
-            check_sidecar(&valid.tun2socks)?;
+            let tun2socks = own_sidecar()?;
             check_socks_listener(valid.socks_port)?;
             if let Some(active) = guard.take() {
                 net::down(active);
             }
-            let fresh = net::up(&valid).map_err(|e| format!("{:#}", e))?;
+            let fresh = net::up(&valid, &tun2socks).map_err(|e| format!("{:#}", e))?;
             *guard = Some(fresh);
             Ok(true)
         }

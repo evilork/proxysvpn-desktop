@@ -194,15 +194,15 @@ fn configure_device() -> Result<()> {
     Ok(())
 }
 
-fn spawn_tun2socks(params: &ValidUp) -> Result<Child> {
-    let argv = p::tun2socks(&params.tun2socks, params.socks_port);
-    let mut child = Command::new(&params.tun2socks)
+fn spawn_tun2socks(params: &ValidUp, tun2socks: &Path) -> Result<Child> {
+    let argv = p::tun2socks(tun2socks, params.socks_port);
+    let mut child = Command::new(tun2socks)
         .args(&argv.args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("spawn {}", params.tun2socks.display()))?;
+        .with_context(|| format!("spawn {}", tun2socks.display()))?;
 
     pump(child.stdout.take(), "info");
     pump(child.stderr.take(), "warn");
@@ -307,15 +307,16 @@ fn hint_path() -> PathBuf {
 // ------------------------------------------------------------------ the API
 
 /// Raise the tunnel. On any failure everything this function changed is undone
-/// before the error is returned.
-pub fn up(params: &ValidUp) -> Result<Tunnel> {
+/// before the error is returned. `tun2socks` is the helper's own sidecar
+/// (`helper::server::own_sidecar`), never a path from the peer.
+pub fn up(params: &ValidUp, tun2socks: &Path) -> Result<Tunnel> {
     let route = physical_default()?;
     // The node address is not logged: it is not public information.
     log("info", &format!("physical exit: {}", route.iface));
 
     add_host_route(params.server_ip, &route)?;
 
-    let mut child = match spawn_tun2socks(params) {
+    let mut child = match spawn_tun2socks(params, tun2socks) {
         Ok(child) => child,
         Err(e) => {
             del_host_route(params.server_ip);

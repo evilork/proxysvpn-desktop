@@ -67,7 +67,6 @@ fn up_params(plan: &TunPlan) -> UpParams {
     UpParams {
         server_ip: plan.server_ip.to_string(),
         socks_port: plan.socks_port,
-        tun2socks: plan.tun2socks.to_string_lossy().to_string(),
         dns: plan.dns_strings(),
     }
 }
