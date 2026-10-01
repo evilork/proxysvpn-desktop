@@ -57,13 +57,45 @@ DMG_OUT="$DMG_DIR/ProxysVPN_${VERSION}_${ARCH}.dmg"
 step "Package wrapped .app into .dmg  (hdiutil)"
 mkdir -p "$DMG_DIR"
 rm -f "$DMG_OUT"
+# A staging folder with an Applications shortcut beside the app: every
+# instruction says "drag it into Applications", and an image holding only the
+# app invited running it from the read-only volume instead.
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/proxysvpn-dmg.XXXXXX")"
+MOUNT=""
+cleanup_dmg() {
+    if [[ -n "$MOUNT" ]]; then hdiutil detach "$MOUNT" -quiet || true; fi
+    rm -rf "$STAGE"
+}
+trap cleanup_dmg EXIT
+ditto "$APP" "$STAGE/ProxysVPN.app"
+ln -s /Applications "$STAGE/Applications"
 hdiutil create \
     -volname "ProxysVPN" \
-    -srcfolder "$APP" \
+    -srcfolder "$STAGE" \
     -ov \
     -format UDZO \
     "$DMG_OUT" >/dev/null
 ok "$(basename "$DMG_OUT")"
+
+step "Verify the .dmg  (what a person will open)"
+hdiutil verify "$DMG_OUT" >/dev/null
+MOUNT="$(mktemp -d "${TMPDIR:-/tmp}/proxysvpn-mnt.XXXXXX")"
+hdiutil attach "$DMG_OUT" -readonly -nobrowse -noautoopen -mountpoint "$MOUNT" -quiet
+MOUNTED_APP="$MOUNT/ProxysVPN.app"
+codesign --verify --deep --strict "$MOUNTED_APP"
+EXEC_NAME="$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$MOUNTED_APP/Contents/Info.plist")"
+# The launcher must be the bundle executable and the real binary must sit
+# beside it: a plain `tauri build` output (no launcher) loops the password
+# window, which is exactly what this script exists to prevent.
+file "$MOUNTED_APP/Contents/MacOS/$EXEC_NAME" | grep -q 'shell script' \
+    || { echo "ERROR: Contents/MacOS/$EXEC_NAME is not the launcher script" >&2; exit 1; }
+file "$MOUNTED_APP/Contents/MacOS/${EXEC_NAME}-bin" | grep -q 'Mach-O' \
+    || { echo "ERROR: Contents/MacOS/${EXEC_NAME}-bin is not a Mach-O binary" >&2; exit 1; }
+[[ -L "$MOUNT/Applications" ]] \
+    || { echo "ERROR: the image has no Applications shortcut" >&2; exit 1; }
+hdiutil detach "$MOUNT" -quiet
+MOUNT=""
+ok "signature valid, launcher + ${EXEC_NAME}-bin present, Applications shortcut present"
 
 # ── Final report ───────────────────────────────────────────────────
 SIZE="$(du -h "$DMG_OUT" | cut -f1)"
@@ -84,8 +116,8 @@ Distribution checklist:
 Test locally:
   rm -rf /Applications/ProxysVPN.app
   open "$DMG_OUT"
-  # drag to Applications
-  xattr -cr /Applications/ProxysVPN.app
+  # drag ProxysVPN onto the Applications shortcut
+  xattr -dr com.apple.quarantine /Applications/ProxysVPN.app
   open /Applications/ProxysVPN.app
 
   # → Should show password prompt → enter password → app launches as root
