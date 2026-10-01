@@ -25,6 +25,7 @@ import { errorBodyKey, errorTitleKey, shownServerText } from "../storeCopy";
 import type { MetricPayload, StatePayload, SubMeta, VpnStep } from "../types";
 import Shield, { type ShieldState } from "./Shield";
 import { IconGear, IconGlobe, IconStethoscope, useNow, useUi } from "./ui";
+import { displayLocation } from "../locationName";
 import markUrl from "../assets/logo.svg";
 
 /** Healing whispers up to this point and only then becomes a sentence (М3). */
@@ -248,7 +249,7 @@ export default function MainScreen(props: MainScreenProps) {
             onClick={props.onOpenDetails}
             aria-label={t("main.truth.details")}
           >
-            <span>{state.location ?? t("details.locationAuto")}</span>
+            <span>{state.location ? displayLocation(state.location, lang) : t("details.locationAuto")}</span>
             {metric.rttMs !== undefined ? (
               <>
                 <span className="sep">·</span>

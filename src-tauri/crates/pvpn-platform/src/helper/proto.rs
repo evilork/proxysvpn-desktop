@@ -13,7 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// One line on the pipe.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -63,25 +63,45 @@ pub enum Request {
 /// including the interface name, address or routes: those are helper-side
 /// constants, so a compromised GUI cannot aim the helper at an arbitrary
 /// interface.
+///
+/// Nor the tun2socks binary. It used to travel here as a path, and the helper
+/// checked that path and then exec'd it by name again later. Only the last
+/// component was protected against symlinks, so a peer could pass a path
+/// through a directory it controlled, let the check see /usr/bin and then
+/// retarget the directory before the exec: root ran a file of its choosing,
+/// with no password inside polkit's `auth_admin_keep` window. The helper now
+/// finds the sidecar next to its own executable ([`sidecar_dirs`]), and
+/// `deny_unknown_fields` refuses a request that still tries to name one.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct UpParams {
     /// Already-resolved IPv4 address of the VPN node (never logged).
     pub server_ip: String,
     /// SOCKS5 port the engine (xray or hysteria) listens on, on loopback.
     pub socks_port: u16,
-    /// Absolute path to the tun2socks sidecar.
-    pub tun2socks: String,
     /// Resolvers to publish on the tunnel interface.
     pub dns: Vec<String>,
 }
 
-/// File name the sidecar must have.
-///
-/// The helper execs this path as root, so "which file" has to be pinned as
-/// tightly as the ownership rule in [`sidecar_is_trusted`] pins "whose file".
-/// Without it, "root-owned" alone would let a peer name *any* root-owned
-/// binary on the machine and have the helper start it with our argv.
+/// Stem of the sidecar the helper runs. Resolved with
+/// `triple::find_sidecar`, so `tun2socks` in a bundle and
+/// `tun2socks-<triple>` in a dev checkout.
 pub const SIDECAR_NAME: &str = "tun2socks";
+
+/// Directories the helper looks in for tun2socks, in order: the directory of
+/// its own executable (on the .deb that is root-owned `/usr/bin`, inside an
+/// AppImage the read-only mount), and only in a debug `--dev` run the repo's
+/// `binaries` directory. Nothing in this list comes from the peer.
+pub fn sidecar_dirs(helper_exe: &Path, dev_dir: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = Vec::with_capacity(2);
+    if let Some(own) = helper_exe.parent() {
+        dirs.push(own.to_path_buf());
+    }
+    if let Some(dev) = dev_dir {
+        dirs.push(dev.to_path_buf());
+    }
+    dirs
+}
 
 /// The only SOCKS ports a shipped build ever asks for: xray's inbound
 /// (`tun::SOCKS_PORT`) and hysteria's (`hysteria_manager::HY2_SOCKS_PORT`).
@@ -97,15 +117,14 @@ pub const ALLOWED_SOCKS_PORTS: [u16; 2] = [10808, 10809];
 pub struct ValidUp {
     pub server_ip: Ipv4Addr,
     pub socks_port: u16,
-    pub tun2socks: PathBuf,
     pub dns: Vec<IpAddr>,
 }
 
 /// Validate a request that crossed the privilege boundary.
 ///
 /// Rejects anything that could turn into an argument injection or a route to
-/// somewhere we did not mean: non-IPv4 node addresses, port 0, relative paths,
-/// empty or malformed resolver lists.
+/// somewhere we did not mean: non-IPv4 node addresses, ports that are not our
+/// engines', empty or malformed resolver lists.
 pub fn validate_up(params: &UpParams) -> Result<ValidUp, String> {
     let server_ip: Ipv4Addr = params
         .server_ip
@@ -118,38 +137,6 @@ pub fn validate_up(params: &UpParams) -> Result<ValidUp, String> {
         return Err(format!(
             "socks_port {} is not one of this app's engine ports {:?}",
             params.socks_port, ALLOWED_SOCKS_PORTS
-        ));
-    }
-
-    // A leading slash, checked by hand rather than with `Path::is_absolute()`.
-    // This is a wire protocol whose receiver is always the Linux helper, so
-    // "absolute" must mean POSIX-absolute no matter which OS compiled the code;
-    // `is_absolute()` asks the *host* and answers false for "/usr/bin/tun2socks"
-    // on Windows, which made this validation — and its test — disagree with
-    // itself across platforms.
-    if !params.tun2socks.starts_with('/') {
-        return Err(format!(
-            "tun2socks path must be absolute: {:?}",
-            params.tun2socks
-        ));
-    }
-    // No `..`: the path is handed to root for exec, and the trust check that
-    // follows stats the file, so a traversal must not slip past it.
-    let tun2socks = PathBuf::from(&params.tun2socks);
-    if tun2socks.components().any(|c| c.as_os_str() == "..") {
-        return Err(format!(
-            "tun2socks path must not contain '..': {:?}",
-            params.tun2socks
-        ));
-    }
-    // The name, not just the directory. `sidecar_is_trusted` answers "may root
-    // exec a file with these ownership facts", and its root-owned branch is
-    // true of every binary in /usr/bin; pinning the file name is what keeps
-    // that branch meaning "our sidecar" rather than "anything root installed".
-    if tun2socks.file_name().and_then(|n| n.to_str()) != Some(SIDECAR_NAME) {
-        return Err(format!(
-            "tun2socks path must end in {:?}: {:?}",
-            SIDECAR_NAME, params.tun2socks
         ));
     }
 
@@ -170,7 +157,6 @@ pub fn validate_up(params: &UpParams) -> Result<ValidUp, String> {
     Ok(ValidUp {
         server_ip,
         socks_port: params.socks_port,
-        tun2socks,
         dns,
     })
 }
@@ -187,8 +173,8 @@ pub struct FileFacts {
 
 /// May the root helper exec this file?
 ///
-/// The helper runs as uid 0 and is told which binary to start by an
-/// unprivileged peer, so the invariant we need is: *the sidecar must be no
+/// The helper runs as uid 0 and finds the binary itself ([`sidecar_dirs`]),
+/// but the invariant still holds as a second line: *the sidecar must be no
 /// easier to tamper with than the helper executable itself*. Anyone who can
 /// rewrite the helper binary already owns the root it is about to gain, so:
 ///
@@ -322,9 +308,31 @@ mod tests {
         UpParams {
             server_ip: "203.0.113.7".to_string(),
             socks_port: 10808,
-            tun2socks: "/usr/bin/tun2socks".to_string(),
             dns: vec!["1.1.1.1".to_string(), "1.0.0.1".to_string()],
         }
+    }
+
+    /// The peer must not be able to name the binary root runs: a path it
+    /// supplies can be checked through one directory and exec'd through
+    /// another. A request that still carries one is refused outright.
+    #[test]
+    fn an_up_request_that_names_a_binary_is_refused() {
+        let line = r#"{"request":{"id":1,"req":{"up":{"server_ip":"203.0.113.7","socks_port":10808,"tun2socks":"/home/u/d/tun2socks","dns":["1.1.1.1"]}}}}"#;
+        assert!(decode(line).is_err(), "a tun2socks path from the peer must not parse");
+        let clean = r#"{"request":{"id":1,"req":{"up":{"server_ip":"203.0.113.7","socks_port":10808,"dns":["1.1.1.1"]}}}}"#;
+        assert!(decode(clean).is_ok());
+    }
+
+    #[test]
+    fn the_helper_looks_for_tun2socks_only_beside_itself_outside_dev() {
+        assert_eq!(
+            sidecar_dirs(Path::new("/usr/bin/proxysvpn-desktop"), None),
+            vec![PathBuf::from("/usr/bin")]
+        );
+        assert_eq!(
+            sidecar_dirs(Path::new("/usr/bin/proxysvpn-desktop"), Some(Path::new("/src/binaries"))),
+            vec![PathBuf::from("/usr/bin"), PathBuf::from("/src/binaries")]
+        );
     }
 
     #[test]
@@ -399,29 +407,6 @@ mod tests {
         }
     }
 
-    /// `sidecar_is_trusted` lets any root-owned file through, which is every
-    /// binary in /usr/bin. Pinning the file name is what keeps that branch
-    /// meaning "our sidecar" instead of "anything root installed".
-    #[test]
-    fn rejects_a_root_owned_binary_that_is_not_our_sidecar() {
-        for bad in [
-            "/usr/bin/bash",
-            "/usr/bin/tun2socks2",
-            "/usr/bin/tun2socks.bak",
-            "/usr/bin/TUN2SOCKS",
-            "/usr/bin/",
-        ] {
-            let mut p = sample();
-            p.tun2socks = bad.to_string();
-            assert!(validate_up(&p).is_err(), "{bad:?} must be rejected");
-        }
-        for good in ["/usr/bin/tun2socks", "/opt/ProxysVPN/tun2socks"] {
-            let mut p = sample();
-            p.tun2socks = good.to_string();
-            assert!(validate_up(&p).is_ok(), "{good:?} must be accepted");
-        }
-    }
-
     /// The `--dev` flag is an argument of the helper, and the helper's argv is
     /// chosen by an unprivileged peer. A release build must therefore ignore it
     /// outright rather than trust that no bundle sets the environment variable.
@@ -431,35 +416,6 @@ mod tests {
         assert!(!dev_mode_allowed(true, false), "release must ignore --dev");
         assert!(!dev_mode_allowed(false, true));
         assert!(!dev_mode_allowed(false, false));
-    }
-
-    #[test]
-    fn rejects_relative_paths() {
-        for bad in [
-            "tun2socks",
-            "./tun2socks",
-            "../../usr/bin/tun2socks",
-            "/usr/bin/../../tmp/evil",
-            "",
-            r"C:\tun2socks.exe",
-        ] {
-            let mut p = sample();
-            p.tun2socks = bad.to_string();
-            assert!(validate_up(&p).is_err(), "{bad:?} must be rejected");
-        }
-    }
-
-    /// The verdict must not depend on which OS compiled this code: the helper
-    /// that acts on it always runs on Linux. `Path::is_absolute()` would answer
-    /// false for a POSIX path on a Windows host and break this invariant.
-    #[test]
-    fn absolute_means_posix_absolute_on_every_host() {
-        let ok = validate_up(&sample()).expect("a POSIX path validates everywhere");
-        assert_eq!(
-            ok.tun2socks.to_string_lossy(),
-            "/usr/bin/tun2socks",
-            "the path must survive validation unchanged"
-        );
     }
 
     #[test]

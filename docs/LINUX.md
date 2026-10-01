@@ -1,10 +1,11 @@
 # ProxysVPN Desktop on Linux
 
-Status: the Linux target is implemented and type-checked, but **never built or
-run on a Linux machine** — the development box is an Apple Silicon Mac with no
-Docker, no Windows and no Linux. The GitHub Actions workflow
-`.github/workflows/desktop-build.yml` is the first place this code is really
-compiled and packaged. What is verified and what is not is listed at the bottom.
+Status: built and packaged by CI (`.github/workflows/desktop-build.yml`,
+ubuntu-22.04). The 0.3.1 `.deb` was installed on a Debian 13 live VM on
+01.10.2026, redeemed a pair code and connected (VLESS, Germany). Not yet run
+on real hardware, not yet tried on a Hysteria2 location, and 0.3.2 (the audit
+fixes) has not been run live yet. What else is verified and what is not is
+listed at the bottom.
 
 ## Build dependencies
 
@@ -124,14 +125,22 @@ The action's `exec.path` is `/usr/bin/proxysvpn-desktop`. Note that this is the
 the first CI build, so the dialog gets our wording rather than the generic
 fallback.
 
-The helper refuses to exec a sidecar that is group- or world-writable, that is a
-symlink, that is not named `tun2socks`, or that is neither root-owned nor sitting
-in its own directory. `PROXYSVPN_HELPER_DEV=1` relaxes the last rule for
-`cargo run` — **in a debug build only**: the flag that asks for it is an argument
-of the helper, and the helper's argv comes from an unprivileged peer, so a
-release build ignores it outright instead of trusting that no bundle sets the
-variable. The invariant is "no easier to tamper with than the helper binary
-itself".
+The peer does not tell the helper which binary to run. Until 0.3.2 the `Up`
+request carried a tun2socks path, which the helper checked and then exec'd by
+name again later; only the last path component was protected against symlinks,
+so a path through a directory the peer controlled could pass the check against
+`/usr/bin` and resolve to another file at exec time — root code execution with no
+dialog inside the `auth_admin_keep` window. Now the helper finds `tun2socks`
+next to its own executable (`/proc/self/exe`, on the `.deb` the root-owned
+`/usr/bin`), and a request that still names a path is refused by
+`deny_unknown_fields`. It also refuses a sidecar that is group- or
+world-writable, that is a symlink, or that is neither root-owned nor sitting in
+its own directory. `PROXYSVPN_HELPER_DEV=1` adds the repo's `binaries`
+directory (a compile-time path) and relaxes the ownership rule for `cargo run` —
+**in a debug build only**: the flag that asks for it is an argument of the
+helper, and the helper's argv comes from an unprivileged peer, so a release
+build ignores it outright instead of trusting that no bundle sets the variable.
+The invariant is "no easier to tamper with than the helper binary itself".
 
 The same reasoning applies to the rest of the request: the SOCKS port is checked
 against this app's own two engine ports, because it decides where every packet on
@@ -157,7 +166,10 @@ table and the pids of its own engines (`net/windows.rs`).
 * GUI crash or SIGKILL — the pipe hits EOF, same path;
 * helper killed — `purge_stale_sync()` on the next start removes the leftover
   device, the host route (remembered in `/run/proxysvpn/route-hint`) and the
-  `/etc/resolv.conf` backup, and kills orphaned tun2socks processes;
+  `/etc/resolv.conf` backup, and kills the tun2socks the previous helper
+  recorded in the route hint (`engine_pid=`), only while that pid still runs
+  the helper's own binary — never every root `tun2socks` by name, which would
+  stop another VPN client's engine;
 * reboot — the route hint is in `/run`, a tmpfs, and that is right: routes do
   not survive a reboot either, so a hint that did would name entries that no
   longer exist. The `/etc/resolv.conf` backup is the opposite case and lives in

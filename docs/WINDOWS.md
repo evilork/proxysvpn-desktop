@@ -1,9 +1,11 @@
 # ProxysVPN Desktop on Windows
 
-Status: **code complete, never executed on Windows.** Written on an Apple
-Silicon Mac with no Windows machine and no Docker available, so everything below
-that is marked "unverified" has to be confirmed by CI on `windows-latest` and by
-one run on real hardware before this ships to anybody.
+Status: built and packaged by CI (`windows-latest`). The 0.3.1 installer was
+installed on a Windows 11 ARM VM (x64 emulation) on 01.10.2026, redeemed a pair
+code and connected (VLESS, Germany). That run also showed the host-route bug
+fixed in 0.3.2 (`netsh delete route` without the interface). Not yet run on
+real x64 hardware, not yet tried on a Hysteria2 location, and 0.3.2 has not
+been run live yet; everything below marked "unverified" still is.
 
 ## How the tunnel works
 
@@ -52,6 +54,12 @@ which makes a crash cheap: the Wintun adapter dies with tun2socks and takes its
 addresses and routes with it, and the only thing that can outlive the process is
 the `/32` host route — recorded in the route hint
 (`%LOCALAPPDATA%\ProxysVPN\route-hint`) and removed on the next start.
+`netsh interface ipv4 delete route` needs the interface as well as the prefix
+(without it netsh exits with "essential parameters were not entered" and the
+route stays), so every delete is built from the row IP Helper reports for that
+`/32`: its interface index and next hop. A leftover that is exactly the route a
+connect wants is reused rather than re-added, because the add would fail with
+"object already exists".
 
 **Elevation: one UAC prompt at launch.** The exe carries
 `requestedExecutionLevel="requireAdministrator"`

@@ -1,3 +1,69 @@
+# ProxysVPN Desktop v0.3.2-beta
+
+🇷🇺 Первый выпуск для трёх систем: macOS (Apple Silicon), Windows 10/11 (x64) и Linux (.deb, x86_64). Плюс исправления по итогам аудита перед публикацией.
+
+🇬🇧 The first release for three systems: macOS (Apple Silicon), Windows 10/11 (x64) and Linux (.deb, x86_64). Plus the fixes from the pre-release audit.
+
+## 🇷🇺 Установка
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt` ниже. Подписи кода пока нет, поэтому каждая система один раз предупреждает.
+
+- **macOS 12+ (Apple Silicon):** откройте `ProxysVPN_0.3.2_aarch64.dmg`, перетащите ProxysVPN на ярлык Applications, затем один раз в Терминале `xattr -dr com.apple.quarantine /Applications/ProxysVPN.app` (или «Всё равно открыть» в Системных настройках → Конфиденциальность и безопасность). При запуске приложение спрашивает пароль администратора. Подробно — INSTALL.md.
+- **Windows 10/11 (x64):** запустите `ProxysVPN_0.3.2_x64-setup.exe`; SmartScreen: «Подробнее» → «Выполнить в любом случае». При каждом запуске — запрос прав администратора (UAC).
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.2_amd64.deb`. Нужен сеанс с агентом polkit. Удаление: `sudo apt remove proxys-vpn`.
+
+## 🇷🇺 Что исправлено
+
+- **Локации Hysteria2 снова работают.** Переход xray → hysteria привязывался к физическому интерфейсу, и соединение с 127.0.0.1 не устанавливалось — ни трафика, ни DNS.
+- **Windows: повторное подключение к тому же узлу.** Маршрут до узла не удалялся (netsh требует имя интерфейса), и следующее подключение, смена локации туда и обратно и перезапуск движка падали до перезагрузки.
+- **Окно на маленьких экранах.** На 1366×768 и ноутбуках с масштабом 150 % нижняя кнопка уходила под панель задач. Окно теперь подстраивается под экран и меняет размер.
+- **Безопасность:** помощник Linux больше не запускает файл по пути от непривилегированного процесса; на macOS движки запускаются из папки root, а не из бандла пользователя; журнал от root не идёт по ссылкам; ссылка подписки только по https и не уходит чужим сайтам; QR-привязка принимает ссылки только наших сайтов; конфигурация hysteria защищена от подстановки ключей.
+- **Приватность:** имена открытых сайтов больше не попадают в журнал и «Отчёт для поддержки»; на компьютере больше нельзя выбрать «IPv6»/«Оба» (туннель IPv6 не несёт), уведомление о данных говорит об этом; hysteria больше не проверяет обновления у api.hy2.io; настройки на macOS не читаются другими учётными записями.
+- **Починка:** проверка во время починки не засчитывается, если туннель лежит (раньше щит мог стать зелёным при трафике мимо VPN); выбор локации во время починки больше не гоняется с ней; после неудачи «Повторить» берёт свежий список серверов; сохранённый список Watafast больше не перекрывает отказ подписки («ссылка занята», «нет средств») и не подменяет свежий список.
+- **macOS:** запуск и выход больше не удаляют маршруты другого VPN; минимальная версия — macOS 12 (движки на ней не работают на 11).
+- **Linux:** при смене сети отключение возвращает DNS текущей сети; отключение больше не убивает tun2socks других VPN-клиентов; удаление пакета восстанавливает /etc/resolv.conf; без агента polkit приложение говорит об этом прямо.
+- **Интерфейс:** названия стран и трей по-английски в английском интерфейсе; Esc закрывает только верхнее окно; на Windows нет квадратиков вместо флагов; экран лицензий полон для Windows и Linux, включая GPL-код внутри движков.
+
+## 🇷🇺 Известные ограничения
+
+- **IPv6 не идёт через туннель** ни на одной системе. Программы, которые сами соединяются по IPv6 (звонки WebRTC, приложения со своим DNS), в сети с IPv6 могут ходить мимо VPN.
+- **Windows:** системный DNS пока не направляется в туннель — имена разрешает DNS вашей сети.
+- **Нет подписи кода и автообновления.**
+- **macOS:** после сбоя или принудительного завершения движки могут работать до следующего запуска ProxysVPN (он их и остановит). Всё приложение работает от root.
+- Шаг починки «перечитать подписку» идёт через туннель, который чинится; если все адреса узлов сменились, нажмите «Повторить» — теперь это загрузит свежий список.
+- Windows и Linux проверены вживую на версии 0.3.1 (VLESS); 0.3.2 и локации Hysteria2 на них ещё не проверялись.
+
+## 🇬🇧 Install
+
+Compare each file's SHA-256 with `SHA256SUMS.txt` below. Nothing is code-signed yet, so each system warns once.
+
+- **macOS 12+ (Apple Silicon):** open `ProxysVPN_0.3.2_aarch64.dmg`, drag ProxysVPN onto the Applications shortcut, then once in Terminal `xattr -dr com.apple.quarantine /Applications/ProxysVPN.app` (or "Open Anyway" in System Settings → Privacy & Security). The app asks for the administrator password at launch.
+- **Windows 10/11 (x64):** run `ProxysVPN_0.3.2_x64-setup.exe`; SmartScreen: "More info" → "Run anyway". Every launch asks for administrator rights (UAC).
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.2_amd64.deb`. Needs a session with a polkit agent. Remove with `sudo apt remove proxys-vpn`.
+
+## 🇬🇧 What's fixed
+
+- **Hysteria2 locations work again.** The xray → hysteria hop was pinned to the physical interface, so the 127.0.0.1 connection never opened: no traffic, no DNS.
+- **Windows: reconnecting to the same node.** The node's host route was never deleted (netsh needs the interface), so the next connect, a there-and-back location change and an engine revive failed until a reboot.
+- **The window on small screens.** On 1366×768 and laptops at 150 % the bottom button sat under the taskbar. The window now fits the screen and can be resized.
+- **Security:** the Linux helper no longer runs a file path given by an unprivileged process; macOS runs the engines from a root-owned folder, not from the user's bundle; root's log writes do not follow links; subscription links are https-only and never sent to other services' sites; QR pairing accepts only links on our own sites; the hysteria config cannot be fed extra keys.
+- **Privacy:** the names of sites you open no longer reach the log or the support report; desktops no longer offer "IPv6"/"Both" (the tunnel does not carry IPv6) and the data notice says so; hysteria no longer checks api.hy2.io for updates; macOS settings are no longer readable by other accounts.
+- **Repair:** a probe during repair no longer counts when the tunnel is down (the shield could turn green while traffic went outside the VPN); picking a location during repair no longer races the repair; "Retry" after a failure fetches a fresh server list; a cached Watafast list no longer overrides the subscription's refusals ("link in use", "no funds") or a fresh list.
+- **macOS:** launching and quitting no longer delete another VPN's routes; the minimum is now macOS 12 (the engines do not run on 11).
+- **Linux:** after a network change, Disconnect restores the current network's DNS; Disconnect no longer kills other VPN clients' tun2socks; removing the package restores /etc/resolv.conf; a session without a polkit agent is named as such.
+- **Interface:** country names and the tray in English in the English interface; Esc closes only the top layer; no boxed letters instead of flags on Windows; the licences screen is complete for Windows and Linux, including the GPL code inside the engines.
+
+## 🇬🇧 Known limitations
+
+- **IPv6 does not go through the tunnel** on any system. Programs that connect over IPv6 on their own (WebRTC calls, apps with their own DNS) can go outside the VPN on an IPv6 network.
+- **Windows:** the system DNS is not sent into the tunnel yet — your network's DNS resolves names.
+- **No code signing and no automatic updates.**
+- **macOS:** after a crash or Force Quit the engines may keep running until ProxysVPN is opened again (which stops them). The whole app runs as root.
+- The repair step that re-reads the subscription goes through the tunnel being repaired; if every node address changed, press "Retry", which now fetches a fresh list.
+- Windows and Linux were tried live with 0.3.1 (VLESS); 0.3.2 and Hysteria2 locations have not been run on them yet.
+
+---
+
 # ProxysVPN Desktop v0.3.1-beta
 
 🇷🇺 Новые настройки: способ подключения, подключение при запуске, свои правила для сайтов и уведомления. Плюс исправления по итогам проверки 0.3.0.

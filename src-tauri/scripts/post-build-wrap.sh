@@ -78,10 +78,14 @@ codesign --force --deep --sign - \
     "$APP"
 
 echo "==> Verify"
+# A failed verify stops the build. It used to print WARN and carry on, so a
+# signature broken by any later change still became a DMG that Apple Silicon
+# reports as "damaged" even after xattr -cr, with CI green.
 if codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | sed 's/^/    /'; then
     echo "    OK"
 else
-    echo "    WARN: verify reported issues (review above)"
+    echo "    ERROR: codesign --verify failed (see above)" >&2
+    exit 1
 fi
 
 echo "Wrap done."

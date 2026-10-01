@@ -194,15 +194,15 @@ fn configure_device() -> Result<()> {
     Ok(())
 }
 
-fn spawn_tun2socks(params: &ValidUp) -> Result<Child> {
-    let argv = p::tun2socks(&params.tun2socks, params.socks_port);
-    let mut child = Command::new(&params.tun2socks)
+fn spawn_tun2socks(params: &ValidUp, tun2socks: &Path) -> Result<Child> {
+    let argv = p::tun2socks(tun2socks, params.socks_port);
+    let mut child = Command::new(tun2socks)
         .args(&argv.args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("spawn {}", params.tun2socks.display()))?;
+        .with_context(|| format!("spawn {}", tun2socks.display()))?;
 
     pump(child.stdout.take(), "info");
     pump(child.stderr.take(), "warn");
@@ -259,6 +259,19 @@ fn dns_up(backend: DnsBackend, servers: &[IpAddr]) -> Result<()> {
     }
 }
 
+/// `dns_up` for the supervisor tick: with the resolv.conf backend, a file
+/// that replaced ours mid-session becomes the new original
+/// (`linux_logic::resolv_reapply`).
+fn dns_reapply(backend: DnsBackend, servers: &[IpAddr]) -> Result<()> {
+    match backend {
+        DnsBackend::Resolved => dns_up(backend, servers),
+        DnsBackend::ResolvConf => {
+            logic::resolv_reapply(&paths::linux_persistent_dir(), Path::new(RESOLV_CONF), servers)
+                .context("rewrite /etc/resolv.conf")
+        }
+    }
+}
+
 fn dns_down(backend: DnsBackend) {
     match backend {
         DnsBackend::Resolved => {
@@ -287,13 +300,13 @@ fn resolv_conf_is_ours() -> bool {
 
 // ----------------------------------------------------------------- the hint
 
-fn write_hint(server_ip: Ipv4Addr) {
+fn write_hint(server_ip: Ipv4Addr, engine_pid: u32) {
     let dir = paths::linux_runtime_dir();
     if let Err(e) = std::fs::create_dir_all(&dir) {
         log("warn", &format!("could not create {}: {}", dir.display(), e));
         return;
     }
-    let hint = crate::net::format_route_hint(std::process::id(), server_ip);
+    let hint = crate::net::format_route_hint_with_engine(std::process::id(), server_ip, engine_pid);
     let path = dir.join(paths::ROUTE_HINT_NAME);
     if let Err(e) = std::fs::write(&path, hint) {
         log("warn", &format!("could not write the route hint: {}", e));
@@ -307,15 +320,16 @@ fn hint_path() -> PathBuf {
 // ------------------------------------------------------------------ the API
 
 /// Raise the tunnel. On any failure everything this function changed is undone
-/// before the error is returned.
-pub fn up(params: &ValidUp) -> Result<Tunnel> {
+/// before the error is returned. `tun2socks` is the helper's own sidecar
+/// (`helper::server::own_sidecar`), never a path from the peer.
+pub fn up(params: &ValidUp, tun2socks: &Path) -> Result<Tunnel> {
     let route = physical_default()?;
     // The node address is not logged: it is not public information.
     log("info", &format!("physical exit: {}", route.iface));
 
     add_host_route(params.server_ip, &route)?;
 
-    let mut child = match spawn_tun2socks(params) {
+    let mut child = match spawn_tun2socks(params, tun2socks) {
         Ok(child) => child,
         Err(e) => {
             del_host_route(params.server_ip);
@@ -361,7 +375,7 @@ pub fn up(params: &ValidUp) -> Result<Tunnel> {
         return Err(e);
     }
 
-    write_hint(params.server_ip);
+    write_hint(params.server_ip, child.id());
     log("info", &format!("tunnel up on {} ({:?} DNS)", DEVICE, backend));
 
     Ok(Tunnel {
@@ -385,10 +399,10 @@ pub fn ensure(tunnel: &Tunnel) -> Result<()> {
         add_split_defaults()?;
         log("warn", "re-added the split-default routes");
         // The device was rebuilt, so per-link resolver settings are gone too.
-        dns_up(tunnel.backend, &tunnel.dns)?;
+        dns_reapply(tunnel.backend, &tunnel.dns)?;
     } else if tunnel.backend == DnsBackend::ResolvConf && !resolv_conf_is_ours() {
-        dns_up(tunnel.backend, &tunnel.dns)?;
-        log("warn", "/etc/resolv.conf was rewritten, reapplied ours");
+        dns_reapply(tunnel.backend, &tunnel.dns)?;
+        log("warn", "/etc/resolv.conf was rewritten, reapplied ours and kept the new one for Disconnect");
     }
     Ok(())
 }
@@ -405,7 +419,7 @@ pub fn retarget(tunnel: &mut Tunnel, new_ip: Ipv4Addr) -> Result<()> {
     add_host_route(new_ip, &route)?;
     del_host_route(tunnel.server_ip);
     tunnel.server_ip = new_ip;
-    write_hint(new_ip);
+    write_hint(new_ip, tunnel.child.id());
     // The addresses are not logged: node addresses are not public information.
     log("info", "host route moved to the new node");
     Ok(())
@@ -435,7 +449,11 @@ pub fn down(mut tunnel: Tunnel) {
                 let _ = tunnel.child.kill();
                 let _ = tunnel.child.wait();
             }
-            TeardownStep::KillStrayEngines => run_ok(&p::kill_stray(TUNNEL_ENGINE)),
+            // Nothing to sweep: the engine this tunnel owns was killed by
+            // handle in the step before. `pkill -u 0 tun2socks` here used to
+            // kill any root tun2socks on the machine — another VPN client's
+            // privileged service included — on every Disconnect.
+            TeardownStep::KillStrayEngines => {}
         }
     }
     let _ = std::fs::remove_file(hint_path());
@@ -449,15 +467,23 @@ pub fn purge_stale_sync() {
     // the table even when the device is already gone, and then the machine has
     // no IPv4 until something removes them.
     del_split_defaults();
-    run_ok(&p::kill_stray(TUNNEL_ENGINE));
+    let hint = hint_path();
+    let hint_text = std::fs::read_to_string(&hint).ok();
+    // Only the tun2socks the previous helper recorded, and only while that
+    // pid still runs our own binary: a name sweep (`pkill -u 0 tun2socks`)
+    // also killed another VPN client's root engine at every helper start.
+    if let Some(text) = &hint_text {
+        for pid in crate::net::parse_engine_pids(text) {
+            kill_own_engine(pid);
+        }
+    }
 
     if device_exists() {
         run_ok(&p::device_delete());
     }
 
-    let hint = hint_path();
-    if let Ok(text) = std::fs::read_to_string(&hint) {
-        for ip in crate::net::parse_route_hint(&text) {
+    if let Some(text) = &hint_text {
+        for ip in crate::net::parse_route_hint(text) {
             del_host_route(ip);
         }
         let _ = std::fs::remove_file(&hint);
@@ -468,6 +494,29 @@ pub fn purge_stale_sync() {
     run_ok(&p::resolved_revert());
     if logic::resolv_backup_exists(&paths::linux_persistent_dir()) {
         dns_down(DnsBackend::ResolvConf);
+    }
+}
+
+/// SIGKILL `pid` if, and only if, it still runs the helper's own tun2socks.
+fn kill_own_engine(pid: u32) {
+    let Ok(raw) = libc::pid_t::try_from(pid) else {
+        return;
+    };
+    let own_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let image = std::fs::read_link(format!("/proc/{pid}/exe")).ok();
+    let ours = match (image, own_dir) {
+        (Some(image), Some(own)) => crate::net::is_own_engine_image(&image, &own),
+        _ => false,
+    };
+    if !ours {
+        return;
+    }
+    // SAFETY: kill(2) takes two integers; `raw` is a single pid above 1
+    // (parse_engine_pids), never a group or "everyone".
+    if unsafe { libc::kill(raw, libc::SIGKILL) } == 0 {
+        log("info", "stopped the tun2socks a previous helper left running");
     }
 }
 

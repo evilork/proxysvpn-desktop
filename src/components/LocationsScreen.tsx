@@ -27,7 +27,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { bridge, type LocationEntry, type LocationQuality } from "../bridge";
-import { flagFor } from "../flags";
+import { flagFor, rendersFlagEmoji } from "../flags";
+import { displayLocation } from "../locationName";
 import { formatTime, type MsgKey } from "../i18n";
 import { Screen, Spinner, useLatest, useUi } from "./ui";
 
@@ -128,13 +129,15 @@ export default function LocationsScreen({
     [pickedRef],
   );
 
+  // Windows draws flag emoji as two boxed letters (src/flags.ts).
+  const showFlags = rendersFlagEmoji(navigator.userAgent);
   const pinned = items?.find((entry) => entry.selected) ?? null;
   const recent = items?.filter((entry) => entry.recent) ?? [];
   const all = items ?? [];
 
   /** The name exactly as the service wrote it: «Британия · XHTTP». */
   const titleOf = (entry: LocationEntry, index: number) => {
-    const base = entry.label || t("loc.unnamed", { n: index + 1 });
+    const base = entry.label ? displayLocation(entry.label, lang) : t("loc.unnamed", { n: index + 1 });
     return entry.note ? `${base} · ${entry.note}` : base;
   };
 
@@ -148,9 +151,11 @@ export default function LocationsScreen({
       data-selected={entry.selected ? "true" : undefined}
       aria-current={entry.selected ? "true" : undefined}
     >
-      <span className="row-flag" aria-hidden="true">
-        {entry.flag ?? flagFor(entry.label)}
-      </span>
+      {showFlags ? (
+        <span className="row-flag" aria-hidden="true">
+          {entry.flag ?? flagFor(entry.label)}
+        </span>
+      ) : null}
       <span className="row-main">
         <span className="row-title">{titleOf(entry, index)}</span>
         <span className="row-sub">
@@ -200,7 +205,7 @@ export default function LocationsScreen({
                 <span className="row-title">{t("loc.auto")}</span>
                 <span className="row-sub">
                   {t("loc.autoHint")}
-                  {currentLabel ? ` · ${t("loc.current", { location: currentLabel })}` : ""}
+                  {currentLabel ? ` · ${t("loc.current", { location: displayLocation(currentLabel, lang) })}` : ""}
                 </span>
               </span>
             </button>

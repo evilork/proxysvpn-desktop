@@ -188,7 +188,9 @@ export default function PairScreen({
     setNotice(null);
     try {
       const text = (await bridge.readClipboard()).trim();
-      if (!/^https?:\/\/\S+$/i.test(text)) {
+      // https only, like the core (lib.rs validate_link): the token in a
+      // plain-http link would cross the network in clear text.
+      if (!/^https:\/\/\S+$/i.test(text)) {
         setNotice(t(COPY.notOurLink));
         return;
       }

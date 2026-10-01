@@ -68,6 +68,8 @@ use pidfile_windows as pidfile;
 #[cfg(desktop)]
 mod sidecars;
 #[cfg(target_os = "macos")]
+mod engine_stage;
+#[cfg(target_os = "macos")]
 mod sysdns;
 #[cfg(target_os = "macos")]
 mod tun;
@@ -177,10 +179,13 @@ const SETTLING_WINDOW: Duration = Duration::from_secs(45);
 /// asking the network first.
 ///
 /// The owner's target is 3-5 seconds from the button to the shield (27.09.2026);
-/// fetching the list cost 1.2 s of the 6.7. Node addresses change seldom, and
-/// when a stored one is stale the connect fails into the ladder, whose step C4
-/// re-reads the subscription anyway — so reuse costs a slower recovery in a
-/// rare case, not a wrong connection.
+/// fetching the list cost 1.2 s of the 6.7. Node addresses change seldom, but
+/// when a stored one is stale the ladder's step C4 cannot be relied on to
+/// notice: it re-reads the subscription with the routes still pointing into
+/// the tunnel it is trying to repair. So reuse ends the moment a connect or a
+/// repair ends in Failed (`Session::sub_reuse_blocked`): the next Retry tears
+/// the tunnel down and asks the network for a fresh list, instead of reusing
+/// the stale one for the rest of the 15 minutes.
 const SUB_REUSE_MS: u64 = 15 * 60 * 1000;
 
 /// Outgoing bytes with nothing coming back for this long is the passive half
@@ -525,6 +530,9 @@ struct Session {
     race_credentials: Option<RaceCredentials>,
 
     sub_fetched_at: Option<u64>,
+    /// Set when a connect or a repair ends in Failed, cleared by the next
+    /// successful fetch: a list that just failed is not one to reuse.
+    sub_reuse_blocked: bool,
     sub_used_fallback: bool,
     /// The site name that answered last. Used for the cabinet link, so the one
     /// button on a failure screen leads somewhere this person can open.
@@ -589,6 +597,18 @@ fn settling_applies(
 }
 
 impl Session {
+    /// Age of a list a connect may use without fetching, or `None` when it
+    /// has to ask the network: no list, too old, or the last attempt with it
+    /// ended in Failed.
+    fn reusable_sub_age(&self, now: u64) -> Option<u64> {
+        if self.servers.is_empty() || self.sub_reuse_blocked {
+            return None;
+        }
+        self.sub_fetched_at
+            .map(|at| now.saturating_sub(at))
+            .filter(|age| *age < SUB_REUSE_MS)
+    }
+
     fn new() -> Self {
         Self {
             phase: VpnPhase::Off,
@@ -614,6 +634,7 @@ impl Session {
             pending_race: None,
             race_credentials: None,
             sub_fetched_at: None,
+            sub_reuse_blocked: false,
             sub_used_fallback: false,
             sub_source_host: None,
             meter: TunnelMeter::new(),
@@ -758,6 +779,10 @@ impl Core {
             let old_phase = s.phase;
             s.phase = phase;
             s.error = error;
+            if phase == VpnPhase::Failed {
+                // See SUB_REUSE_MS: the next attempt asks for a fresh list.
+                s.sub_reuse_blocked = true;
+            }
             if phase == VpnPhase::Healing {
                 s.healing_since.get_or_insert_with(Instant::now);
             } else {
@@ -916,23 +941,11 @@ fn link_stored_at() -> Option<u64> {
 fn store_link(link: &str) -> Result<(), AppError> {
     let mut last: Option<std::io::Error> = None;
     for path in link_paths() {
-        if let Some(dir) = path.parent() {
-            if std::fs::create_dir_all(dir).is_err() {
-                continue;
-            }
-        }
-        match std::fs::write(&path, format!("{link}\n")) {
-            Ok(()) => {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    // The token in this link IS the credential; unlike the
-                    // device id it must not be world readable.
-                    let _ =
-                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-                }
-                return Ok(());
-            }
+        // The token in this link IS the credential; unlike the device id it
+        // must not be readable by anyone else, not even for the moment
+        // between a write and a chmod (appdirs::write_private).
+        match appdirs::write_private(&path, format!("{link}\n").as_bytes()) {
+            Ok(()) => return Ok(()),
             Err(e) => last = Some(e),
         }
     }
@@ -963,7 +976,9 @@ fn validate_link(raw: &str) -> Result<String, AppError> {
         return Err(AppError::new(ErrorCode::NoSubscription));
     }
     let url = Url::parse(trimmed).map_err(|_| AppError::new(ErrorCode::SubMalformed))?;
-    if !matches!(url.scheme(), "http" | "https") {
+    // https only: the token in the path is the account's credential, and a
+    // plain-http link sent it in clear text to every site of the ladder.
+    if url.scheme() != "https" {
         return Err(AppError::new(ErrorCode::SubMalformed));
     }
     if url.host_str().is_none() || url.path().trim_matches('/').is_empty() {
@@ -1561,16 +1576,7 @@ impl Core {
     async fn connect_inner(self: &Arc<Self>, generation: u64) -> Result<(), AppError> {
         let started = Instant::now();
         self.set_step(VpnStep::FetchingSub).await;
-        let reusable_age = {
-            let s = self.session.lock().await;
-            if s.servers.is_empty() {
-                None
-            } else {
-                s.sub_fetched_at
-                    .map(|at| now_ms().saturating_sub(at))
-                    .filter(|age| *age < SUB_REUSE_MS)
-            }
-        };
+        let reusable_age = self.session.lock().await.reusable_sub_age(now_ms());
         if let Some(age) = reusable_age {
             logger::log(
                 "info",
@@ -1973,6 +1979,7 @@ impl Core {
             s.servers = sub.servers;
             s.meta = sub.meta;
             s.sub_fetched_at = Some(now_ms());
+            s.sub_reuse_blocked = false;
             s.sub_used_fallback = used_fallback;
             s.sub_source_host = Some(sub.source_host);
             s.push_event(
@@ -2672,8 +2679,14 @@ impl Core {
 
         let current = self.session.lock().await.current?;
 
-        // C1 — same node, engine restarted. TUN and routes untouched.
-        if self.start_on(current, generation, true).await.is_ok() {
+        // C1 — same node, engine restarted. TUN and routes untouched while
+        // they are there; raised again when tun2socks took them down with it.
+        let restarted = {
+            let _step = self.repair_step(generation).await?;
+            let keep = self.tunnel_is_up().await;
+            self.start_on(current, generation, keep).await.is_ok()
+        };
+        if restarted {
             if let Some(phase) = self.try_probe(generation).await {
                 return Some(phase);
             }
@@ -2692,7 +2705,7 @@ impl Core {
         // the session, the shield frozen on "healing").
         let next = self.session.lock().await.next_server(current, true);
         if let Some(next) = next {
-            if self.switch_to(next, generation).await.is_ok() {
+            if self.repair_switch(next, generation).await? {
                 if let Some(phase) = self.try_probe(generation).await {
                     return Some(phase);
                 }
@@ -2710,7 +2723,7 @@ impl Core {
             // Bound first, for the reason C2 gives.
             let other = self.session.lock().await.next_server(current, false);
             if let Some(other) = other {
-                if self.switch_to(other, generation).await.is_ok() {
+                if self.repair_switch(other, generation).await? {
                     if let Some(phase) = self.try_probe(generation).await {
                         return Some(phase);
                     }
@@ -2727,7 +2740,7 @@ impl Core {
         if self.refresh_subscription().await.is_ok() {
             let next = self.session.lock().await.choose_server(tunnel_prefs::load().transport);
             if let Some(next) = next {
-                if self.switch_to(next, generation).await.is_ok() {
+                if self.repair_switch(next, generation).await? {
                     if let Some(phase) = self.try_probe(generation).await {
                         return Some(phase);
                     }
@@ -2742,15 +2755,48 @@ impl Core {
         None
     }
 
+    /// The operation lock for one engine-touching step of a repair, or `None`
+    /// when this ladder was retired while it waited for it.
+    ///
+    /// Not held for the whole climb — a person pressing "Cancel" on step four
+    /// must not wait for the ladder to finish — only around each restart, so
+    /// a location chosen by hand (`select_location`, which holds this lock
+    /// across its own switch and then retires the ladder) and a repair never
+    /// restart the engines at the same time.
+    async fn repair_step(&self, generation: u64) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+        let guard = self.operation.lock().await;
+        if !self.is_current(generation).await {
+            return None;
+        }
+        Some(guard)
+    }
+
+    /// `switch_to` as a repair step: `None` when the ladder was retired,
+    /// otherwise whether the switch worked.
+    async fn repair_switch(self: &Arc<Self>, index: usize, generation: u64) -> Option<bool> {
+        let _step = self.repair_step(generation).await?;
+        Some(self.switch_to(index, generation).await.is_ok())
+    }
+
     async fn try_probe(self: &Arc<Self>, generation: u64) -> Option<VpnPhase> {
         if !self.is_current(generation).await {
             return None;
         }
-        match self.probe(ProbeReason::AfterConnect).await? {
-            ProbeVerdict::Passed => Some(VpnPhase::On),
-            ProbeVerdict::Unconfirmed => Some(VpnPhase::Unconfirmed),
-            _ => None,
+        // The probe dials with `no_proxy` over the system routes, so it says
+        // nothing about the tunnel unless the tunnel is there to take it. When
+        // tun2socks has died the device and both half-defaults go with it, the
+        // probe reaches the site straight from the real address, and C0 used
+        // to call that "Protection restored" while every byte went outside the
+        // VPN. Desktop only: on iOS the extension owns the tunnel and
+        // `tunnel_is_up` is always false by design.
+        #[cfg(desktop)]
+        let carrying = self.tunnel_is_up().await && self.engines_alive().await;
+        #[cfg(target_os = "ios")]
+        let carrying = true;
+        if !carrying {
+            logger::log("info", "vpn", "проверка не засчитана: туннель не поднят");
         }
+        healing_verdict(self.probe(ProbeReason::AfterConnect).await, carrying)
     }
 
     /// Keep `healingForMs` moving for as long as the ladder runs.
@@ -2987,6 +3033,12 @@ async fn notify_prefs_set(enabled: bool) -> Cmd<()> {
 async fn set_ui_lang(core: tauri::State<'_, Arc<Core>>, lang: String) -> Cmd<()> {
     core.ui_lang_en
         .store(lang == "en", std::sync::atomic::Ordering::Relaxed);
+    // The tray speaks the window's language too.
+    #[cfg(desktop)]
+    {
+        let phase = core.session.lock().await.phase;
+        core.refresh_tray(phase).await;
+    }
     Ok(())
 }
 
@@ -3038,11 +3090,23 @@ async fn select_location(core: tauri::State<'_, Arc<Core>>, id: Option<String>) 
     }
 
     let _op = core.operation.lock().await;
-    let generation = core.session.lock().await.generation;
-    core.switch_to(index, generation)
-        .await
-        .map_err(|e| e.to_payload())?;
+    // A repair ladder may be climbing right now — the main screen says it is
+    // healing, which is exactly when people open the list. Both restart the
+    // engines, on different nodes, and the ladder never took this lock: the
+    // two interleaved, the ladder could override the choice a moment later,
+    // or one restart failed with "already running". A new generation retires
+    // that ladder and the supervisor that runs it (both stop at their next
+    // check, and the ladder's engine steps wait for this lock — see
+    // `repair_step`); a fresh supervisor follows this switch.
+    let generation = core.bump_generation().await;
+    core.spawn_supervisor(generation);
+    let switched = core.switch_to(index, generation).await;
     drop(_op);
+    if let Err(err) = switched {
+        // The retired ladder will not finish what it started; this one does.
+        core.spawn_heal(generation, err.clone());
+        return Err(err.to_payload());
+    }
 
     match core.probe(ProbeReason::AfterConnect).await {
         Some(ProbeVerdict::Passed) => core.settle(VpnPhase::On).await,
@@ -3053,7 +3117,17 @@ async fn select_location(core: tauri::State<'_, Arc<Core>>, id: Option<String>) 
                 .unwrap_or_else(|| AppError::new(ErrorCode::Unknown));
             core.spawn_heal(generation, cause);
         }
-        None => {}
+        None => {
+            // No verdict, and a ladder that was running is retired: do not
+            // leave the screen on "healing" with nobody working on it.
+            let (phase, cause) = {
+                let s = core.session.lock().await;
+                (s.phase, s.error.clone())
+            };
+            if phase == VpnPhase::Healing {
+                core.spawn_heal(generation, cause.unwrap_or_else(|| AppError::new(ErrorCode::Unknown)));
+            }
+        }
     }
     Ok(())
 }
@@ -3777,23 +3851,40 @@ async fn poll_pairing(token: &str) -> Result<PairOutcome, AppError> {
         return Err(AppError::new(ErrorCode::SubMalformed));
     }
     match ladder_get(&format!("/api/pair/{token}")).await {
-        Ok((_, body)) => {
-            let parsed: serde_json::Value =
-                serde_json::from_str(&body).map_err(|_| AppError::new(ErrorCode::SubInvalid))?;
-            match parsed.get("status").and_then(|v| v.as_str()) {
-                Some("ready") => parsed
-                    .get("subUrl")
-                    .and_then(|v| v.as_str())
-                    .map(|url| PairOutcome::Linked(url.to_string()))
-                    .ok_or_else(|| AppError::new(ErrorCode::SubInvalid)),
-                Some("pending") => Ok(PairOutcome::Waiting),
-                _ => Ok(PairOutcome::Expired),
-            }
-        }
+        Ok((_, body)) => read_pair_answer(&body),
         // The endpoint answers 404 once the token is spent or timed out, which
         // the ladder reports as "nothing there".
         Err(err) if err.code == ErrorCode::SubEmpty => Ok(PairOutcome::Expired),
         Err(err) => Err(err),
+    }
+}
+
+/// What one answer of `GET /api/pair/<token>` means.
+///
+/// The link in a "ready" answer goes through the same gate as a link
+/// delivered by a pair code (`pair_code::accept_pair_link`: https, one of our
+/// own sites). The QR slot is written by whoever POSTs first, with no session,
+/// and the token is in the QR on the screen: someone who reads it off a
+/// screen share or a screenshot could put any link there — plain http, any
+/// host — and the app stored it and sent all of the person's traffic through
+/// the servers that link names.
+fn read_pair_answer(body: &str) -> Result<PairOutcome, AppError> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| AppError::new(ErrorCode::SubInvalid))?;
+    match parsed.get("status").and_then(|v| v.as_str()) {
+        Some("ready") => {
+            let raw = parsed
+                .get("subUrl")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AppError::new(ErrorCode::SubInvalid))?;
+            pair_code::accept_pair_link(raw, &SITE_LADDER)
+                .map(PairOutcome::Linked)
+                .inspect_err(|_| {
+                    logger::log("warn", "pair", "refused a paired link that is not https on one of our sites");
+                })
+        }
+        Some("pending") => Ok(PairOutcome::Waiting),
+        _ => Ok(PairOutcome::Expired),
     }
 }
 
@@ -4179,36 +4270,66 @@ fn build_menu(handle: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     Menu::with_items(handle, &[&app_submenu, &edit_submenu, &window_submenu])
 }
 
-// The only Russian sentences left in Rust, and they are here because a native
-// menu cannot read src/i18n.ts: the strings are handed to macOS, not to the
-// window. Everything the WINDOW says still arrives as a code. When the tray
-// gains more languages it will be by asking the window for these five labels,
-// not by growing a dictionary here.
+// The tray's own words, in the window's language: a native menu cannot read
+// src/i18n.ts, so the two languages the window has are kept here and chosen by
+// the language the window last reported (`set_ui_lang`). On Windows and Linux
+// the tray is the only way to quit and the usual way back to the window, so an
+// English window with a Russian tray left English speakers guessing which
+// item quits.
 #[cfg(desktop)]
-const TRAY_STATE_OFF: &str = "Защита выключена";
-#[cfg(desktop)]
-const TRAY_STATE_WORKING: &str = "Подключаем…";
-#[cfg(desktop)]
-const TRAY_STATE_ON: &str = "Защищено";
-#[cfg(desktop)]
-const TRAY_STATE_UNCONFIRMED: &str = "Подтвердить не удалось";
-#[cfg(desktop)]
-const TRAY_STATE_FAILED: &str = "Не проходит";
-#[cfg(desktop)]
-const TRAY_SHOW: &str = "Открыть окно";
-#[cfg(desktop)]
-const TRAY_DISCONNECT: &str = "Выключить защиту";
-#[cfg(desktop)]
-const TRAY_QUIT: &str = "Выйти";
+struct TrayWords {
+    off: &'static str,
+    working: &'static str,
+    on: &'static str,
+    unconfirmed: &'static str,
+    failed: &'static str,
+    show: &'static str,
+    disconnect: &'static str,
+    quit: &'static str,
+}
 
 #[cfg(desktop)]
-fn tray_state_text(phase: VpnPhase) -> &'static str {
+const TRAY_RU: TrayWords = TrayWords {
+    off: "Защита выключена",
+    working: "Подключаем…",
+    on: "Защищено",
+    unconfirmed: "Подтвердить не удалось",
+    failed: "Не проходит",
+    show: "Открыть окно",
+    disconnect: "Выключить защиту",
+    quit: "Выйти",
+};
+
+#[cfg(desktop)]
+const TRAY_EN: TrayWords = TrayWords {
+    off: "Protection is off",
+    working: "Connecting…",
+    on: "Protected",
+    unconfirmed: "Could not confirm",
+    failed: "Not getting through",
+    show: "Open window",
+    disconnect: "Turn protection off",
+    quit: "Quit",
+};
+
+#[cfg(desktop)]
+fn tray_words(en: bool) -> &'static TrayWords {
+    if en {
+        &TRAY_EN
+    } else {
+        &TRAY_RU
+    }
+}
+
+#[cfg(desktop)]
+fn tray_state_text(phase: VpnPhase, en: bool) -> &'static str {
+    let words = tray_words(en);
     match phase {
-        VpnPhase::Off => TRAY_STATE_OFF,
-        VpnPhase::Starting | VpnPhase::Healing => TRAY_STATE_WORKING,
-        VpnPhase::On => TRAY_STATE_ON,
-        VpnPhase::Unconfirmed => TRAY_STATE_UNCONFIRMED,
-        VpnPhase::Failed => TRAY_STATE_FAILED,
+        VpnPhase::Off => words.off,
+        VpnPhase::Starting | VpnPhase::Healing => words.working,
+        VpnPhase::On => words.on,
+        VpnPhase::Unconfirmed => words.unconfirmed,
+        VpnPhase::Failed => words.failed,
     }
 }
 
@@ -4216,10 +4337,11 @@ fn tray_state_text(phase: VpnPhase) -> &'static str {
 impl Core {
     /// First line of the tray menu is always the state (design [13]).
     async fn refresh_tray(&self, phase: VpnPhase) {
+        let en = self.ui_lang_en.load(std::sync::atomic::Ordering::Relaxed);
         let location = self.session.lock().await.location.clone();
         let text = match (phase, location) {
-            (VpnPhase::On, Some(place)) => format!("{} · {place}", tray_state_text(phase)),
-            _ => tray_state_text(phase).to_string(),
+            (VpnPhase::On, Some(place)) => format!("{} · {place}", tray_state_text(phase, en)),
+            _ => tray_state_text(phase, en).to_string(),
         };
         if let Some(tray) = self.app.tray_by_id("main-tray") {
             let _ = tray.set_tooltip(Some(&format!("ProxysVPN · {text}")));
@@ -4229,6 +4351,16 @@ impl Core {
         if let Some(items) = self.app.try_state::<TrayItems>() {
             if let Some(item) = items.state.lock().await.as_ref() {
                 let _ = item.set_text(&text);
+            }
+            let words = tray_words(en);
+            for (item, label) in [
+                (&items.show, words.show),
+                (&items.disconnect, words.disconnect),
+                (&items.quit, words.quit),
+            ] {
+                if let Some(item) = item.lock().await.as_ref() {
+                    let _ = item.set_text(label);
+                }
             }
         }
     }
@@ -4267,19 +4399,26 @@ impl Core {
     }
 }
 
-/// The tray's state line, so it can be rewritten as the phase changes.
+/// The tray's items, so the state line can be rewritten as the phase changes
+/// and every label when the window's language does.
 #[cfg(desktop)]
 struct TrayItems {
     state: Mutex<Option<MenuItem<tauri::Wry>>>,
+    show: Mutex<Option<MenuItem<tauri::Wry>>>,
+    disconnect: Mutex<Option<MenuItem<tauri::Wry>>>,
+    quit: Mutex<Option<MenuItem<tauri::Wry>>>,
 }
 
 #[cfg(desktop)]
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
-    let state_item = MenuItem::with_id(app, "state", TRAY_STATE_OFF, false, None::<&str>)?;
-    let show_item = MenuItem::with_id(app, "show", TRAY_SHOW, true, None::<&str>)?;
+    // Russian until the window reports its language (`set_ui_lang`), which
+    // it does as soon as it mounts.
+    let words = tray_words(false);
+    let state_item = MenuItem::with_id(app, "state", words.off, false, None::<&str>)?;
+    let show_item = MenuItem::with_id(app, "show", words.show, true, None::<&str>)?;
     let disconnect_item =
-        MenuItem::with_id(app, "disconnect", TRAY_DISCONNECT, true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, "quit", TRAY_QUIT, true, None::<&str>)?;
+        MenuItem::with_id(app, "disconnect", words.disconnect, true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", words.quit, true, None::<&str>)?;
 
     let tray_menu = Menu::with_items(
         app,
@@ -4294,7 +4433,10 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     )?;
 
     let items = TrayItems {
-        state: Mutex::new(Some(state_item)),
+        state: Mutex::new(Some(state_item.clone())),
+        show: Mutex::new(Some(show_item.clone())),
+        disconnect: Mutex::new(Some(disconnect_item.clone())),
+        quit: Mutex::new(Some(quit_item.clone())),
     };
     app.manage(items);
 
@@ -4354,6 +4496,84 @@ fn reveal_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// What a probe during repair counts for. A pass is only a pass when the
+/// tunnel was there to carry it: otherwise it went out of the real interface
+/// and proves the internet works, not that protection does.
+fn healing_verdict(probe: Option<ProbeVerdict>, tunnel_carrying: bool) -> Option<VpnPhase> {
+    if !tunnel_carrying {
+        return None;
+    }
+    match probe? {
+        ProbeVerdict::Passed => Some(VpnPhase::On),
+        ProbeVerdict::Unconfirmed => Some(VpnPhase::Unconfirmed),
+        _ => None,
+    }
+}
+
+/// Smallest inner height the window may be fitted down to, in logical
+/// pixels. Matches `minHeight` in tauri.conf.json: every screen body scrolls
+/// above its pinned footer, so this is enough for a heading, a little body
+/// and the footer.
+#[cfg(desktop)]
+const MIN_WINDOW_HEIGHT: f64 = 520.0;
+
+/// The inner height (physical pixels) that makes a window whose frame is
+/// `outer` tall fit a work area `work_area` tall, or `None` when it already
+/// fits. Never below `min_inner`.
+#[cfg(desktop)]
+fn fitted_inner_height(work_area: u32, outer: u32, inner: u32, min_inner: u32) -> Option<u32> {
+    if outer <= work_area {
+        return None;
+    }
+    let frame = outer.saturating_sub(inner);
+    Some(work_area.saturating_sub(frame).max(min_inner))
+}
+
+/// Shrink the window to the screen it opened on when 720 px plus the frame
+/// does not fit there.
+///
+/// The window is 480x720 logical px. On a 1366x768 screen, or a 1080p laptop
+/// at 150 % (672 px of work area under the taskbar), its bottom 30-80 px sat
+/// under the taskbar, and the layout pins every footer to the bottom of the
+/// viewport: the data notice's only button, "Continue", was unreachable on
+/// first run, and later the Country/Check bar was cut off. The window is now
+/// resizable too (tauri.conf.json), but nobody should have to discover that
+/// before they can press the first button.
+#[cfg(desktop)]
+fn fit_main_window_to_screen(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return;
+    };
+    let (Ok(outer), Ok(inner), Ok(scale)) =
+        (window.outer_size(), window.inner_size(), window.scale_factor())
+    else {
+        return;
+    };
+    let work = monitor.work_area();
+    // Rounded, positive and far below u32::MAX: a few hundred logical px at a
+    // scale factor of at most a handful.
+    let min_inner = (MIN_WINDOW_HEIGHT * scale).round().max(0.0) as u32;
+    let Some(height) = fitted_inner_height(work.size.height, outer.height, inner.height, min_inner) else {
+        return;
+    };
+    if let Err(e) = window.set_size(tauri::PhysicalSize::new(inner.width, height)) {
+        logger::log("warn", "app", &format!("could not fit the window to the screen: {e}"));
+        return;
+    }
+    // Top of the work area, centred across it: `center` uses the whole
+    // monitor on some platforms and would put the bottom back under the bar.
+    let x = work.position.x + (i64::from(work.size.width) - i64::from(outer.width)).max(0) as i32 / 2;
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, work.position.y));
+    logger::log(
+        "info",
+        "app",
+        &format!("window fitted to a {} px tall work area", work.size.height),
+    );
+}
+
 /// The red X with a tray icon present: hide, the VPN keeps running.
 ///
 /// Linux asks first whether the icon can be seen at all (pvpn-platform
@@ -4397,6 +4617,11 @@ pub fn run() {
     // of the copy that is already running.
     #[cfg(target_os = "macos")]
     sync_cleanup();
+    // After the cleanup (which stops what a crashed run of this copy left
+    // running from the engine folder) and before anything can connect: copy
+    // the engines out of the user-owned bundle into a root-owned folder.
+    #[cfg(target_os = "macos")]
+    engine_stage::prepare();
 
     // ОДИН setup на всё приложение. Их было два, и это молча ломало macOS
     // целиком: `Builder::setup` не добавляет обработчик, а ЗАМЕНЯЕТ его, и
@@ -4463,6 +4688,8 @@ pub fn run() {
             }
             #[cfg(desktop)]
             install_signal_handlers();
+            #[cfg(desktop)]
+            fit_main_window_to_screen(app.handle());
 
             Ok(())
         });
@@ -4543,6 +4770,115 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+
+    /// A list a connect or repair just failed with must not be reused by the
+    /// Retry: step C4 re-reads the subscription through the broken tunnel and
+    /// cannot be relied on, so the 15-minute reuse kept a stale list alive.
+    #[test]
+    fn a_list_that_ended_in_failed_is_fetched_again_on_retry() {
+        let mut s = Session::new();
+        s.servers = vec![vless("Германия")];
+        s.sub_fetched_at = Some(1_000);
+        assert_eq!(s.reusable_sub_age(61_000), Some(60_000));
+        assert_eq!(s.reusable_sub_age(1_000 + SUB_REUSE_MS), None, "too old");
+
+        s.sub_reuse_blocked = true;
+        assert_eq!(s.reusable_sub_age(61_000), None);
+
+        let empty = Session::new();
+        assert_eq!(empty.reusable_sub_age(0), None);
+    }
+
+    /// The tray is the only way to quit on Windows and Linux: in an English
+    /// window it must say "Quit", not "Выйти".
+    #[test]
+    fn the_tray_speaks_the_windows_language() {
+        for phase in [VpnPhase::Off, VpnPhase::Starting, VpnPhase::On, VpnPhase::Unconfirmed, VpnPhase::Failed] {
+            let en = tray_state_text(phase, true);
+            assert!(!en.chars().any(|c| ('\u{0400}'..='\u{04FF}').contains(&c)), "{en}");
+            assert_ne!(en, tray_state_text(phase, false));
+        }
+        assert_eq!(tray_words(true).quit, "Quit");
+        assert_eq!(tray_words(false).quit, "Выйти");
+    }
+
+    /// The QR slot is writable by anyone who reads the token off the screen;
+    /// a link it returns must be https on one of our own sites, exactly like
+    /// one a pair code returns.
+    #[test]
+    fn a_paired_link_from_the_qr_slot_must_be_ours_and_https() {
+        let ours = r#"{"status":"ready","subUrl":"https://proxysvpn.com/api/sub/0123456789abcdef0123456789abcdef"}"#;
+        assert!(matches!(read_pair_answer(ours), Ok(PairOutcome::Linked(url)) if url.starts_with("https://proxysvpn.com/")));
+
+        for planted in [
+            r#"{"status":"ready","subUrl":"http://evil.example/s/x"}"#,
+            r#"{"status":"ready","subUrl":"https://evil.example/s/x"}"#,
+            r#"{"status":"ready","subUrl":"http://proxysvpn.com/api/sub/0123456789abcdef0123456789abcdef"}"#,
+            r#"{"status":"ready","subUrl":"https://203.0.113.9/api/sub/x"}"#,
+            r#"{"status":"ready"}"#,
+        ] {
+            let refused = read_pair_answer(planted);
+            assert!(
+                matches!(&refused, Err(e) if e.code == ErrorCode::SubInvalid),
+                "{planted}"
+            );
+        }
+        assert!(matches!(read_pair_answer(r#"{"status":"pending"}"#), Ok(PairOutcome::Waiting)));
+        assert!(matches!(read_pair_answer(r#"{"status":"gone"}"#), Ok(PairOutcome::Expired)));
+        assert!(read_pair_answer("not json").is_err());
+    }
+
+    /// A dead tun2socks takes the device and both half-defaults with it; the
+    /// probe then reaches the site straight from the real address. That must
+    /// not turn the shield green ("Protection restored") during repair.
+    #[test]
+    fn a_probe_that_passed_without_the_tunnel_does_not_restore_protection() {
+        assert_eq!(healing_verdict(Some(ProbeVerdict::Passed), false), None);
+        assert_eq!(healing_verdict(Some(ProbeVerdict::Unconfirmed), false), None);
+        assert_eq!(healing_verdict(Some(ProbeVerdict::Passed), true), Some(VpnPhase::On));
+        assert_eq!(healing_verdict(Some(ProbeVerdict::Unconfirmed), true), Some(VpnPhase::Unconfirmed));
+        assert_eq!(healing_verdict(None, true), None);
+    }
+
+    /// 1366x768 at 100 % leaves a 720 px work area under the taskbar, a 1080p
+    /// laptop at 150 % 672 px; the 720 px window plus its caption did not fit
+    /// either, and the first-run "Continue" button sat under the taskbar.
+    #[test]
+    fn the_window_is_fitted_to_a_short_work_area_and_left_alone_otherwise() {
+        // Fits: untouched.
+        assert_eq!(fitted_inner_height(1040, 751, 720, 520), None);
+        assert_eq!(fitted_inner_height(751, 751, 720, 520), None);
+        // 672 px work area, 31 px caption: the content shrinks to 641.
+        assert_eq!(fitted_inner_height(672, 751, 720, 520), Some(641));
+        // At 150 %: physical pixels throughout.
+        assert_eq!(fitted_inner_height(1008, 1127, 1080, 780), Some(961));
+        // Never below the minimum, even on an absurd screen.
+        assert_eq!(fitted_inner_height(400, 751, 720, 520), Some(520));
+    }
+
+    /// The window must be resizable and allowed below 720 px: with the old
+    /// fixed 480x720 nobody on a short screen could reach the pinned footer.
+    #[test]
+    fn the_window_config_lets_a_short_screen_reach_the_footer() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json parses");
+        let window = &conf["app"]["windows"][0];
+        assert_eq!(window["resizable"], true, "{window}");
+        let min_height = window["minHeight"].as_f64().expect("minHeight");
+        assert!(min_height < 720.0, "{window}");
+        assert!((min_height - MIN_WINDOW_HEIGHT).abs() < f64::EPSILON, "fit and config agree");
+        assert!(window["minWidth"].as_f64().is_some_and(|w| w <= 480.0), "{window}");
+    }
+
+    /// xray 26.3.27 and hysteria 2.9.3 are built with Go 1.26, whose
+    /// binaries need macOS 12 (`otool -l`: minos 12.0). Declaring 11.0 let
+    /// Big Sur install an app whose engines it does not support.
+    #[test]
+    fn the_bundle_does_not_claim_a_macos_its_engines_cannot_run_on() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json parses");
+        assert_eq!(conf["bundle"]["macOS"]["minimumSystemVersion"], "12.0");
+    }
 
     #[test]
     fn green_by_warm_up_is_checked_at_the_warm_up_pace_until_a_probe_answers() {
@@ -5019,6 +5355,10 @@ mod tests {
         assert!(validate_link("  https://proxysvpn.com/api/sub/abc  ").is_ok());
         assert!(validate_link("vless://uuid@host:443").is_err());
         assert!(validate_link("https://proxysvpn.com").is_err());
+        assert!(
+            validate_link("http://proxysvpn.com/api/sub/abc").is_err(),
+            "the token must not travel in clear text"
+        );
         assert!(validate_link("").is_err());
         assert!(validate_link("not a url").is_err());
     }

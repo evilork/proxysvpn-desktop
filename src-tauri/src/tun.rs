@@ -400,7 +400,34 @@ async fn device_exists() -> bool {
 /// Address on the device plus both halves of the default route.
 async fn configure_device() -> Result<(), AppError> {
     run_cmd("/sbin/ifconfig", &[TUN_NAME, TUN_ADDR, TUN_ADDR, "up"]).await?;
+    take_over_half_defaults().await;
     add_split_defaults().await
+}
+
+/// The person pressed Connect: ours must be the half-defaults that carry the
+/// traffic, so a /1 another VPN left in place is removed here — and only here,
+/// where they asked for it (it used to happen at every launch and quit too,
+/// see `half_default_is_ours`). Said in the log, because the other VPN keeps
+/// saying "connected" while its traffic now goes through ours.
+async fn take_over_half_defaults() {
+    for half in HALF_DEFAULTS {
+        let present = Command::new("/sbin/route")
+            .args(["-n", "get", "-net", half])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .is_ok_and(|s| s.success());
+        if present {
+            crate::logger::log(
+                "warn",
+                "tun",
+                &format!("{half} was already routed elsewhere (another VPN?); replaced by ours for this session"),
+            );
+            let _ = run_cmd("/sbin/route", &["-n", "delete", "-net", half]).await;
+        }
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -572,6 +599,62 @@ pub async fn restart_engine(
 // Taking it down
 // ───────────────────────────────────────────────────────────────────────────
 
+/// The two halves of the default route the tunnel installs.
+const HALF_DEFAULTS: [&str; 2] = ["0.0.0.0/1", "128.0.0.0/1"];
+
+/// Does `route -n get -net <half>` describe OUR half-default — the /1 on
+/// utun225 — rather than another VPN's?
+///
+/// `route delete -net 0.0.0.0/1` matches on destination and mask only, so it
+/// removes whichever 0/1 is installed. Tunnelblick/OpenVPN (`redirect-gateway
+/// def1`) and wg-quick install exactly these two routes; deleting them by
+/// name at every launch, connect and quit silently sent the other VPN's
+/// traffic out in the clear while it still said "connected".
+fn half_default_is_ours(route_get: &str) -> bool {
+    let field = |name: &str| {
+        route_get.lines().find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            (key.trim() == name).then(|| value.trim().to_string())
+        })
+    };
+    field("mask").as_deref() == Some("128.0.0.0") && field("interface").as_deref() == Some(TUN_NAME)
+}
+
+async fn delete_half_default_if_ours(half: &str) {
+    let out = Command::new("/sbin/route")
+        .args(["-n", "get", "-net", half])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .await;
+    // "not in table" (no such route) exits non-zero: nothing to delete.
+    let ours = out
+        .ok()
+        .filter(|o| o.status.success())
+        .is_some_and(|o| half_default_is_ours(&String::from_utf8_lossy(&o.stdout)));
+    if ours {
+        let _ = run_cmd("/sbin/route", &["-n", "delete", "-net", half]).await;
+    }
+}
+
+fn delete_half_default_if_ours_sync(half: &str) {
+    use std::process::Command as SyncCommand;
+
+    let ours = SyncCommand::new("/sbin/route")
+        .args(["-n", "get", "-net", half])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .is_some_and(|o| half_default_is_ours(&String::from_utf8_lossy(&o.stdout)));
+    if ours {
+        let _ = SyncCommand::new("/sbin/route")
+            .args(["-n", "delete", "-net", half])
+            .status();
+    }
+}
+
 pub async fn stop(state: &SharedTunState) -> Result<(), AppError> {
     let mut guard = state.lock().await;
     // DNS back to the real network FIRST, while the tunnel still carries
@@ -579,8 +662,10 @@ pub async fn stop(state: &SharedTunState) -> Result<(), AppError> {
     guard.dns = None;
     let server_ip = guard.server_ip.take();
 
-    let _ = run_cmd("/sbin/route", &["-n", "delete", "-net", "0.0.0.0/1"]).await;
-    let _ = run_cmd("/sbin/route", &["-n", "delete", "-net", "128.0.0.0/1"]).await;
+    // Only our own: see `half_default_is_ours`.
+    for half in HALF_DEFAULTS {
+        delete_half_default_if_ours(half).await;
+    }
     if let Some(ref ip) = server_ip {
         delete_host_route(ip).await;
     }
@@ -641,28 +726,44 @@ pub fn forget_route_hint() {
     let _ = std::fs::remove_file(ROUTE_HINT_PATH);
 }
 
+fn effective_uid() -> u32 {
+    // SAFETY: geteuid(2) has no preconditions and cannot fail.
+    unsafe { libc::geteuid() }
+}
+
+/// The route hint is ours only when it is a plain file of our own effective
+/// user that nobody else may read or write — what `write_private_file`
+/// creates (0600).
+fn route_hint_is_trusted(is_file: bool, uid: u32, mode: u32, euid: u32) -> bool {
+    is_file && uid == euid && mode & 0o077 == 0
+}
+
 /// Remove routes a previous run left behind. Synchronous on purpose: it runs
 /// at startup and on signals, where there is no runtime to await on.
 pub fn purge_stale_routes() {
     use std::process::Command as SyncCommand;
 
-    let _ = SyncCommand::new("/sbin/route")
-        .args(["-n", "delete", "-net", "0.0.0.0/1"])
-        .status();
-    let _ = SyncCommand::new("/sbin/route")
-        .args(["-n", "delete", "-net", "128.0.0.0/1"])
-        .status();
+    // Only our own: this runs at every launch and quit, while another VPN
+    // may be up (`half_default_is_ours`).
+    for half in HALF_DEFAULTS {
+        delete_half_default_if_ours_sync(half);
+    }
     let _ = SyncCommand::new("/sbin/ifconfig")
         .args([TUN_NAME, "down"])
         .status();
 
-    // Only a plain file is believed: a symlink in its place was not written by
-    // us (`persist_route_hint` never writes through one), so it is removed
-    // unread rather than followed by root.
-    let is_plain_file = std::fs::symlink_metadata(ROUTE_HINT_PATH)
-        .map(|m| m.file_type().is_file())
+    // Only our own file is believed: a symlink in its place, or a file another
+    // account left in the world-writable /tmp, was not written by
+    // `persist_route_hint`. Read anyway, it would have root delete host routes
+    // for whatever addresses another user listed (their VPN's server, the
+    // gateway). Removed unread instead.
+    let trusted = std::fs::symlink_metadata(ROUTE_HINT_PATH)
+        .map(|m| {
+            use std::os::unix::fs::MetadataExt;
+            route_hint_is_trusted(m.file_type().is_file(), m.uid(), m.mode(), effective_uid())
+        })
         .unwrap_or(false);
-    if !is_plain_file {
+    if !trusted {
         let _ = std::fs::remove_file(ROUTE_HINT_PATH);
         return;
     }
@@ -714,6 +815,34 @@ default            192.168.1.1        UGScg                 en0
 128.0/1            utun225            USc                 utun225
 198.18.0.1         198.18.0.1         UH                  utun225
 ";
+
+    /// `route -n get -net 0.0.0.0/1` while our tunnel is up, while another
+    /// VPN's def1 route holds it, and for the other half.
+    #[test]
+    fn only_our_half_default_is_ours_to_delete() {
+        let ours = "   route to: 0.0.0.0\ndestination: 0.0.0.0\n       mask: 128.0.0.0\n  interface: utun225\n      flags: <UP,DONE,STATIC>\n";
+        let high = "   route to: 128.0.0.0\ndestination: 128.0.0.0\n       mask: 128.0.0.0\n  interface: utun225\n      flags: <UP,DONE,STATIC>\n";
+        let tunnelblick = "   route to: 0.0.0.0\ndestination: 0.0.0.0\n       mask: 128.0.0.0\n    gateway: 10.8.0.1\n  interface: utun4\n      flags: <UP,GATEWAY,DONE,STATIC>\n";
+        let default = "   route to: default\ndestination: default\n       mask: default\n    gateway: 192.168.1.1\n  interface: en0\n";
+        assert!(half_default_is_ours(ours));
+        assert!(half_default_is_ours(high));
+        assert!(!half_default_is_ours(tunnelblick), "another VPN's def1 route stays");
+        assert!(!half_default_is_ours(default));
+        assert!(!half_default_is_ours(""));
+        // Same name, longer: utun2250 is not utun225.
+        assert!(!half_default_is_ours(&ours.replace("utun225", "utun2250")));
+    }
+
+    /// Another account on the Mac can leave a file at the fixed /tmp name;
+    /// root must not delete host routes for the addresses it lists.
+    #[test]
+    fn only_our_own_private_route_hint_is_believed() {
+        assert!(route_hint_is_trusted(true, 0, 0o100600, 0));
+        assert!(!route_hint_is_trusted(true, 501, 0o100600, 0), "another user's file");
+        assert!(!route_hint_is_trusted(true, 0, 0o100644, 0), "readable by others");
+        assert!(!route_hint_is_trusted(true, 0, 0o100606, 0), "writable by others");
+        assert!(!route_hint_is_trusted(false, 0, 0o120600, 0), "a link");
+    }
 
     #[test]
     fn the_physical_default_is_found_under_our_own_tunnel() {

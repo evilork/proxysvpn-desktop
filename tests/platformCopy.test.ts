@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { makeT } from "../src/i18n.ts";
-import { dnsNoticeKey, tunnelHintKeys } from "../src/platformCopy.ts";
+import { dnsNoticeKey, offersIpFamilyChoice, tunnelHintKeys } from "../src/platformCopy.ts";
 
 test("iOS names the Apple engine's resolvers, every build", () => {
   assert.equal(dnsNoticeKey("ios", true), "notice.dns.apple");
@@ -53,4 +53,18 @@ test("the Tunnel screen says on Windows that its DNS and IP choices stay inside 
     assert.notEqual(t("tun.ipHintWindows"), t("tun.ipHint"), lang);
     assert.notEqual(t("tun.dnsHintWindows"), t("tun.dnsHint"), lang);
   }
+});
+
+// No desktop tunnel carries IPv6 (macOS and Linux route only 0.0.0.0/1 and
+// 128.0.0.0/1), so "IPv6" / "Both" could only hand AAAA records to the system
+// resolver and send a dual-stack network's traffic outside the VPN.
+test("no platform offers the IPv6 / Both choice while no tunnel carries IPv6", () => {
+  for (const platform of ["macos", "linux", "windows", "ios", "other", undefined] as const) {
+    assert.equal(offersIpFamilyChoice(platform), false, String(platform));
+  }
+});
+
+test("the desktop data notice says the tunnel does not carry IPv6", () => {
+  assert.match(makeT("ru")("notice.dns.desktop"), /IPv6/);
+  assert.match(makeT("en")("notice.dns.desktop"), /IPv6/);
 });

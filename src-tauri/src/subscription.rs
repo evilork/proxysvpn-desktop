@@ -455,8 +455,15 @@ fn build_client() -> Option<reqwest::Client> {
 /// own signed `hosts`, MANIFEST-v1.md rule 4) not already in the list.
 /// Case-insensitive de-duplication; order otherwise preserved. `extra` is
 /// empty for the subscription fetch, which is exactly today's list.
+///
+/// Only a link on one of our own sites gets the ladder. A link of another
+/// service had its token sent to all four of our sites whenever its own host
+/// was slow, and a 404 from one of them ended the ladder as "no devices".
 fn ladder_hosts(primary_host: &str, extra: &[String]) -> Vec<String> {
     let mut hosts = vec![primary_host.to_string()];
+    if !RESERVE_HOSTS.iter().any(|ours| ours.eq_ignore_ascii_case(primary_host)) {
+        return hosts;
+    }
     for host in RESERVE_HOSTS {
         if !hosts.iter().any(|h| h.eq_ignore_ascii_case(host)) {
             hosts.push((*host).to_string());
@@ -483,7 +490,14 @@ fn ladder_hosts(primary_host: &str, extra: &[String]) -> Vec<String> {
 /// of a server-side setting we do not control.
 ///
 /// `routing=inline` — see `parse_routing_line`.
-fn candidate_urls(sub_url: &str) -> Result<Vec<String>, AppError> {
+///
+/// `lang=en` — added only when the window is English and the link carries no
+/// `lang` of its own. The service writes its refusals ("link taken by another
+/// device", "no funds", the reserve notice) in the language the request asks
+/// for, Russian by default; the window shows that text under its own,
+/// translated heading, so an English window used to show the one sentence
+/// with the actual cure in Russian.
+fn candidate_urls(sub_url: &str, lang_en: bool) -> Result<Vec<String>, AppError> {
     let trimmed = sub_url.trim();
     if trimmed.is_empty() {
         return Err(AppError::new(ErrorCode::NoSubscription));
@@ -496,8 +510,11 @@ fn candidate_urls(sub_url: &str) -> Result<Vec<String>, AppError> {
     if primary.host_str().is_none() {
         return Err(AppError::new(ErrorCode::SubMalformed));
     }
+    // The token in the path is the account's credential: never in clear
+    // text, not even for a link stored before http:// was refused.
+    upgrade_to_https(&mut primary)?;
 
-    force_query(&mut primary);
+    force_query(&mut primary, lang_en.then_some("en"));
 
     let primary_host = primary.host_str().unwrap_or_default().to_ascii_lowercase();
     let mut urls = vec![primary.to_string()];
@@ -523,10 +540,11 @@ fn manifest_urls(sub_url: &str, extra_hosts: &[String]) -> Result<Vec<String>, A
     if trimmed.is_empty() {
         return Err(AppError::new(ErrorCode::NoSubscription));
     }
-    let primary = Url::parse(trimmed).map_err(|_| AppError::new(ErrorCode::SubMalformed))?;
+    let mut primary = Url::parse(trimmed).map_err(|_| AppError::new(ErrorCode::SubMalformed))?;
     if !matches!(primary.scheme(), "http" | "https") {
         return Err(AppError::new(ErrorCode::SubMalformed));
     }
+    upgrade_to_https(&mut primary)?;
     let primary_host = primary
         .host_str()
         .ok_or_else(|| AppError::new(ErrorCode::SubMalformed))?
@@ -547,6 +565,20 @@ fn manifest_urls(sub_url: &str, extra_hosts: &[String]) -> Result<Vec<String>, A
         return Err(AppError::new(ErrorCode::SubMalformed));
     }
     Ok(urls)
+}
+
+/// `http://` becomes `https://` (and a port that only made sense for plain
+/// HTTP is dropped). Every site of ours serves https; the token in the path
+/// must not cross a network in clear text, where anyone on the way could read
+/// it and rewrite the unsigned answer.
+fn upgrade_to_https(url: &mut Url) -> Result<(), AppError> {
+    if url.scheme() == "http" {
+        if url.port() == Some(80) {
+            url.set_port(None).map_err(|()| AppError::new(ErrorCode::SubMalformed))?;
+        }
+        url.set_scheme("https").map_err(|()| AppError::new(ErrorCode::SubMalformed))?;
+    }
+    Ok(())
 }
 
 /// The token of the person's subscription link: the last path segment of
@@ -578,17 +610,22 @@ fn subscription_token(sub_url: &str) -> Option<String> {
 /// `lang` and `split` are the person's own choices and are never touched: the
 /// first decides the language of the texts the server writes, the second is
 /// how someone abroad turns split routing off.
-fn force_query(url: &mut Url) {
+fn force_query(url: &mut Url, ui_lang: Option<&str>) {
     let kept: Vec<(String, String)> = url
         .query_pairs()
         .filter(|(k, _)| k != "format" && k != "routing")
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
         .collect();
+    let has_lang = kept.iter().any(|(k, _)| k == "lang");
 
     let mut qs = url.query_pairs_mut();
     qs.clear();
     for (k, v) in kept {
         qs.append_pair(&k, &v);
+    }
+    // The person's own `lang` always wins; the window's is only a default.
+    if let (false, Some(lang)) = (has_lang, ui_lang) {
+        qs.append_pair("lang", lang);
     }
     qs.append_pair("format", "vless");
     qs.append_pair("routing", "inline");
@@ -701,10 +738,10 @@ type Headers = HashMap<String, String>;
 /// Russian — see `manifest::build_location`.
 pub async fn fetch_subscription(sub_url: &str, lang_en: bool) -> Result<Subscription, AppError> {
     if !manifest::manifest_enabled() {
-        return fetch_subscription_only(sub_url).await;
+        return fetch_subscription_only(sub_url, lang_en).await;
     }
     let (sub_result, manifest_result) = tokio::join!(
-        fetch_subscription_only(sub_url),
+        fetch_subscription_only(sub_url, lang_en),
         fetch_manifest_servers(sub_url, lang_en)
     );
     manifest::merge(sub_result, manifest_result)
@@ -713,8 +750,8 @@ pub async fn fetch_subscription(sub_url: &str, lang_en: bool) -> Result<Subscrip
 /// Today's fetch, unchanged — pulled out of `fetch_subscription` so the
 /// manifest branch above can run it CONCURRENTLY with
 /// `fetch_manifest_servers` instead of after it.
-async fn fetch_subscription_only(sub_url: &str) -> Result<Subscription, AppError> {
-    let urls = candidate_urls(sub_url)?;
+async fn fetch_subscription_only(sub_url: &str, lang_en: bool) -> Result<Subscription, AppError> {
+    let urls = candidate_urls(sub_url, lang_en)?;
     let answer = race_hosts(&urls).await?;
 
     let parsed = interpret_response(
@@ -800,7 +837,7 @@ pub async fn fetch_all_servers(sub_url: &str, lang_en: bool) -> Result<Vec<Serve
 /// came back did not verify AND nothing usable was cached either. Every one
 /// of those leaves `fetch_subscription`'s result exactly what
 /// `fetch_subscription_only` produced — see `manifest::merge`.
-async fn fetch_manifest_servers(sub_url: &str, lang_en: bool) -> Option<(Vec<ServerConfig>, String)> {
+async fn fetch_manifest_servers(sub_url: &str, lang_en: bool) -> Option<manifest::ManifestPick> {
     let token = subscription_token(sub_url)?;
     let token_hash = manifest::token_hash_hex(&token);
     let now_ms = now_millis();
@@ -820,7 +857,17 @@ async fn fetch_manifest_servers(sub_url: &str, lang_en: bool) -> Option<(Vec<Ser
         .unwrap_or_default();
     let highest = manifest::highest_known_version(&token_hash);
 
-    let fresh = fetch_fresh_manifest(sub_url, &extra_hosts, &token, &token_hash, highest, now_ms).await;
+    let fresh = match fetch_fresh_manifest(sub_url, &extra_hosts, &token, &token_hash, highest, now_ms).await {
+        FreshManifest::Got(verified, host) => Some((verified, host)),
+        FreshManifest::Failed => None,
+        FreshManifest::Refused => {
+            // 403 second device / 404 unknown or deleted: the endpoint's own
+            // final answer about this token. A cached list must not outlive
+            // it (it used to, for up to eight days).
+            manifest::forget_cached();
+            return None;
+        }
+    };
     let from_cache = fresh.is_none() && cached.is_some();
 
     let (verified, host) = fresh.or(cached)?;
@@ -852,12 +899,22 @@ async fn fetch_manifest_servers(sub_url: &str, lang_en: bool) -> Option<(Vec<Ser
             host
         ),
     );
-    Some((servers, host))
+    Some(manifest::ManifestPick { servers, host, from_cache })
+}
+
+/// What one round of the manifest's own ladder produced.
+enum FreshManifest {
+    /// A fresh, verified manifest and the site that served it.
+    Got(manifest::Verified, String),
+    /// The endpoint's final "no" for this token (403 second device, 404
+    /// unknown or deleted).
+    Refused,
+    /// Anything else: unreachable, 429/5xx, an empty body, a failed check.
+    Failed,
 }
 
 /// The live half of `fetch_manifest_servers`: race the manifest's own ladder
-/// and verify what a 200 brings back. `None` on anything short of a fresh,
-/// valid manifest — the caller falls back to the cache in that case.
+/// and verify what a 200 brings back.
 async fn fetch_fresh_manifest(
     sub_url: &str,
     extra_hosts: &[String],
@@ -865,14 +922,20 @@ async fn fetch_fresh_manifest(
     token_hash: &str,
     highest_known_version: Option<u64>,
     now_ms: u64,
-) -> Option<(manifest::Verified, String)> {
-    let urls = manifest_urls(sub_url, extra_hosts).ok()?;
-    let answer = race_hosts(&urls).await.ok()?;
+) -> FreshManifest {
+    let Ok(urls) = manifest_urls(sub_url, extra_hosts) else {
+        return FreshManifest::Failed;
+    };
+    let Ok(answer) = race_hosts(&urls).await else {
+        return FreshManifest::Failed;
+    };
+    if matches!(answer.status(), 403 | 404) {
+        return FreshManifest::Refused;
+    }
     if answer.status() != 200 || answer.body().trim().is_empty() {
-        // 404 (unknown token) and 403 (second device) are final and correct
-        // to stop on; 429/5xx already exhausted the whole ladder inside
-        // `race_hosts` before landing here. Either way: no fresh manifest.
-        return None;
+        // 429/5xx already exhausted the whole ladder inside `race_hosts`
+        // before landing here: no fresh manifest, the cache may stand in.
+        return FreshManifest::Failed;
     }
     match manifest::verify_envelope(
         answer.body().as_bytes(),
@@ -888,7 +951,7 @@ async fn fetch_fresh_manifest(
                 answer.body().to_string(),
                 answer.host().to_string(),
             );
-            Some((verified, answer.host().to_string()))
+            FreshManifest::Got(verified, answer.host().to_string())
         }
         Err(reason) => {
             // Reason only, never the bytes that produced it.
@@ -897,7 +960,7 @@ async fn fetch_fresh_manifest(
                 "watafast-manifest",
                 &format!("манифест отклонён: {reason:?}"),
             );
-            None
+            FreshManifest::Failed
         }
     }
 }
@@ -1666,6 +1729,12 @@ pub fn parse_hy2_url(raw: &str) -> Result<Hy2Config, AppError> {
         sni = host.clone();
     }
     let sni = clean_sni(&sni);
+    // A fingerprint is hex, optionally colon-separated. `query_pairs` decodes
+    // percent-escapes, so anything else (a %0A above all) is not a pin but an
+    // attempt to write into the hysteria config: the line is unreadable.
+    if !pin_sha256.bytes().all(|b| b.is_ascii_hexdigit() || b == b':') {
+        return Err(malformed());
+    }
     // With a certificate pin the fingerprint IS the verification, and the
     // standard x509 check only breaks the self-signed certificates our nodes
     // use. `insecure` is safe here precisely because the pin is present.
@@ -2063,7 +2132,9 @@ pub(crate) fn build_xray_config_around(
             // IPv6-выхода у наших узлов нет ни на одном (проверено по флоту
             // 07.09.2026), поэтому запрос AAAA - гарантированное ожидание
             // впустую на каждом имени.
-            "queryStrategy": prefs.ip_kind.query_strategy(),
+            // On desktop always UseIPv4, whatever is stored: see
+            // `IpKind::effective` for the leak "IPv6"/"Both" opened there.
+            "queryStrategy": prefs.ip_kind.effective().query_strategy(),
             // Гонка, не очередь. Без этого поля список из двух резолверов
             // (DoH к 1.1.1.1, TCP к 8.8.8.8) xray спрашивает ПО ОЧЕРЕДИ:
             // первый получает весь свой `timeoutMs`, и только после отказа
@@ -2697,7 +2768,7 @@ mod tests {
 
     #[test]
     fn the_ladder_keeps_the_path_and_the_token() {
-        let urls = candidate_urls("https://proxysvpn.com/api/sub/abcdef0123456789").unwrap();
+        let urls = candidate_urls("https://proxysvpn.com/api/sub/abcdef0123456789", false).unwrap();
         assert!(urls.len() >= 4);
         for url in &urls {
             assert!(
@@ -2714,7 +2785,7 @@ mod tests {
     #[test]
     fn a_link_already_on_a_reserve_does_not_repeat_it() {
         let urls =
-            candidate_urls("https://proxysvnovich.vercel.app/api/sub/token12345678").unwrap();
+            candidate_urls("https://proxysvnovich.vercel.app/api/sub/token12345678", false).unwrap();
         let first_hosts: Vec<String> = urls
             .iter()
             .filter_map(|u| Url::parse(u).ok()?.host_str().map(str::to_string))
@@ -2730,13 +2801,53 @@ mod tests {
     #[test]
     fn the_persons_own_query_survives_and_ours_wins() {
         let urls =
-            candidate_urls("https://proxysvpn.com/api/sub/tok12345?split=0&lang=en&format=xray")
+            candidate_urls("https://proxysvpn.com/api/sub/tok12345?split=0&lang=en&format=xray", false)
                 .unwrap();
         let first = &urls[0];
         assert!(first.contains("split=0"), "{first}");
         assert!(first.contains("lang=en"), "{first}");
         assert!(first.contains("format=vless"), "{first}");
         assert!(!first.contains("format=xray"), "{first}");
+    }
+
+    /// The token is the account's credential: it never travels in clear text,
+    /// and a link of another service is never sent to our sites.
+    #[test]
+    fn the_ladder_is_https_only_and_ours_only() {
+        let urls = candidate_urls("http://proxysvpn.com/api/sub/tok12345", false).unwrap();
+        assert!(urls.len() > 1, "our link keeps the reserves");
+        assert!(urls.iter().all(|u| u.starts_with("https://")), "{urls:?}");
+
+        let foreign = candidate_urls("https://vpn.example.org/sub/tok12345", false).unwrap();
+        assert_eq!(foreign.len(), 1, "{foreign:?}");
+        assert!(foreign[0].starts_with("https://vpn.example.org/"));
+
+        let manifest = manifest_urls("http://proksya.xyz/api/sub/tok12345", &[]).unwrap();
+        assert!(manifest.iter().all(|u| u.starts_with("https://")), "{manifest:?}");
+        let foreign_manifest = manifest_urls("https://vpn.example.org/sub/tok12345", &[]).unwrap();
+        assert_eq!(foreign_manifest.len(), 1);
+    }
+
+    /// The service writes its refusals in the language the request asks for;
+    /// an English window asks for English unless the link already says.
+    #[test]
+    fn an_english_window_asks_for_english_texts_unless_the_link_says_otherwise() {
+        let en = candidate_urls("https://proxysvpn.com/api/sub/tok12345", true).unwrap();
+        assert!(en.iter().all(|u| u.contains("lang=en")), "{en:?}");
+
+        let ru = candidate_urls("https://proxysvpn.com/api/sub/tok12345", false).unwrap();
+        assert!(ru.iter().all(|u| !u.contains("lang=")), "{ru:?}");
+
+        let own = candidate_urls("https://proxysvpn.com/api/sub/tok12345?lang=ru", true).unwrap();
+        assert!(own[0].contains("lang=ru") && !own[0].contains("lang=en"), "{}", own[0]);
+    }
+
+    #[test]
+    fn a_pin_that_is_not_hex_makes_the_hy2_line_unreadable() {
+        let ok = "hy2://pw@nl.example.net:443/?sni=a.example&pinSHA256=AA%3ABB%3Acc#NL";
+        assert_eq!(parse_hy2_url(ok).expect("hex pin").pin_sha256, "AA:BB:cc");
+        let injected = "hy2://pw@nl.example.net:443/?sni=a.example&pinSHA256=AA%0Asocks5%3A%0A%20%20listen%3A%200.0.0.0%3A1080#NL";
+        assert!(parse_hy2_url(injected).is_err());
     }
 
     #[test]
@@ -2766,19 +2877,19 @@ mod tests {
     #[test]
     fn a_link_that_is_not_ours_is_refused_before_any_request() {
         assert_eq!(
-            candidate_urls("").expect_err("empty").code,
+            candidate_urls("", false).expect_err("empty").code,
             ErrorCode::NoSubscription
         );
         assert_eq!(
-            candidate_urls("   ").expect_err("blank").code,
+            candidate_urls("   ", false).expect_err("blank").code,
             ErrorCode::NoSubscription
         );
         assert_eq!(
-            candidate_urls("not a url").expect_err("garbage").code,
+            candidate_urls("not a url", false).expect_err("garbage").code,
             ErrorCode::SubMalformed
         );
         assert_eq!(
-            candidate_urls("ftp://proxysvpn.com/api/sub/x").expect_err("scheme").code,
+            candidate_urls("ftp://proxysvpn.com/api/sub/x", false).expect_err("scheme").code,
             ErrorCode::SubMalformed
         );
     }
@@ -3516,10 +3627,17 @@ mod tests {
             &TunnelPrefs { dns: DnsChoice::System, ..Default::default() });
         assert_eq!(system["dns"]["servers"][0], "localhost");
 
+        // Desktop: no tunnel carries IPv6 yet, so a stored "Both" (or "IPv6")
+        // must not hand AAAA records to the system resolver — that sent
+        // nearly all traffic of a dual-stack network outside the tunnel.
         let both = build_xray_config_with_routing_and_prefs(
             &vless_fixture(), None,
             &TunnelPrefs { ip_kind: IpKind::Both, ..Default::default() });
-        assert_eq!(both["dns"]["queryStrategy"], "UseIP");
+        assert_eq!(both["dns"]["queryStrategy"], "UseIPv4");
+        let v6 = build_xray_config_with_routing_and_prefs(
+            &vless_fixture(), None,
+            &TunnelPrefs { ip_kind: IpKind::Ipv6, ..Default::default() });
+        assert_eq!(v6["dns"]["queryStrategy"], "UseIPv4");
 
         let own = build_xray_config_with_routing_and_prefs(
             &vless_fixture(), None,

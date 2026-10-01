@@ -377,7 +377,7 @@ const ru = {
     "Без него приложение не может направить интернет через защищённое соединение. Нажмите «Повторить» и разрешите в системном окне.",
   "err.ELEVATION_UNAVAILABLE.title": "Системе нечем выдать права",
   "err.ELEVATION_UNAVAILABLE.body":
-    "Туннелю нужны права администратора, а запросить их здесь нечем: нет pkexec (polkit) или приложение запущено из AppImage. Установите приложение пакетом .deb — он поставит всё нужное.",
+    "Туннелю нужны права администратора, а запросить их здесь нечем: нет pkexec (polkit), в сеансе не запущен агент авторизации polkit (так бывает в i3, sway, Openbox) или приложение запущено из AppImage. Установите приложение пакетом .deb и запустите агент polkit (например, polkit-gnome или lxpolkit) или войдите в полноценный рабочий стол.",
   "err.ENGINE_START_FAILED.title": "Соединение не запустилось",
   "err.ENGINE_START_FAILED.body":
     "Внутренняя часть приложения не поднялась. Обычно помогает повторное нажатие.",
@@ -596,7 +596,7 @@ const ru = {
   "notice.dns.apple":
     "Имена сайтов разрешает Cloudflare по DNS-over-HTTPS — через VPN-сервер. Имена сайтов, которые открываются напрямую (российских и тех, что вы внесли в «Всегда напрямую»), разрешает публичный DNS Яндекса, мимо VPN. Адрес самого VPN-сервера приложение узнаёт через DNS вашей сети.",
   "notice.dns.desktop":
-    "Имена сайтов разрешают Cloudflare и Google — запросы к ним идут через VPN-сервер. В настройках туннеля можно выбрать системный или свой резолвер.",
+    "Имена сайтов разрешают Cloudflare и Google — запросы к ним идут через VPN-сервер. В настройках туннеля можно выбрать системный или свой резолвер. Туннель пока несёт только IPv4: если ваша сеть даёт IPv6, программы, которые соединяются по IPv6-адресу сами (звонки в браузере, приложения со своим DNS), могут ходить мимо VPN.",
   // Windows leaves the system resolver alone and its tunnel is IPv4 only
   // (src/platformCopy.ts): the desktop sentence above would be false there.
   "notice.dns.windows":
@@ -930,7 +930,7 @@ const en: Partial<Record<MsgKey, string>> = {
     "Without it we cannot route the internet through a secure connection. Tap Retry and allow it in the system dialog.",
   "err.ELEVATION_UNAVAILABLE.title": "This system cannot grant the rights",
   "err.ELEVATION_UNAVAILABLE.body":
-    "The tunnel needs administrator rights, and there is no way to ask for them here: pkexec (polkit) is missing, or the app runs from an AppImage. Install the app from the .deb package — it brings everything it needs.",
+    "The tunnel needs administrator rights, and there is no way to ask for them here: pkexec (polkit) is missing, no polkit authentication agent runs in this session (common in i3, sway, Openbox), or the app runs from an AppImage. Install the app from the .deb package and start a polkit agent (for example polkit-gnome or lxpolkit), or log in to a full desktop session.",
   "err.ENGINE_START_FAILED.title": "The connection did not start",
   "err.ENGINE_START_FAILED.body":
     "The internal part did not come up. Tapping again usually helps.",
@@ -1111,7 +1111,7 @@ const en: Partial<Record<MsgKey, string>> = {
   "notice.dns.apple":
     "Site names are resolved by Cloudflare over DNS-over-HTTPS, through the VPN server. Names of sites that open directly (Russian ones and those on your “Always direct” list) are resolved by Yandex public DNS, outside the VPN. The app looks up the VPN server's own address through your network's DNS.",
   "notice.dns.desktop":
-    "Site names are resolved by Cloudflare and Google, asked through the VPN server. Tunnel settings let you pick the system resolver or one of your own.",
+    "Site names are resolved by Cloudflare and Google, asked through the VPN server. Tunnel settings let you pick the system resolver or one of your own. The tunnel carries IPv4 only for now: if your network offers IPv6, programs that connect to an IPv6 address on their own (calls in the browser, apps with their own DNS) may go outside the VPN.",
   "notice.dns.windows":
     "On Windows the app does not yet send the system DNS into the tunnel: site names are resolved by your network's DNS (usually your router or provider), and those lookups may go outside the VPN. If your network offers IPv6, sites with an IPv6 address may open outside the VPN too.",
   "notice.noActivityLogs": "We do not record which sites you open.",

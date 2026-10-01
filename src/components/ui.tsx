@@ -18,6 +18,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { createEscapeStack } from "../escapeStack";
 import type { Lang, Translate } from "../i18n";
 
 /** What [12] offers under "Оформление". "system" is the default and the norm. */
@@ -79,22 +80,34 @@ export function useNow(intervalMs: number): number {
   return now;
 }
 
+/** One stack for the whole window: see src/escapeStack.ts. */
+const ESCAPE = createEscapeStack();
+let escapeListening = false;
+
+function onEscapeKey(event: KeyboardEvent): void {
+  if (ESCAPE.handle(event.key)) event.stopPropagation();
+}
+
 /**
- * Esc closes whatever is on top. Registered per overlay, removed on unmount.
- * A screen with nowhere to go back to passes `undefined` and keeps the key.
+ * Esc closes whatever is on top — only that. Registered when an overlay
+ * mounts, removed on unmount; the layer keeps its place in the stack while
+ * its `onClose` changes identity between renders. A screen with nowhere to go
+ * back to passes `undefined` and keeps the key.
  */
 function useEscape(onClose: (() => void) | undefined): void {
+  const latest = useRef(onClose);
   useEffect(() => {
-    if (!onClose) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    latest.current = onClose;
+  });
+  const enabled = onClose !== undefined;
+  useEffect(() => {
+    if (!enabled) return;
+    if (!escapeListening) {
+      window.addEventListener("keydown", onEscapeKey);
+      escapeListening = true;
+    }
+    return ESCAPE.push(() => latest.current?.());
+  }, [enabled]);
 }
 
 // ── Icons ───────────────────────────────────────────────────────────────────

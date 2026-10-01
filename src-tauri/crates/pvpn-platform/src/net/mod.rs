@@ -267,9 +267,64 @@ pub fn format_route_hint(pid: u32, server_ip: Ipv4Addr) -> String {
     format!("pid={}\nserver_ip={}\n", pid, server_ip)
 }
 
+/// The Linux helper's hint: the same two lines plus the pid of the tun2socks
+/// it started, so a crash sweep can stop exactly that process instead of
+/// every root `tun2socks` on the machine (another VPN client's included).
+/// `parse_route_hint` ignores the extra line.
+pub fn format_route_hint_with_engine(pid: u32, server_ip: Ipv4Addr, engine_pid: u32) -> String {
+    format!("{}engine_pid={}\n", format_route_hint(pid, server_ip), engine_pid)
+}
+
+/// The engine pids a hint records. Only pids above 1: 0, 1 and negatives
+/// mean "a group", "init" or "everyone" to kill(2).
+pub fn parse_engine_pids(contents: &str) -> Vec<u32> {
+    contents
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("engine_pid="))
+        .filter_map(|pid| pid.trim().parse::<u32>().ok())
+        .filter(|pid| *pid > 1)
+        .collect()
+}
+
+/// Is `exe` (the target of `/proc/<pid>/exe`) the helper's own tun2socks:
+/// a file called tun2socks (or tun2socks-<triple> in a dev checkout) in the
+/// helper's own directory? A pid from an old hint may have been reused by
+/// anything since.
+pub fn is_own_engine_image(exe: &std::path::Path, own_dir: &std::path::Path) -> bool {
+    exe.parent() == Some(own_dir)
+        && exe
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n == TUNNEL_ENGINE || n.starts_with(&format!("{TUNNEL_ENGINE}-")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_linux_hint_names_its_engine_and_old_readers_still_work() {
+        let hint = format_route_hint_with_engine(4242, Ipv4Addr::new(203, 0, 113, 7), 4343);
+        assert_eq!(parse_route_hint(&hint), vec![Ipv4Addr::new(203, 0, 113, 7)]);
+        assert_eq!(parse_engine_pids(&hint), vec![4343]);
+        assert!(parse_engine_pids("engine_pid=0\nengine_pid=1\nengine_pid=-1\nengine_pid=x\n").is_empty());
+        assert!(parse_engine_pids(&format_route_hint(1, Ipv4Addr::new(203, 0, 113, 7))).is_empty());
+    }
+
+    /// The crash sweep stops only our own tun2socks: the image must be ours,
+    /// from our own directory, not another client's tun2socks.
+    #[test]
+    fn only_our_own_tun2socks_image_is_ours() {
+        let own = std::path::Path::new("/usr/bin");
+        assert!(is_own_engine_image(std::path::Path::new("/usr/bin/tun2socks"), own));
+        assert!(is_own_engine_image(
+            std::path::Path::new("/usr/bin/tun2socks-x86_64-unknown-linux-gnu"),
+            own
+        ));
+        assert!(!is_own_engine_image(std::path::Path::new("/opt/amnezia/tun2socks"), own));
+        assert!(!is_own_engine_image(std::path::Path::new("/usr/bin/bash"), own));
+        assert!(!is_own_engine_image(std::path::Path::new("/usr/bin/tun2socksd"), own));
+    }
 
     #[test]
     fn teardown_removes_routes_before_the_device_disappears() {

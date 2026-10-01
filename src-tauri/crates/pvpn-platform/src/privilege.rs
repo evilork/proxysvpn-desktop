@@ -93,6 +93,21 @@ pub enum ElevationUnavailable {
     /// nobody but the user who mounted it execute from there, root included,
     /// so pkexec would ask for the password and then fail to start the helper.
     FuseMount,
+    /// pkexec is installed but the session runs no polkit authentication
+    /// agent (i3, sway, Openbox and other minimal sessions): there is no
+    /// window in which the person could allow anything, so "Retry" can only
+    /// fail the same way.
+    NoAgent,
+}
+
+/// What a pkexec that exited before the helper answered says about this
+/// machine: `Some` when no dialog could have succeeded.
+///
+/// pkexec(1) exits 127 both for "not authorized" and for "could not ask at
+/// all", so the exit code alone is not enough: only its own stderr line
+/// ("No authentication agent found") tells the second case apart.
+pub fn pkexec_unavailable(exit: Option<i32>, stderr: &str) -> Option<ElevationUnavailable> {
+    (exit == Some(127) && stderr.contains("No authentication agent")).then_some(ElevationUnavailable::NoAgent)
 }
 
 impl std::fmt::Display for ElevationUnavailable {
@@ -103,6 +118,9 @@ impl std::fmt::Display for ElevationUnavailable {
             }
             Self::FuseMount => {
                 "приложение запущено из AppImage, а root не может запустить файл из её монтирования — установите пакет .deb"
+            }
+            Self::NoAgent => {
+                "в сеансе нет агента авторизации polkit, окну пароля негде появиться — запустите агент (например, polkit-gnome или lxpolkit) или войдите в полноценный рабочий стол"
             }
         })
     }
@@ -217,7 +235,11 @@ mod tests {
     /// layer wraps around it on the way up.
     #[test]
     fn an_unavailable_elevation_is_found_through_context() {
-        for reason in [ElevationUnavailable::NoPkexec, ElevationUnavailable::FuseMount] {
+        for reason in [
+            ElevationUnavailable::NoPkexec,
+            ElevationUnavailable::FuseMount,
+            ElevationUnavailable::NoAgent,
+        ] {
             let err = anyhow::Error::new(reason)
                 .context("spawn the privileged helper")
                 .context("preflight");
@@ -226,6 +248,19 @@ mod tests {
         }
         let refused = anyhow::anyhow!("запрос прав отменён");
         assert!(!is_elevation_unavailable(&refused));
+    }
+
+    /// Exit 127 with pkexec's own "no agent" line is a machine that cannot
+    /// ask; 127 without it (a refusal, a wrong password) and 126 (the dialog
+    /// was dismissed) are the person's answer.
+    #[test]
+    fn only_a_missing_agent_makes_pkexec_unavailable() {
+        let no_agent = "Error executing command as another user: No authentication agent found.";
+        assert_eq!(pkexec_unavailable(Some(127), no_agent), Some(ElevationUnavailable::NoAgent));
+        assert_eq!(pkexec_unavailable(Some(127), "Error executing command as another user: Not authorized"), None);
+        assert_eq!(pkexec_unavailable(Some(126), no_agent), None);
+        assert_eq!(pkexec_unavailable(None, no_agent), None);
+        assert!(ElevationUnavailable::NoAgent.to_string().contains("polkit"));
     }
 
     /// The AppImage text sends the person to the package that works, and the

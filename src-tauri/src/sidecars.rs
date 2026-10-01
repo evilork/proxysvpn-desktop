@@ -15,7 +15,18 @@ use crate::errors::{AppError, ErrorCode};
 /// Directories a sidecar may live in, most specific first: next to the
 /// executable (how a bundle ships it), then Tauri's resource directory, then
 /// the repo layout used by `cargo tauri dev`.
+///
+/// macOS as root: only the root-owned copy made at launch
+/// (`engine_stage.rs`), never the user-owned bundle; nothing at all when that
+/// copy could not be made.
 pub fn dirs(app: &tauri::AppHandle) -> Vec<PathBuf> {
+    #[cfg(target_os = "macos")]
+    match crate::engine_stage::staged() {
+        Some(Ok(home)) => return vec![home.clone()],
+        Some(Err(_)) => return Vec::new(),
+        None => {}
+    }
+
     let mut dirs: Vec<PathBuf> = Vec::new();
 
     if let Ok(exe) = std::env::current_exe() {
@@ -49,6 +60,15 @@ pub fn dirs(app: &tauri::AppHandle) -> Vec<PathBuf> {
 /// tried in the log under `source`. The list is a diagnostic, not a sentence
 /// for a person: the window shows the translated phrase with one button.
 pub fn find(app: &tauri::AppHandle, stem: &str, source: &str) -> Result<PathBuf, AppError> {
+    #[cfg(target_os = "macos")]
+    if let Some(Err(reason)) = crate::engine_stage::staged() {
+        crate::logger::log(
+            "error",
+            source,
+            &format!("{stem} not started: the engines were not copied at launch ({reason}); relaunch the app"),
+        );
+        return Err(AppError::new(ErrorCode::EngineStartFailed));
+    }
     pvpn_platform::triple::find_sidecar(stem, &dirs(app)).map_err(|e| {
         crate::logger::log("error", source, &format!("{e:#}"));
         AppError::new(ErrorCode::EngineStartFailed)

@@ -717,6 +717,19 @@ pub(crate) fn record_verified(token_hash: &str, version: u64, envelope: String, 
     record_verified_in(&dir_candidates(), token_hash, version, envelope, source_host);
 }
 
+/// Drop the cached envelope: the manifest endpoint itself refused this token
+/// (403 second device, 404 unknown or deleted), so a week-old list must not
+/// stand in for that answer. The version ledger is kept — anti-rollback must
+/// survive this.
+pub(crate) fn forget_cached() {
+    let dirs = dir_candidates();
+    let _guard = store_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut store = load_store_from(&dirs);
+    if store.last_good.take().is_some() {
+        save_store_to(&dirs, &store);
+    }
+}
+
 /// The actual body of `record_verified`, taking `dirs` explicitly — same
 /// split as `load_store_from`/`save_store_to` — so a test can point it at a
 /// temp directory instead of this install's real, OS-specific paths.
@@ -736,36 +749,63 @@ fn record_verified_in(dirs: &[PathBuf], token_hash: &str, version: u64, envelope
 // to. Pure: `subscription.rs` does the fetching, this decides.
 // ─────────────────────────────────────────────────────────────────────────
 
-/// MANIFEST-v1.md's four outcomes, as one function:
+/// A list the manifest offers to the merge, and whether it was just fetched
+/// and verified or only read back from the cache.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ManifestPick {
+    pub servers: Vec<ServerConfig>,
+    pub host: String,
+    pub from_cache: bool,
+}
+
+/// Subscription failures a manifest may stand in for: the service could not
+/// be reached or read. Never a refusal — balance, period, "link taken by
+/// another device", "no devices", a notice, a malformed link: those are the
+/// service speaking about this person, and a cached list must not talk over
+/// them (DESIGN.md M8: there is no "unbound" mode).
+fn manifest_may_cover(err: &AppError) -> bool {
+    matches!(
+        err.code,
+        crate::errors::ErrorCode::SubUnreachable
+            | crate::errors::ErrorCode::SubInvalid
+            | crate::errors::ErrorCode::SubEmpty
+    )
+}
+
+/// MANIFEST-v1.md's outcomes, as one function:
 ///
-///   • subscription OK, manifest usable  → manifest's servers, subscription's
-///     routing/meta/source (only `.servers` changes);
-///   • subscription OK, no usable manifest → subscription untouched;
-///   • subscription failed, manifest usable → a `Subscription` built from the
-///     manifest alone (default meta, no routing profile — the seed applies,
-///     same as any subscription response that carried none);
+///   • subscription OK, freshly verified manifest → manifest's servers,
+///     subscription's routing/meta/source (only `.servers` changes);
+///   • subscription OK, manifest only from the cache, or none → subscription
+///     untouched. A cached list may be up to 8 days old; one that just came
+///     back from the subscription wins over it (a node address rotated while
+///     the manifest route answered 503 must not resurrect the burned one);
+///   • subscription unreachable/unreadable, manifest usable (fresh or cached)
+///     → a `Subscription` built from the manifest alone (default meta, no
+///     routing profile — the seed applies);
+///   • subscription refused (balance, expiry, second device, no devices,
+///     notice, malformed) → that refusal, whatever the manifest says;
 ///   • both failed → the subscription's own error, verbatim.
 ///
 /// `manifest` already reflects every precondition (`account.status ==
 /// "active"`, at least one usable location) by the time it reaches here —
-/// see `subscription::fetch_manifest_servers` — so this function's only job
-/// is the four-way branch above, not re-checking them.
+/// see `subscription::fetch_manifest_servers`.
 pub(crate) fn merge(
     subscription: Result<Subscription, AppError>,
-    manifest: Option<(Vec<ServerConfig>, String)>,
+    manifest: Option<ManifestPick>,
 ) -> Result<Subscription, AppError> {
     match (subscription, manifest) {
-        (Ok(mut sub), Some((servers, _))) if !servers.is_empty() => {
-            sub.servers = servers;
+        (Ok(mut sub), Some(pick)) if !pick.servers.is_empty() && !pick.from_cache => {
+            sub.servers = pick.servers;
             Ok(sub)
         }
         (Ok(sub), _) => Ok(sub),
-        (Err(_), Some((servers, host))) if !servers.is_empty() => Ok(Subscription {
-            servers,
+        (Err(err), Some(pick)) if !pick.servers.is_empty() && manifest_may_cover(&err) => Ok(Subscription {
+            servers: pick.servers,
             meta: SubMeta::default(),
             routing: None,
             unreadable_lines: 0,
-            source_host: host,
+            source_host: pick.host,
         }),
         (Err(err), _) => Err(err),
     }
@@ -1442,10 +1482,58 @@ mod tests {
         })]
     }
 
+    fn fresh(servers: Vec<ServerConfig>) -> ManifestPick {
+        ManifestPick { servers, host: "proksya.xyz".to_string(), from_cache: false }
+    }
+
+    fn cached(servers: Vec<ServerConfig>) -> ManifestPick {
+        ManifestPick { servers, host: "proksya.xyz".to_string(), from_cache: true }
+    }
+
+    /// The service refusing this person is the service speaking: "link taken
+    /// by another device", "deleted link", "no funds" must reach the screen,
+    /// not be replaced by a cached list that still connects.
+    #[test]
+    fn a_refusal_by_the_subscription_is_never_covered_by_a_manifest() {
+        use crate::errors::ErrorCode;
+        for code in [
+            ErrorCode::DeviceTaken,
+            ErrorCode::NoDevices,
+            ErrorCode::BalanceEmpty,
+            ErrorCode::Expired,
+            ErrorCode::SubNotice,
+            ErrorCode::SubMalformed,
+        ] {
+            for pick in [cached(manifest_servers()), fresh(manifest_servers())] {
+                let merged = merge(Err(AppError::new(code)), Some(pick));
+                assert_eq!(merged.map(|_| ()).unwrap_err().code, code);
+            }
+        }
+    }
+
+    /// A cached manifest may be a week old; the subscription that just
+    /// answered knows about the node address rotated since.
+    #[test]
+    fn a_cached_manifest_does_not_replace_a_subscription_that_answered() {
+        let sub = sample_subscription("proxysvpn.com");
+        let merged = merge(Ok(sub.clone()), Some(cached(manifest_servers()))).expect("ok");
+        assert_eq!(merged.servers, sub.servers);
+    }
+
+    #[test]
+    fn a_cached_manifest_still_covers_an_unreachable_subscription() {
+        let merged = merge(
+            Err(AppError::new(crate::errors::ErrorCode::SubUnreachable)),
+            Some(cached(manifest_servers())),
+        )
+        .expect("the cache is what it is for");
+        assert_eq!(merged.servers, manifest_servers());
+    }
+
     #[test]
     fn a_usable_manifest_replaces_servers_but_not_routing_or_meta() {
         let sub = sample_subscription("proxysvpn.com");
-        let merged = merge(Ok(sub.clone()), Some((manifest_servers(), "proksya.xyz".to_string())))
+        let merged = merge(Ok(sub.clone()), Some(fresh(manifest_servers())))
             .expect("ok");
         assert_eq!(merged.servers, manifest_servers());
         assert_eq!(merged.source_host, "proxysvpn.com", "subscription's own source, unchanged");
@@ -1462,7 +1550,7 @@ mod tests {
     #[test]
     fn an_empty_manifest_server_list_does_not_replace_anything() {
         let sub = sample_subscription("proxysvpn.com");
-        let merged = merge(Ok(sub.clone()), Some((Vec::new(), "proksya.xyz".to_string()))).expect("ok");
+        let merged = merge(Ok(sub.clone()), Some(fresh(Vec::new()))).expect("ok");
         assert_eq!(merged.servers, sub.servers);
     }
 
@@ -1470,7 +1558,7 @@ mod tests {
     fn a_failed_subscription_with_a_usable_manifest_returns_the_manifest_servers() {
         let merged = merge(
             Err(AppError::new(crate::errors::ErrorCode::SubUnreachable)),
-            Some((manifest_servers(), "proksya.xyz".to_string())),
+            Some(fresh(manifest_servers())),
         )
         .expect("ok — the manifest saves this person");
         assert_eq!(merged.servers, manifest_servers());
@@ -1488,7 +1576,7 @@ mod tests {
     #[test]
     fn both_failing_even_with_an_empty_manifest_list_returns_the_error() {
         let err = AppError::new(crate::errors::ErrorCode::SubUnreachable);
-        let merged = merge(Err(err.clone()), Some((Vec::new(), "proksya.xyz".to_string())));
+        let merged = merge(Err(err.clone()), Some(fresh(Vec::new())));
         assert_eq!(merged.unwrap_err().code, err.code);
     }
 

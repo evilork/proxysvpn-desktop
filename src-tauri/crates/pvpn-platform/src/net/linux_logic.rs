@@ -452,11 +452,35 @@ mod files {
     pub fn resolv_backup_exists(backup_dir: &Path) -> bool {
         marker_path(backup_dir).exists()
     }
+
+    /// Put ours back after something else rewrote `resolv` mid-session.
+    ///
+    /// `resolv_apply` keeps the backup taken at connect time, which is right
+    /// for a second `up` but wrong here: NetworkManager rewrites the file when
+    /// the network changes (home Wi-Fi to office Wi-Fi after a suspend), and
+    /// what it wrote is the resolver of the network the machine is on NOW.
+    /// Keeping the connect-time copy meant Disconnect restored the previous
+    /// network's resolver, unreachable here, and every lookup on the machine
+    /// failed until NetworkManager happened to rewrite the file again. So the
+    /// backup is retaken from the file that replaced ours — unless that file
+    /// is gone, in which case the old copy is still the best there is.
+    pub fn resolv_reapply(backup_dir: &Path, resolv: &Path, servers: &[IpAddr]) -> io::Result<()> {
+        let replaced = fs::symlink_metadata(resolv).is_ok() && !file_is_ours(resolv);
+        if replaced {
+            let _ = fs::remove_file(backup_dir.join(BACKUP_COPY_NAME));
+            match fs::remove_file(marker_path(backup_dir)) {
+                Ok(()) => {}
+                Err(e) if e.kind() == ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
+        resolv_apply(backup_dir, resolv, servers)
+    }
 }
 
 #[cfg(unix)]
 #[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
-pub use files::{resolv_apply, resolv_backup_exists, resolv_restore};
+pub use files::{resolv_apply, resolv_backup_exists, resolv_reapply, resolv_restore};
 
 #[cfg(test)]
 mod tests {
@@ -794,6 +818,113 @@ proxysvpn0\t00000000\t00000000\t0001\t0\t0\t0\t00000080\t0\t0\t0
                 !resolv.exists(),
                 "nothing to put back, so the path is left for the distro to recreate"
             );
+        }
+
+        /// The .deb's postrm, run as `apt remove` would run it.
+        fn run_postrm(s: &Scratch, action: &str) {
+            let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../linux/postrm");
+            let status = std::process::Command::new("sh")
+                .arg(&script)
+                .arg(action)
+                .env("PROXYSVPN_STATE_DIR", s.path("backup"))
+                .env("PROXYSVPN_RESOLV_CONF", s.path("resolv.conf"))
+                .env("PROXYSVPN_RUNTIME_DIR", s.path("run"))
+                .status()
+                .expect("sh runs");
+            assert!(status.success(), "postrm must never fail a removal");
+        }
+
+        /// A power cut while connected, then `apt remove` instead of a
+        /// relaunch: nothing else would ever put the resolver back.
+        #[test]
+        fn removing_the_package_puts_back_the_original_resolver() {
+            let s = Scratch::new("postrm-file");
+            let backup = s.path("backup");
+            let resolv = s.path("resolv.conf");
+            fs::write(&resolv, "nameserver 192.168.1.1\n").expect("seed");
+            resolv_apply(&backup, &resolv, &servers()).expect("apply");
+
+            run_postrm(&s, "remove");
+            assert_eq!(fs::read_to_string(&resolv).expect("read"), "nameserver 192.168.1.1\n");
+            assert!(!resolv_backup_exists(&backup), "a leftover backup would be restored over a newer file later");
+        }
+
+        #[test]
+        fn removing_the_package_restores_a_symlink_and_an_absent_file() {
+            let s = Scratch::new("postrm-link");
+            let backup = s.path("backup");
+            let resolv = s.path("resolv.conf");
+            let stub = s.path("stub-resolv.conf");
+            fs::write(&stub, "nameserver 127.0.0.53\n").expect("stub");
+            std::os::unix::fs::symlink(&stub, &resolv).expect("link");
+            resolv_apply(&backup, &resolv, &servers()).expect("apply");
+            run_postrm(&s, "remove");
+            assert_eq!(fs::read_link(&resolv).expect("a link again"), stub);
+
+            let s = Scratch::new("postrm-absent");
+            let backup = s.path("backup");
+            let resolv = s.path("resolv.conf");
+            resolv_apply(&backup, &resolv, &servers()).expect("apply");
+            run_postrm(&s, "purge");
+            assert!(!resolv.exists());
+            assert!(!backup.exists(), "purge removes the state folder");
+        }
+
+        /// NetworkManager already rewrote the file: it is newer than any
+        /// backup and is left alone; the stale backup goes.
+        #[test]
+        fn removing_the_package_leaves_a_rewritten_resolver_alone() {
+            let s = Scratch::new("postrm-nm");
+            let backup = s.path("backup");
+            let resolv = s.path("resolv.conf");
+            fs::write(&resolv, "nameserver 192.168.1.1\n").expect("seed");
+            resolv_apply(&backup, &resolv, &servers()).expect("apply");
+            fs::write(&resolv, "nameserver 10.0.0.1\n").expect("NM");
+
+            run_postrm(&s, "remove");
+            assert_eq!(fs::read_to_string(&resolv).expect("read"), "nameserver 10.0.0.1\n");
+            assert!(!resolv_backup_exists(&backup));
+        }
+
+        #[test]
+        fn the_postrm_knows_our_marker_line() {
+            let script = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../linux/postrm"))
+                .expect("postrm");
+            assert!(script.contains(RESOLV_MARKER), "the script must recognise the file the helper writes");
+        }
+
+        /// Connect at home, NetworkManager rewrites the file on the office
+        /// network, the supervisor puts ours back, Disconnect: the machine
+        /// must get the office resolver, not the unreachable home one.
+        #[test]
+        fn a_rewrite_mid_session_becomes_the_new_original() {
+            let s = Scratch::new("resolv-moved");
+            let backup = s.path("backup");
+            let resolv = s.path("resolv.conf");
+            fs::write(&resolv, "nameserver 192.168.1.1\n").expect("home");
+
+            resolv_apply(&backup, &resolv, &servers()).expect("apply");
+            fs::write(&resolv, "nameserver 10.0.0.1\n").expect("office, written by NM");
+            resolv_reapply(&backup, &resolv, &servers()).expect("reapply");
+            assert!(fs::read_to_string(&resolv).expect("read").contains("nameserver 1.1.1.1"));
+
+            assert!(resolv_restore(&backup, &resolv).expect("restore"));
+            assert_eq!(fs::read_to_string(&resolv).expect("read"), "nameserver 10.0.0.1\n");
+        }
+
+        /// Reapplying over our own file (nothing rewrote it) keeps the
+        /// connect-time original.
+        #[test]
+        fn a_reapply_over_our_own_file_keeps_the_original() {
+            let s = Scratch::new("resolv-same");
+            let backup = s.path("backup");
+            let resolv = s.path("resolv.conf");
+            fs::write(&resolv, "nameserver 192.168.1.1\n").expect("home");
+
+            resolv_apply(&backup, &resolv, &servers()).expect("apply");
+            resolv_reapply(&backup, &resolv, &servers()).expect("reapply");
+            assert!(resolv_restore(&backup, &resolv).expect("restore"));
+            assert_eq!(fs::read_to_string(&resolv).expect("read"), "nameserver 192.168.1.1\n");
         }
 
         #[test]

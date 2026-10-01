@@ -34,7 +34,7 @@ import {
 } from "../bridge";
 import { IS_APPSTORE } from "../dist";
 import type { MsgKey } from "../i18n";
-import { tunnelHintKeys } from "../platformCopy";
+import { offersIpFamilyChoice, tunnelHintKeys } from "../platformCopy";
 import { Screen, Spinner, useUi } from "./ui";
 
 const IP_KINDS: [IpKind, MsgKey][] = [
@@ -131,6 +131,9 @@ export default function TunnelScreen({
   // On Windows they reach the engine only (src/platformCopy.ts), and the
   // hints say so instead of promising that lookups stay in the tunnel.
   const hints = tunnelHintKeys(platform);
+  // No tunnel carries IPv6 yet: "IPv6" / "Both" could only send traffic
+  // outside it (src/platformCopy.ts offersIpFamilyChoice).
+  const ipFamilyChoice = offersIpFamilyChoice(platform);
 
   return (
     <Screen
@@ -211,27 +214,31 @@ export default function TunnelScreen({
 
         {engineOwnsDns ? null : (
           <>
-            <div className="row">
-              <span className="row-main">
-                <span className="row-title">{t("tun.ip")}</span>
-                <span className="row-sub">{t(hints.ip)}</span>
-              </span>
-            </div>
-            <div className="row">
-              <span className="segmented">
-                {IP_KINDS.map(([value, key]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    aria-pressed={prefs.ipKind === value}
-                    disabled={busy}
-                    onClick={() => void apply({ ...prefs, ipKind: value })}
-                  >
-                    {t(key)}
-                  </button>
-                ))}
-              </span>
-            </div>
+            {ipFamilyChoice ? (
+              <>
+                <div className="row">
+                  <span className="row-main">
+                    <span className="row-title">{t("tun.ip")}</span>
+                    <span className="row-sub">{t(hints.ip)}</span>
+                  </span>
+                </div>
+                <div className="row">
+                  <span className="segmented">
+                    {IP_KINDS.map(([value, key]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        aria-pressed={prefs.ipKind === value}
+                        disabled={busy}
+                        onClick={() => void apply({ ...prefs, ipKind: value })}
+                      >
+                        {t(key)}
+                      </button>
+                    ))}
+                  </span>
+                </div>
+              </>
+            ) : null}
 
             <div className="row">
               <span className="row-main">

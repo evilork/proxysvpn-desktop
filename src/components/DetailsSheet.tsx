@@ -14,6 +14,7 @@ import { bridge, type RoutingState, type TrafficSplit } from "../bridge";
 import { IS_APPSTORE } from "../dist";
 import { daysLeft, formatDate, formatNumber } from "../i18n";
 import { NO_ACTIVITY_LOGS_CONFIRMED } from "../legal";
+import { displayLocation } from "../locationName";
 import type { StatePayload, SubMeta } from "../types";
 import { IconChevron, Sheet, Spinner, useUi } from "./ui";
 
@@ -67,7 +68,9 @@ export default function DetailsSheet({
       const report = await bridge.runCheck();
       if (report.verdict === null) {
         setOkLine(
-          t("details.checkOk", { location: state.location ?? t("details.locationAuto") }),
+          t("details.checkOk", {
+            location: state.location ? displayLocation(state.location, lang) : t("details.locationAuto"),
+          }),
         );
         window.setTimeout(() => setOkLine(null), OK_LINE_MS);
       } else {
@@ -80,7 +83,7 @@ export default function DetailsSheet({
     } finally {
       setChecking(false);
     }
-  }, [onCheck, state.location, t]);
+  }, [onCheck, state.location, t, lang]);
 
   const expiryLine = (): string => {
     if (!meta.expiresAt) return t("details.expiryUnknown");
@@ -99,7 +102,7 @@ export default function DetailsSheet({
         <button type="button" className="row" onClick={onLocations}>
           <span className="row-main">
             <span className="row-title">
-              {state.location ?? t("details.locationAuto")}
+              {state.location ? displayLocation(state.location, lang) : t("details.locationAuto")}
             </span>
           </span>
           <span className="row-side">
