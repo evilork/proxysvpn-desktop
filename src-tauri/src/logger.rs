@@ -90,6 +90,7 @@ const MASK_NODE: &str = "<node>";
 const MASK_LINK: &str = "<link>";
 const MASK_UUID: &str = "<uuid>";
 const MASK_TOKEN: &str = "<token>";
+const MASK_SITE: &str = "<site>";
 
 // ---------------------------------------------------------------------------
 // The line
@@ -664,6 +665,74 @@ fn scan_hex_run(bytes: &[u8], start: usize) -> Option<usize> {
     Some(i)
 }
 
+/// Engine lines that name a site the person opened rather than one of ours.
+///
+/// Measured, not guessed (01.10): xray at `warning` writes
+/// `[Error] app/dns: failed to retrieve response for <name>.` for every DoH
+/// timeout — exactly what a cold or throttled tunnel produces in bursts — and
+/// hysteria writes `WARN SOCKS5 TCP error {"reqAddr": "<name>:443"}` for every
+/// dropped connection. The owner's own app.log held 32 such xray lines with 20
+/// different names, and the "Report for support" promises there are none.
+const SITE_LINE_MARKERS: [&str; 6] = [
+    "app/dns",
+    "app/dispatcher",
+    "proxy/dns",
+    "reqAddr",
+    "\"addr\"",
+    "domain",
+];
+
+/// File names engines print next to a message: not sites, and useful.
+const NOT_A_SITE_SUFFIXES: [&str; 9] = ["go", "dat", "json", "yaml", "yml", "log", "txt", "exe", "dll"];
+
+/// Is `token` shaped like a DNS name: dot-separated labels of letters, digits
+/// and hyphens, at least two of them, ending in an alphabetic (or punycode)
+/// top label, which leaves dotted IPv4 and version numbers to their own rules?
+fn looks_like_a_site(token: &str) -> bool {
+    let name = token.strip_suffix('.').unwrap_or(token);
+    let mut labels = name.split('.');
+    let Some(top) = name.rsplit('.').next() else {
+        return false;
+    };
+    let well_formed = labels.all(|l| {
+        !l.is_empty() && l.len() <= 63 && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    });
+    well_formed
+        && name.contains('.')
+        && top.len() >= 2
+        && (top.bytes().all(|b| b.is_ascii_alphabetic()) || top.to_ascii_lowercase().starts_with("xn--"))
+        && !NOT_A_SITE_SUFFIXES.contains(&top.to_ascii_lowercase().as_str())
+}
+
+/// Replace every DNS name in an engine line that can name a visited site.
+/// Lines without one of `SITE_LINE_MARKERS` are left alone: our own lines
+/// ("proxysvpn.com unreachable") are what support needs to read.
+fn mask_visited_sites(input: &str) -> String {
+    if !SITE_LINE_MARKERS.iter().any(|m| input.contains(m)) {
+        return input.to_string();
+    }
+    let is_name_char = |c: char| c.is_ascii_alphanumeric() || c == '.' || c == '-';
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find(is_name_char) {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start..];
+        let end = tail.find(|c: char| !is_name_char(c)).unwrap_or(tail.len());
+        let token = &tail[..end];
+        // A token glued to a path or an identifier (`app/dns`, `nameserver_doh`)
+        // is a code location, not a host.
+        let glued = out.ends_with(['/', '_']) || tail[end..].starts_with(['/', '_']);
+        if !glued && looks_like_a_site(token) {
+            out.push_str(MASK_SITE);
+        } else {
+            out.push_str(token);
+        }
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Everything that must not reach the disk, in one pass order.
 ///
 /// `nodes` are host names the app has learned at runtime (see
@@ -680,6 +749,7 @@ pub fn redact(input: &str, nodes: &[String]) -> String {
     // would otherwise chew into an unreadable half-URL.
     let text = mask_links(&text);
     let text = mask_secrets(&text);
+    let text = mask_visited_sites(&text);
     // IPv6 before IPv4 so an IPv4-mapped form is taken whole.
     let text = mask_ipv6(&text);
     mask_ipv4(&text)
@@ -1710,6 +1780,47 @@ mod tests {
         // Commit hashes and small ids are useful and are not secrets.
         let out = redact("build d2758a0 cafe", &[]);
         assert_eq!(out, "build d2758a0 cafe");
+    }
+
+    /// The two lines measured on 01.10 with our own engine binaries: names
+    /// of sites the person opened, in the file and in the support report
+    /// that says it holds none.
+    #[test]
+    fn site_names_in_engine_lines_are_masked() {
+        let xray = "2026/10/01 12:00:00.123456 [Error] app/dns: failed to retrieve response for some-private-site-the-user-visits.example.org. > context deadline exceeded";
+        let out = redact(xray, &[]);
+        assert!(!out.contains("some-private-site"), "{out}");
+        assert!(out.contains("app/dns: failed to retrieve response for <site>"), "{out}");
+
+        let hy2 = r#"2026-10-01T12:00:00+03:00	WARN	SOCKS5 TCP error	{"addr": "127.0.0.1:52011", "reqAddr": "a-site-the-user-opened.invalid:443", "error": "EOF"}"#;
+        let out = redact(hy2, &[]);
+        assert!(!out.contains("a-site-the-user-opened"), "{out}");
+        assert!(out.contains(r#""reqAddr": "<site>:443""#), "{out}");
+
+        let sniffed = "[Info] app/dispatcher: sniffed domain: www.example.com";
+        assert!(!redact(sniffed, &[]).contains("example.com"));
+    }
+
+    /// Only engine lines that can carry a visited site are touched: our own
+    /// diagnostics name our own hosts, and support needs to read them.
+    #[test]
+    fn our_own_lines_and_code_locations_keep_their_names() {
+        let ours = "subscription: proxysvpn.com unreachable, trying proksya.xyz";
+        assert_eq!(redact(ours, &[]), ours);
+        let located = "[Error] app/dns: nameserver_doh.go:207 v2.9.3 started";
+        let out = redact(located, &[]);
+        assert!(out.contains("nameserver_doh.go:207"), "{out}");
+        assert!(out.contains("v2.9.3"), "{out}");
+    }
+
+    #[test]
+    fn the_site_shape_is_strict() {
+        for site in ["example.com", "a-b.c-d.example.org.", "xn--80ak6aa92e.xn--p1ai", "DNS.Google"] {
+            assert!(looks_like_a_site(site), "{site}");
+        }
+        for not_site in ["1.2.3.4", "v2.9.3", "dns.go", "geoip.dat", "a..b", ".com", "localhost", "a.b1"] {
+            assert!(!looks_like_a_site(not_site), "{not_site}");
+        }
     }
 
     #[test]
