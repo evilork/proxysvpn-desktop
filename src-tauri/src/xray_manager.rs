@@ -281,10 +281,46 @@ fn swap_proxy_for_socks(config: &mut Value, port: u16) -> Result<(), AppError> {
     Ok(())
 }
 
+/// True when every server this outbound dials is on the loopback interface.
+///
+/// That is the Hysteria2 hop: `proxy` becomes socks to 127.0.0.1:10809. Such a
+/// socket must NOT be pinned to the physical interface. On Darwin IP_BOUND_IF
+/// makes the connect fail with "can't assign requested address", and on Linux
+/// SO_BINDTODEVICE skips the `lo`-only local route, so the SYN leaves through
+/// eth0 and dies. Either way xray could not reach hysteria and every Hysteria2
+/// location was dead, DNS included. Nothing about the tunnel needs the
+/// binding here: loopback never touches the routing table that `0.0.0.0/1`
+/// lives in, and hysteria's own UDP to the node leaves through the /32 host
+/// route.
+fn dials_only_loopback(outbound: &Value) -> bool {
+    let Some(servers) = outbound
+        .pointer("/settings/servers")
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    !servers.is_empty()
+        && servers.iter().all(|server| {
+            server
+                .get("address")
+                .and_then(Value::as_str)
+                .is_some_and(is_loopback_host)
+        })
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    bare.eq_ignore_ascii_case("localhost")
+        || bare
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
 /// Bind every outbound that opens a socket to the physical interface.
 ///
 /// `blackhole` never dials, so it is left alone; binding it would only add a
-/// line that has to be explained later.
+/// line that has to be explained later. An outbound that only dials loopback
+/// is left alone too — see `dials_only_loopback` for why binding it breaks it.
 fn bind_outbounds_to_interface(config: &mut Value, iface: &str) -> Result<(), AppError> {
     if iface.trim().is_empty() {
         return Err(config_bug("physical interface name is empty"));
@@ -300,7 +336,7 @@ fn bind_outbounds_to_interface(config: &mut Value, iface: &str) -> Result<(), Ap
             outbound.get("protocol").and_then(Value::as_str),
             Some("blackhole")
         );
-        if !dials {
+        if !dials || dials_only_loopback(outbound) {
             continue;
         }
         let stream = outbound
@@ -630,6 +666,46 @@ mod tests {
             proxy["settings"]["servers"][0]["port"],
             u64::from(HY2_SOCKS_PORT)
         );
+    }
+
+    /// A loopback dial pinned to the physical NIC cannot connect: Darwin's
+    /// IP_BOUND_IF answers "can't assign requested address" and Linux's
+    /// SO_BINDTODEVICE skips the `lo`-only local route. The Hysteria2 hop is
+    /// such a dial, so binding it killed every Hysteria2 location.
+    #[test]
+    fn the_hysteria_hop_is_not_bound_to_the_physical_interface() {
+        let config = build_runtime_config(&hy2(), "en0").expect("config");
+        let proxy = outbound(&config, "proxy");
+        assert!(
+            proxy["streamSettings"]["sockopt"]["interface"].is_null(),
+            "a loopback outbound must not carry sockopt.interface: {proxy}"
+        );
+        // Everything that does leave the machine stays pinned.
+        assert_eq!(outbound(&config, "direct")["streamSettings"]["sockopt"]["interface"], "en0");
+    }
+
+    #[test]
+    fn only_outbounds_that_dial_loopback_count_as_local() {
+        let local = json!({ "protocol": "socks", "settings": { "servers": [{ "address": "127.0.0.1", "port": 1 }] } });
+        let local6 = json!({ "protocol": "socks", "settings": { "servers": [{ "address": "::1", "port": 1 }] } });
+        let named = json!({ "protocol": "http", "settings": { "servers": [{ "address": "localhost", "port": 1 }] } });
+        let remote = json!({ "protocol": "socks", "settings": { "servers": [{ "address": "203.0.113.5", "port": 1 }] } });
+        let mixed = json!({ "protocol": "socks", "settings": { "servers": [
+            { "address": "127.0.0.1", "port": 1 }, { "address": "203.0.113.5", "port": 1 }
+        ] } });
+        let freedom = json!({ "protocol": "freedom" });
+        assert!(dials_only_loopback(&local));
+        assert!(dials_only_loopback(&local6));
+        assert!(dials_only_loopback(&named));
+        assert!(!dials_only_loopback(&remote));
+        assert!(!dials_only_loopback(&mixed), "one remote server is enough to need the binding");
+        assert!(!dials_only_loopback(&freedom));
+        assert!(!dials_only_loopback(&vless_outbound_of(&vless())));
+    }
+
+    fn vless_outbound_of(server: &ServerConfig) -> Value {
+        let config = build_runtime_config(server, "en0").expect("config");
+        outbound(&config, "proxy").clone()
     }
 
     #[test]
