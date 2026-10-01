@@ -16,7 +16,8 @@
 #   1. Merge the release branch to main and wait for desktop-build to pass.
 #   2. Actions -> desktop-build -> Run workflow on main, tick upload_installers.
 #   3. Download the three artifacts of THAT run into one folder and unzip
-#      them there (each brings its SHA256SUMS-<artifact>.txt).
+#      them there (each brings its SHA256SUMS-<artifact>.txt). Subfolders are
+#      fine: the files are looked up at any depth (scripts/release-sums.sh).
 #   4. bash scripts/publish-release.sh <that folder>
 #   5. Read the draft on GitHub, then publish it.
 #
@@ -33,6 +34,8 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 ASSETS_DIR="$(cd "$1" && pwd)" || die "no such folder: $1"
 
 cd "$(git rev-parse --show-toplevel)"
+# shellcheck source=scripts/release-sums.sh
+source scripts/release-sums.sh
 
 command -v gh >/dev/null 2>&1 || die "GitHub CLI (gh) is not installed"
 gh auth status >/dev/null 2>&1 || die "gh is not authenticated: gh auth login"
@@ -73,23 +76,29 @@ fi
 DMG="ProxysVPN_${VERSION}_aarch64.dmg"
 EXE="ProxysVPN_${VERSION}_x64-setup.exe"
 DEB="ProxysVPN_${VERSION}_amd64.deb"
-for f in "$DMG" "$EXE" "$DEB"; do
-    [[ -f "$ASSETS_DIR/$f" ]] || die "missing $ASSETS_DIR/$f (download the artifacts of the CI run on $MAIN_SHA)"
-done
+hint="download the artifacts of the CI run on $MAIN_SHA"
+DMG_PATH="$(release_find_asset "$ASSETS_DIR" "$DMG")" || die "no single $DMG under $ASSETS_DIR ($hint)"
+EXE_PATH="$(release_find_asset "$ASSETS_DIR" "$EXE")" || die "no single $EXE under $ASSETS_DIR ($hint)"
+DEB_PATH="$(release_find_asset "$ASSETS_DIR" "$DEB")" || die "no single $DEB under $ASSETS_DIR ($hint)"
 
+# Bare file names, whatever subfolder each installer came in, so
+# `sha256sum -c SHA256SUMS.txt` works next to the downloaded release assets.
 SUMS="$ASSETS_DIR/SHA256SUMS.txt"
-( cd "$ASSETS_DIR" && sha256 "$DMG" "$EXE" "$DEB" ) > "$SUMS"
+for path in "$DMG_PATH" "$EXE_PATH" "$DEB_PATH"; do
+    ( cd "$(dirname "$path")" && sha256 "$(basename "$path")" )
+done > "$SUMS"
 
-# Cross-check against the sums the CI run printed into its artifacts.
-shopt -s nullglob
-ci_sums=("$ASSETS_DIR"/SHA256SUMS-*.txt)
-shopt -u nullglob
+# Cross-check against the sums the CI run wrote into its artifacts. Once any
+# of those files is there, every installer must have a matching line in them:
+# a missing line is an installer the run never vouched for.
+ci_sums=()
+while IFS= read -r f; do
+    ci_sums+=("$f")
+done < <(release_find_ci_sums "$ASSETS_DIR")
 if [[ ${#ci_sums[@]} -gt 0 ]]; then
-    while read -r sum name; do
-        expected="$(grep -h " $name\$" "${ci_sums[@]}" | awk '{print $1}' | head -1)"
-        [[ -z "$expected" || "$expected" == "$sum" ]] || die "$name differs from the sum its CI run recorded"
-    done < "$SUMS"
-    echo "Checksums match the CI run's own SHA256SUMS files."
+    release_check_against_ci "$SUMS" "${ci_sums[@]}" \
+        || die "the installers do not match the CI run's SHA256SUMS files (${#ci_sums[@]} found)"
+    echo "Checksums match the CI run's own SHA256SUMS files (${#ci_sums[@]} found)."
 else
     echo "WARN: no SHA256SUMS-*.txt from CI next to the installers; not cross-checked."
 fi
@@ -127,7 +136,7 @@ gh release create "$TAG" \
     --title "ProxysVPN Desktop $TAG" \
     --notes-file "$NOTES" \
     "$KIND" \
-    "$ASSETS_DIR/$DMG" "$ASSETS_DIR/$EXE" "$ASSETS_DIR/$DEB" "$SUMS"
+    "$DMG_PATH" "$EXE_PATH" "$DEB_PATH" "$SUMS"
 
 echo ""
 echo "Draft created. Read it, then publish it on GitHub:"
