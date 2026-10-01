@@ -241,27 +241,46 @@ mod files {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
 
-    pub fn marker_path(run_dir: &Path) -> PathBuf {
-        run_dir.join("resolv-backup")
+    pub fn marker_path(backup_dir: &Path) -> PathBuf {
+        backup_dir.join("resolv-backup")
+    }
+
+    /// Is this file one we wrote ourselves?
+    fn file_is_ours(resolv: &Path) -> bool {
+        match fs::read_to_string(resolv) {
+            Ok(text) => text.contains(RESOLV_MARKER),
+            Err(_) => false,
+        }
     }
 
     /// Replace `resolv` with our own resolver list, remembering what was there.
     ///
+    /// `backup_dir` must be a directory that survives a reboot — see
+    /// `paths::linux_persistent_dir` for why that is not the same place as the
+    /// route hint.
+    ///
     /// Idempotent: if a marker already exists we do **not** overwrite it, so a
     /// second `up` (or an `ensure` tick) cannot lose the distro's original.
-    pub fn resolv_apply(run_dir: &Path, resolv: &Path, servers: &[IpAddr]) -> io::Result<()> {
-        fs::create_dir_all(run_dir)?;
-        fs::set_permissions(run_dir, fs::Permissions::from_mode(0o700))?;
+    pub fn resolv_apply(backup_dir: &Path, resolv: &Path, servers: &[IpAddr]) -> io::Result<()> {
+        fs::create_dir_all(backup_dir)?;
+        fs::set_permissions(backup_dir, fs::Permissions::from_mode(0o700))?;
 
-        let marker = marker_path(run_dir);
+        let marker = marker_path(backup_dir);
         if !marker.exists() {
             let backup = match fs::symlink_metadata(resolv) {
                 Ok(meta) if meta.file_type().is_symlink() => {
                     let target = fs::read_link(resolv)?;
                     ResolvBackup::Symlink(target.to_string_lossy().to_string())
                 }
+                // Our own file, with no marker beside it: a previous run was
+                // killed in a way that lost the backup (a power cut with the
+                // backup in a tmpfs used to do exactly that). Recording it as
+                // "the original" would make the loss permanent and silent, so
+                // record `Absent` instead — on restore we remove our file and
+                // let NetworkManager, resolvconf or resolved regenerate one.
+                Ok(_) if file_is_ours(resolv) => ResolvBackup::Absent,
                 Ok(_) => {
-                    fs::copy(resolv, run_dir.join(BACKUP_COPY_NAME))?;
+                    fs::copy(resolv, backup_dir.join(BACKUP_COPY_NAME))?;
                     ResolvBackup::File(BACKUP_COPY_NAME.to_string())
                 }
                 Err(e) if e.kind() == ErrorKind::NotFound => ResolvBackup::Absent,
@@ -284,8 +303,9 @@ mod files {
 
     /// Put back whatever `resolv_apply` found. Returns `false` when there was
     /// nothing to restore (no marker — so we never touched the file).
-    pub fn resolv_restore(run_dir: &Path, resolv: &Path) -> io::Result<bool> {
-        let marker = marker_path(run_dir);
+    pub fn resolv_restore(backup_dir: &Path, resolv: &Path) -> io::Result<bool> {
+        let run_dir = backup_dir;
+        let marker = marker_path(backup_dir);
         let text = match fs::read_to_string(&marker) {
             Ok(t) => t,
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
@@ -316,8 +336,8 @@ mod files {
     }
 
     /// Did a previous run leave a backup behind (i.e. did we crash)?
-    pub fn resolv_backup_exists(run_dir: &Path) -> bool {
-        marker_path(run_dir).exists()
+    pub fn resolv_backup_exists(backup_dir: &Path) -> bool {
+        marker_path(backup_dir).exists()
     }
 }
 
@@ -537,6 +557,38 @@ proxysvpn0\t00000000\t00000000\t0001\t0\t0\t0\t00000080\t0\t0\t0
                 "nameserver 192.168.1.1\n"
             );
             assert!(!resolv_backup_exists(&run));
+        }
+
+        /// The case a tmpfs backup directory used to create: the machine comes
+        /// back up with our `/etc/resolv.conf` still on disk and the marker
+        /// gone. Recording our own file as "the original" would make the loss
+        /// permanent and invisible, so it must be recorded as absent instead,
+        /// and the restore must clear the way for the distro to regenerate one.
+        #[test]
+        fn our_own_resolv_conf_is_never_mistaken_for_the_original() {
+            let s = Scratch::new("resolv-ours");
+            let backup = s.path("backup");
+            let resolv = s.path("resolv.conf");
+            fs::write(&resolv, render_resolv_conf(&servers())).expect("seed");
+
+            resolv_apply(&backup, &resolv, &servers()).expect("apply");
+            let marker = fs::read_to_string(crate::net::linux_logic::files::marker_path(&backup))
+                .expect("marker");
+            assert_eq!(
+                parse_backup_marker(&marker).expect("parse"),
+                ResolvBackup::Absent,
+                "our own file must not be remembered as the distro's"
+            );
+            assert!(
+                !backup.join("resolv.conf.orig").exists(),
+                "and it must not be copied either"
+            );
+
+            assert!(resolv_restore(&backup, &resolv).expect("restore"));
+            assert!(
+                !resolv.exists(),
+                "nothing to put back, so the path is left for the distro to recreate"
+            );
         }
 
         #[test]

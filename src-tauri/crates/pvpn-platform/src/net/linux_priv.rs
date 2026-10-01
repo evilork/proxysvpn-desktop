@@ -174,6 +174,20 @@ fn add_split_defaults() -> Result<()> {
     Ok(())
 }
 
+/// Removes both halves explicitly.
+///
+/// An earlier version left this to `ip link del`, on the theory that routes die
+/// with their device. They do — *when the delete succeeds*. If the device is
+/// busy, rtnetlink errors or another owner holds it, `0.0.0.0/1` and
+/// `128.0.0.0/1` stay in the table pointing at a device that is gone, and the
+/// machine has no IPv4 after "disconnect" with nothing retrying, because
+/// `run_ok` only logs. macOS and Windows have always deleted them by hand.
+fn del_split_defaults() {
+    for half in [SPLIT_LOW, SPLIT_HIGH] {
+        run_ok(&p::split_default_delete(half));
+    }
+}
+
 fn configure_device() -> Result<()> {
     run(&p::device_set_address()).context("assign the tunnel address")?;
     run(&p::device_up()).context("bring the tunnel device up")?;
@@ -236,7 +250,10 @@ fn dns_up(backend: DnsBackend, servers: &[IpAddr]) -> Result<()> {
             Ok(())
         }
         DnsBackend::ResolvConf => {
-            logic::resolv_apply(&paths::linux_runtime_dir(), Path::new(RESOLV_CONF), servers)
+            // The persistent directory, not the runtime one: our replacement
+            // /etc/resolv.conf is on disk and survives a reboot, so the copy of
+            // the original has to as well. See paths::linux_persistent_dir.
+            logic::resolv_apply(&paths::linux_persistent_dir(), Path::new(RESOLV_CONF), servers)
                 .context("rewrite /etc/resolv.conf")
         }
     }
@@ -251,7 +268,7 @@ fn dns_down(backend: DnsBackend) {
             run_ok(&p::resolved_flush());
         }
         DnsBackend::ResolvConf => {
-            match logic::resolv_restore(&paths::linux_runtime_dir(), Path::new(RESOLV_CONF)) {
+            match logic::resolv_restore(&paths::linux_persistent_dir(), Path::new(RESOLV_CONF)) {
                 Ok(true) => log("info", "/etc/resolv.conf restored"),
                 Ok(false) => {}
                 Err(e) => log("warn", &format!("could not restore /etc/resolv.conf: {}", e)),
@@ -329,9 +346,16 @@ pub fn up(params: &ValidUp) -> Result<Tunnel> {
     })();
 
     if let Err(e) = result {
+        // Same relative order as the rollback in `net::local` (shared by macOS
+        // and Windows), which its fake-backend test pins: DNS first, then the
+        // split defaults, then the engine, and the host route last — the engine
+        // still needs the node reachable while it shuts down. The device delete
+        // sits with the engine because on Linux, unlike utun and Wintun, the
+        // device does not disappear with the process.
+        dns_down(backend);
+        del_split_defaults();
         let _ = child.kill();
         let _ = child.wait();
-        dns_down(backend);
         run_ok(&p::device_delete());
         del_host_route(params.server_ip);
         return Err(e);
@@ -374,12 +398,28 @@ pub fn engine_alive(tunnel: &mut Tunnel) -> bool {
 }
 
 /// Remove everything `up` created. Idempotent.
+///
+/// Driven by `TEARDOWN_ORDER` rather than written out, for the same reason
+/// `net::local::down` is: the order is the part that is easy to get subtly
+/// wrong, the rationale for each position lives with the constant, and a host
+/// test pins it. Writing it out here is how this backend ended up killing the
+/// engine first and never deleting the split defaults at all.
 pub fn down(mut tunnel: Tunnel) {
-    let _ = tunnel.child.kill();
-    let _ = tunnel.child.wait();
-    dns_down(tunnel.backend);
-    run_ok(&p::device_delete());
-    del_host_route(tunnel.server_ip);
+    use crate::net::{TeardownStep, TEARDOWN_ORDER};
+
+    for step in TEARDOWN_ORDER {
+        match step {
+            TeardownStep::SplitDefaults => del_split_defaults(),
+            TeardownStep::HostRoute => del_host_route(tunnel.server_ip),
+            TeardownStep::RestoreDns => dns_down(tunnel.backend),
+            TeardownStep::DeviceDown => run_ok(&p::device_delete()),
+            TeardownStep::KillOwnedEngine => {
+                let _ = tunnel.child.kill();
+                let _ = tunnel.child.wait();
+            }
+            TeardownStep::KillStrayEngines => run_ok(&p::kill_stray(TUNNEL_ENGINE)),
+        }
+    }
     let _ = std::fs::remove_file(hint_path());
     log("info", "tunnel down");
 }
@@ -387,6 +427,10 @@ pub fn down(mut tunnel: Tunnel) {
 /// Crash recovery, run before the helper touches anything: a previous run may
 /// have died with our host route, device and resolver file still installed.
 pub fn purge_stale_sync() {
+    // Routes before the device, as in `down`: a crash can leave the halves in
+    // the table even when the device is already gone, and then the machine has
+    // no IPv4 until something removes them.
+    del_split_defaults();
     run_ok(&p::kill_stray(TUNNEL_ENGINE));
 
     if device_exists() {
@@ -404,7 +448,7 @@ pub fn purge_stale_sync() {
     // Reverting a link that does not exist is harmless and covers the case
     // where the device survived us.
     run_ok(&p::resolved_revert());
-    if logic::resolv_backup_exists(&paths::linux_runtime_dir()) {
+    if logic::resolv_backup_exists(&paths::linux_persistent_dir()) {
         dns_down(DnsBackend::ResolvConf);
     }
 }

@@ -139,6 +139,21 @@ pub fn linux_runtime_dir() -> PathBuf {
     PathBuf::from("/run/proxysvpn")
 }
 
+/// Where the Linux root helper keeps state that must outlive a reboot.
+///
+/// `/var/lib` and not `/run`, and the distinction matters: the route hint
+/// belongs in `/run` because routes die with the kernel it was written under, so
+/// a stale hint would be worse than none. The `/etc/resolv.conf` backup is the
+/// opposite — our replacement is on disk and survives, so if the copy of the
+/// original is in a tmpfs then a power cut leaves the machine pointed at our
+/// resolvers for good, with nothing left to restore. Root-owned 0700 for the
+/// same reason as the runtime dir: no unprivileged process may plant a symlink
+/// in a directory root writes into.
+#[cfg(target_os = "linux")]
+pub fn linux_persistent_dir() -> PathBuf {
+    PathBuf::from("/var/lib/proxysvpn")
+}
+
 /// Writes a file that only its owner may read, refusing to follow a symlink.
 ///
 /// Both callers write a fixed, predictable path, and on macOS they do it **as
