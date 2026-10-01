@@ -1,10 +1,11 @@
 # ProxysVPN Desktop on Linux
 
-Status: the Linux target is implemented and type-checked, but **never built or
-run on a Linux machine** — the development box is an Apple Silicon Mac with no
-Docker, no Windows and no Linux. The GitHub Actions workflow
-`.github/workflows/desktop-build.yml` is the first place this code is really
-compiled and packaged. What is verified and what is not is listed at the bottom.
+Status: built and packaged by CI (`.github/workflows/desktop-build.yml`,
+ubuntu-22.04). The 0.3.1 `.deb` was installed on a Debian 13 live VM on
+01.10.2026, redeemed a pair code and connected (VLESS, Germany). Not yet run
+on real hardware, not yet tried on a Hysteria2 location, and 0.3.2 (the audit
+fixes) has not been run live yet. What else is verified and what is not is
+listed at the bottom.
 
 ## Build dependencies
 
