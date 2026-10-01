@@ -81,12 +81,11 @@ const REQUEST_ID_CHARS: std::ops::RangeInclusive<usize> = 22..=64;
 /// script in tests.
 pub(crate) type RandomSource = fn(&mut [u8; REQUEST_ID_BYTES]) -> std::io::Result<()>;
 
-/// The system CSPRNG. `/dev/urandom` rather than a crate, as for the device
-/// id and the race password: on macOS and iOS it is always there and never
-/// blocks. `read_exact` retries an interrupted read and refuses a short one.
+/// The system CSPRNG through entropy.rs, as for the device id and the race
+/// password: `/dev/urandom` on macOS, iOS and Linux, the system RNG on
+/// Windows, which has no such device. A short read is an error, never zeros.
 fn os_random(buf: &mut [u8; REQUEST_ID_BYTES]) -> std::io::Result<()> {
-    use std::io::Read;
-    std::fs::File::open("/dev/urandom")?.read_exact(buf)
+    crate::entropy::fill(buf)
 }
 
 /// The contract's form of a request id: `^[A-Za-z0-9_-]{22,64}$`.
@@ -392,7 +391,7 @@ mod tests {
     fn no_randomness(_: &mut [u8; REQUEST_ID_BYTES]) -> std::io::Result<()> {
         Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            "no /dev/urandom",
+            "no system randomness",
         ))
     }
 
@@ -835,7 +834,7 @@ mod tests {
 
     #[test]
     fn a_request_id_is_32_random_bytes_as_unpadded_base64url() {
-        let id = RequestId::generate(os_random).expect("urandom");
+        let id = RequestId::generate(os_random).expect("system randomness");
         assert_eq!(id.as_str().len(), 43);
         assert!(is_valid_request_id(id.as_str()));
         let bytes = URL_SAFE_NO_PAD.decode(id.as_str()).expect("base64url");
@@ -856,7 +855,7 @@ mod tests {
     fn request_ids_from_the_system_do_not_repeat() {
         let mut seen = std::collections::HashSet::new();
         for _ in 0..256 {
-            let id = RequestId::generate(os_random).expect("urandom");
+            let id = RequestId::generate(os_random).expect("system randomness");
             assert!(seen.insert(id.as_str().to_string()), "a repeated id");
         }
     }
@@ -887,7 +886,7 @@ mod tests {
 
     #[test]
     fn debug_never_shows_the_id() {
-        let id = RequestId::generate(os_random).expect("urandom");
+        let id = RequestId::generate(os_random).expect("system randomness");
         let shown = format!("{id:?} {:?}", Some(id.clone()));
         assert!(!shown.contains(id.as_str()), "{shown}");
     }

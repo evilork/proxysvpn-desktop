@@ -1,10 +1,11 @@
 // src-tauri/src/entropy.rs
 //
-// Bytes from the operating system's CSPRNG, for the three things that need
+// Bytes from the operating system's CSPRNG, for the four things that need
 // them: the device id (device_id.rs), the per-install salt of the network
-// memory (netmem.rs) and the race inbound's password (xray_manager.rs).
+// memory (netmem.rs), the race inbound's password (xray_manager.rs) and the
+// pair-code request id (pair_code.rs).
 //
-// Unix keeps reading /dev/urandom, exactly as those three did on their own: on
+// Unix keeps reading /dev/urandom, exactly as those four did on their own: on
 // macOS, iOS and Linux the device is always present and never blocks once the
 // system is up. Windows has no such device, so there the same bytes come from
 // the system RNG through `getrandom` (ProcessPrng / BCryptGenRandom).
