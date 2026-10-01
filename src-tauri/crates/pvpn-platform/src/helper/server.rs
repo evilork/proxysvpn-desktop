@@ -9,12 +9,13 @@
 //! would inject a non-JSON line into the pipe and the GUI would log a parse
 //! warning instead of the message.
 
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use super::proto::{
-    self, invoking_uid_from_env, sidecar_is_trusted, validate_up, FileFacts, Frame, Request,
+    self, invoking_uid_from_env, read_bounded_line, sidecar_is_trusted, validate_up, FileFacts,
+    Frame, Line, Request,
 };
 use super::{HELPER_DEV_FLAG, HELPER_FLAG};
 use crate::net::linux_priv::{self as net, Tunnel};
@@ -92,8 +93,13 @@ pub fn is_helper_invocation() -> bool {
     std::env::args().skip(1).any(|arg| arg == HELPER_FLAG)
 }
 
+/// `--dev` is honoured only by a debug build — see `proto::dev_mode_allowed`
+/// for why an environment variable was not enough.
 fn dev_mode() -> bool {
-    std::env::args().skip(1).any(|arg| arg == HELPER_DEV_FLAG)
+    proto::dev_mode_allowed(
+        std::env::args().skip(1).any(|arg| arg == HELPER_DEV_FLAG),
+        cfg!(debug_assertions),
+    )
 }
 
 /// Does `path` live in the same directory as the helper executable? Then it is
@@ -119,7 +125,11 @@ fn beside_helper(path: &std::path::Path) -> bool {
 fn check_sidecar(path: &std::path::Path) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
 
-    let meta = std::fs::metadata(path)
+    // symlink_metadata, not metadata: a link would otherwise be judged by the
+    // facts of its target while `Command` re-resolves the path at exec time,
+    // and the peer can replace the link in between. A link is not a regular
+    // file, so `sidecar_is_trusted` refuses it outright.
+    let meta = std::fs::symlink_metadata(path)
         .map_err(|e| format!("cannot stat {}: {}", path.display(), e))?;
     let facts = FileFacts {
         uid: meta.uid(),
@@ -226,9 +236,15 @@ pub fn run_helper() -> ! {
     emit_log("info", "helper", "privileged helper ready");
 
     let stdin = std::io::stdin();
-    for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(line) => line,
+    let mut reader = stdin.lock();
+    loop {
+        let line = match read_bounded_line(&mut reader) {
+            Ok(Line::Eof) => break,
+            Ok(Line::Request(line)) => line,
+            Ok(Line::TooLong) => {
+                emit_log("warn", "helper", "request line over the size limit, ignored");
+                continue;
+            }
             Err(e) => {
                 emit_log("warn", "helper", &format!("stdin error: {}", e));
                 break;

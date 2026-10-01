@@ -86,7 +86,7 @@ pub fn log(level: &str, source: &str, message: &str) {
     // Best-effort write to file. Never panic from logger.
     if let Some(path) = st.log_file_path.clone() {
         drop(st); // release lock before fs i/o
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
+        if let Ok(mut f) = log_file_options().open(&path) {
             let secs = line.ts_ms / 1000;
             let _ = writeln!(
                 f,
@@ -98,6 +98,28 @@ pub fn log(level: &str, source: &str, message: &str) {
             );
         }
     }
+}
+
+/// How the mirror file is opened.
+///
+/// Linux gets mode 0600 on creation. There the GUI is unprivileged, so the file
+/// belongs to the user who runs it and `~/.local/state/ProxysVPN/app.log` would
+/// otherwise be created world-readable at the usual umask — the log carries
+/// sidecar paths, interface names and whatever a node sends us.
+///
+/// macOS is deliberately left alone: the process is root there and the file sits
+/// in the user's own `~/Library/Logs`, so a root-owned 0600 file would stop the
+/// owner from opening the log the support UI points them at. Windows needs
+/// nothing — `%LOCALAPPDATA%` already inherits an owner-only ACL.
+fn log_file_options() -> OpenOptions {
+    let mut opts = OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts
 }
 
 fn format_iso(secs: u128) -> String {

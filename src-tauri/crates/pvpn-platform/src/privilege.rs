@@ -21,10 +21,12 @@
 // model — the webview never runs as root there.
 //
 // The cost on macOS and Windows is real and documented in docs/WINDOWS.md: the
-// WebView runs elevated too, and tauri.conf.json still has `"csp": null`.
-// Linux already demonstrates the fix, and `net`'s contract is deliberately the
-// same narrow three-operation shape on all three platforms, so moving Windows
-// behind an IPC boundary does not touch a single caller.
+// WebView runs elevated too. It is now at least confined by a content security
+// policy (tauri.conf.json) and by a capability set that does not include
+// `shell`, but confinement is not the same as not being root. Linux already
+// demonstrates the fix, and `net`'s contract is deliberately the same narrow
+// three-operation shape on all three platforms, so moving Windows behind the
+// same IPC boundary does not touch a single caller.
 
 /// True when the process may reconfigure interfaces and routes.
 pub fn is_elevated() -> bool {

@@ -81,6 +81,11 @@ pub fn sidecar_dirs(app: &tauri::AppHandle) -> Vec<PathBuf> {
         dirs.push(resource_dir.join("binaries"));
         dirs.push(resource_dir.join("_up_").join("binaries"));
     }
+    // Debug builds only. This reads an environment variable at *runtime*, so in
+    // a shipped build anyone who can set CARGO_MANIFEST_DIR in our environment
+    // could add a directory to the sidecar search — and on macOS and Windows
+    // the process that execs from it is root/administrator.
+    #[cfg(debug_assertions)]
     if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
         dirs.push(PathBuf::from(manifest_dir).join("binaries"));
     }
@@ -200,10 +205,20 @@ pub async fn stop(state: &SharedTunState) -> Result<()> {
     }
     let server_ip = guard.plan.as_ref().map(|p| p.server_ip);
     guard.plan = None;
-    // The lock is released before teardown: `down` runs external commands and
-    // may wait on a child, and the status poll must not block behind it.
-    drop(guard);
 
+    // The guard is deliberately held across `down`. An earlier version dropped
+    // it here "so the status poll does not block behind teardown", which was
+    // wrong on both counts: `is_running` below never takes this lock, so the
+    // early drop bought nothing, and it let a concurrent `start` pass the
+    // `plan.is_some()` check and run `up` *while* this `down` was still
+    // deleting routes and killing the engine. The tray's "Отключить VPN" spawns
+    // this function in its own task (see lib.rs), so a user who clicks it and
+    // then immediately reconnects hit exactly that interleaving: either the
+    // split defaults were removed from under a live engine — traffic leaving in
+    // the clear while the UI said "connected" — or the fresh engine was killed
+    // by the old teardown's stray sweep, leaving routes pointing at a dead
+    // device. Before the platform split, `stop` held its lock the whole way
+    // through for the same reason.
     net::down(server_ip).await
 }
 
@@ -232,6 +247,27 @@ mod tests {
             .as_u64()
             .expect("inbound port in generated config");
         assert_eq!(port, SOCKS_PORT as u64);
+    }
+
+    /// The Linux helper refuses any SOCKS port that is not one of this app's
+    /// own engine ports, because the port is where every packet on the machine
+    /// ends up once the half-defaults are installed. The allow-list lives in
+    /// the platform crate, which cannot see these two constants, so nothing but
+    /// this test keeps the three values together.
+    #[test]
+    fn engine_ports_are_the_ones_the_helper_accepts() {
+        use pvpn_platform::helper::proto::ALLOWED_SOCKS_PORTS;
+        assert!(
+            ALLOWED_SOCKS_PORTS.contains(&SOCKS_PORT),
+            "xray's inbound {} is not in {:?}",
+            SOCKS_PORT,
+            ALLOWED_SOCKS_PORTS
+        );
+        assert!(
+            ALLOWED_SOCKS_PORTS.contains(&crate::hysteria_manager::HY2_SOCKS_PORT),
+            "hysteria's inbound is not in {:?}",
+            ALLOWED_SOCKS_PORTS
+        );
     }
 
     /// The device name in this module and the one the platform layer configures

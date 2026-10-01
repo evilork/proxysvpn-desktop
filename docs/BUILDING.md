@@ -23,9 +23,19 @@ Windows x86_64, Linux x86_64. Ничего не подписывается и н
 | --- | --- |
 | `proxysvpn-macos-aarch64` | `ProxysVPN_<версия>_aarch64.dmg` |
 | `proxysvpn-windows-x86_64` | `ProxysVPN_<версия>_x64-setup.exe` (установщик NSIS) |
-| `proxysvpn-linux-x86_64` | `proxysvpn-desktop_<версия>_amd64.deb` и `ProxysVPN_<версия>_amd64.AppImage` |
+| `proxysvpn-linux-x86_64` | `ProxysVPN_<версия>_amd64.deb` и `ProxysVPN_<версия>_amd64.AppImage` |
 
 GitHub отдаёт артефакт одним zip-архивом — распаковать перед установкой.
+
+Подписи кода у сборок нет, поэтому единственная проверка «это тот самый файл» —
+sha256. Прогон печатает его сам: в логе задания есть шаг **List bundle output
+with checksums**. Сверить после распаковки:
+
+```bash
+shasum -a 256 ProxysVPN_0.1.0_aarch64.dmg          # macOS
+certutil -hashfile ProxysVPN_0.1.0_x64-setup.exe SHA256   # Windows
+sha256sum ProxysVPN_0.1.0_amd64.deb                # Linux
+```
 
 ## 3. macOS (Apple Silicon)
 
@@ -57,7 +67,7 @@ Windows 11 содержит WebView2 изначально. На Windows 10 ус�
 `.deb` (Ubuntu/Debian, рекомендуется — ставит зависимости сам):
 
 ```bash
-sudo apt install ./proxysvpn-desktop_0.1.0_amd64.deb
+sudo apt install ./ProxysVPN_0.1.0_amd64.deb
 ```
 
 AppImage (любой дистрибутив, ничего не ставится в систему):

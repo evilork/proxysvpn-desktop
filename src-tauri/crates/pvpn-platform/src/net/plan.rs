@@ -189,7 +189,41 @@ pub mod windows {
     /// net::windows::device_index). Chosen by us, so never localised.
     pub const DEVICE: &str = "ProxysVPN";
     pub const DEVICE_MASK: &str = "255.255.255.0";
-    const NETSH: &str = "netsh";
+
+    /// Absolute path of a System32 tool.
+    ///
+    /// Not the bare name. The process runs with `requireAdministrator`, and
+    /// `CreateProcess` searches the directory of the *calling executable* before
+    /// System32, so a `netsh.exe` dropped next to our own exe would be run with
+    /// administrator rights. In a perMachine install that directory is Program
+    /// Files and unwritable, but a portable copy, an unpacked folder or a dev
+    /// build are all ordinary user-writable directories. macOS already resolves
+    /// `/sbin/route` for the same reason.
+    fn system32(exe: &str) -> String {
+        let root = std::env::var("SystemRoot")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| WINDOWS_ROOT_FALLBACK.to_string());
+        system32_in(&root, exe)
+    }
+
+    /// Where Windows itself is when `%SystemRoot%` is missing from the
+    /// environment. Split out so the join is testable from any host.
+    pub const WINDOWS_ROOT_FALLBACK: &str = r"C:\Windows";
+
+    pub fn system32_in(root: &str, exe: &str) -> String {
+        format!(r"{}\System32\{}", root.trim_end_matches('\\'), exe)
+    }
+
+    fn netsh() -> String {
+        system32("netsh.exe")
+    }
+
+    /// For `process::kill_by_name`, which kills engines by image name rather
+    /// than as part of a route plan but must resolve the tool the same way.
+    pub fn taskkill_path() -> String {
+        system32("taskkill.exe")
+    }
 
     /// Writes go through netsh rather than IP Helper: we never parse its
     /// output, only check the exit code, so localisation is irrelevant, and it
@@ -237,12 +271,12 @@ pub mod windows {
             args.push(format!("nexthop={}", gw));
         }
         args.push("store=active".to_string());
-        Ok(Argv::new(NETSH, args))
+        Ok(Argv::new(netsh(), args))
     }
 
     pub fn host_route_delete(ip: Ipv4Addr) -> Argv {
         Argv::new(
-            NETSH,
+            netsh(),
             [
                 "interface",
                 "ipv4",
@@ -256,7 +290,7 @@ pub mod windows {
 
     pub fn split_default_add(half: &str) -> Argv {
         Argv::new(
-            NETSH,
+            netsh(),
             [
                 "interface",
                 "ipv4",
@@ -271,7 +305,7 @@ pub mod windows {
 
     pub fn split_default_delete(half: &str) -> Argv {
         Argv::new(
-            NETSH,
+            netsh(),
             [
                 "interface",
                 "ipv4",
@@ -286,7 +320,7 @@ pub mod windows {
 
     pub fn device_set_address() -> Argv {
         Argv::new(
-            NETSH,
+            netsh(),
             [
                 "interface",
                 "ipv4",
@@ -305,7 +339,7 @@ pub mod windows {
     /// source address for traffic it sends over it.
     pub fn device_set_metric() -> Argv {
         Argv::new(
-            NETSH,
+            netsh(),
             [
                 "interface",
                 "ipv4",
@@ -330,7 +364,7 @@ pub mod windows {
     /// it is deliberately out of scope and called out in the PR.
     pub fn device_clear_dns() -> Argv {
         Argv::new(
-            NETSH,
+            netsh(),
             [
                 "interface",
                 "ipv4",
@@ -346,7 +380,7 @@ pub mod windows {
 
     pub fn process_alive(image: &str) -> Argv {
         Argv::new(
-            "tasklist",
+            system32("tasklist.exe"),
             [
                 "/FI",
                 &format!("IMAGENAME eq {}", image),
@@ -358,7 +392,7 @@ pub mod windows {
     pub fn kill_stray(image: &str) -> Argv {
         // /T also kills children: a sidecar that spawned helpers must not
         // outlive the kill, since nothing else reaps it on Windows.
-        Argv::new("taskkill", ["/F", "/T", "/IM", image])
+        Argv::new(system32("taskkill.exe"), ["/F", "/T", "/IM", image])
     }
 
     pub fn image_name(stem: &str) -> String {
@@ -524,9 +558,14 @@ pub mod linux {
     }
 
     /// Crash sweep for a tun2socks the helper no longer has a handle for.
-    /// `-x` so it cannot match an unrelated command line.
+    ///
+    /// `-x` so it cannot match an unrelated command line, and `-u 0` because
+    /// this one runs as root on a machine that may have other users logged in.
+    /// The helper spawns tun2socks itself, so every process it is entitled to
+    /// reap is root-owned, while another user's VPN client is not — without the
+    /// filter, one user's reconnect killed everybody else's tunnel.
     pub fn kill_stray(stem: &str) -> Argv {
-        Argv::new("pkill", ["-9", "-x", stem])
+        Argv::new("pkill", ["-9", "-x", "-u", "0", stem])
     }
 }
 
@@ -666,16 +705,16 @@ mod tests {
     #[test]
     fn windows_host_route_uses_index_and_next_hop() {
         assert_eq!(
-            windows::host_route_add(NODE, &gw_route()).expect("plan").to_string(),
-            "netsh interface ipv4 add route prefix=203.0.113.7/32 interface=11 nexthop=192.168.1.1 store=active"
+            windows::host_route_add(NODE, &gw_route()).expect("plan").args.join(" "),
+            "interface ipv4 add route prefix=203.0.113.7/32 interface=11 nexthop=192.168.1.1 store=active"
         );
     }
 
     #[test]
     fn windows_host_route_omits_next_hop_on_link() {
         assert_eq!(
-            windows::host_route_add(NODE, &onlink_route()).expect("plan").to_string(),
-            "netsh interface ipv4 add route prefix=203.0.113.7/32 interface=7 store=active"
+            windows::host_route_add(NODE, &onlink_route()).expect("plan").args.join(" "),
+            "interface ipv4 add route prefix=203.0.113.7/32 interface=7 store=active"
         );
     }
 
@@ -689,37 +728,79 @@ mod tests {
         assert!(windows::host_route_add(NODE, &no_index).is_err());
     }
 
+    /// The arguments, not the whole command line: the program is now an
+    /// absolute System32 path whose prefix depends on `%SystemRoot%`, so
+    /// comparing the rendered string would make this test's verdict depend on
+    /// the host it ran on — the mistake that produced two CI-only failures
+    /// earlier in this branch.
     #[test]
     fn windows_route_and_device_argv() {
+        let args = |argv: Argv| argv.args.join(" ");
+
         assert_eq!(
-            windows::host_route_delete(NODE).to_string(),
-            "netsh interface ipv4 delete route prefix=203.0.113.7/32 store=active"
+            args(windows::host_route_delete(NODE)),
+            "interface ipv4 delete route prefix=203.0.113.7/32 store=active"
         );
         assert_eq!(
-            windows::split_default_add(SPLIT_LOW).to_string(),
-            "netsh interface ipv4 add route prefix=0.0.0.0/1 interface=ProxysVPN store=active"
+            args(windows::split_default_add(SPLIT_LOW)),
+            "interface ipv4 add route prefix=0.0.0.0/1 interface=ProxysVPN store=active"
         );
         assert_eq!(
-            windows::split_default_delete(SPLIT_HIGH).to_string(),
-            "netsh interface ipv4 delete route prefix=128.0.0.0/1 interface=ProxysVPN store=active"
+            args(windows::split_default_delete(SPLIT_HIGH)),
+            "interface ipv4 delete route prefix=128.0.0.0/1 interface=ProxysVPN store=active"
         );
         assert_eq!(
-            windows::device_set_address().to_string(),
-            "netsh interface ipv4 set address name=ProxysVPN source=static address=198.18.0.1 mask=255.255.255.0"
+            args(windows::device_set_address()),
+            "interface ipv4 set address name=ProxysVPN source=static address=198.18.0.1 mask=255.255.255.0"
         );
         assert_eq!(
-            windows::device_set_metric().to_string(),
-            "netsh interface ipv4 set interface interface=ProxysVPN metric=1 store=active"
+            args(windows::device_set_metric()),
+            "interface ipv4 set interface interface=ProxysVPN metric=1 store=active"
         );
         assert_eq!(
-            windows::device_clear_dns().to_string(),
-            "netsh interface ipv4 set dnsservers name=ProxysVPN source=static address=none register=none"
+            args(windows::device_clear_dns()),
+            "interface ipv4 set dnsservers name=ProxysVPN source=static address=none register=none"
         );
         assert_eq!(
-            windows::kill_stray("tun2socks.exe").to_string(),
-            "taskkill /F /T /IM tun2socks.exe"
+            args(windows::kill_stray("tun2socks.exe")),
+            "/F /T /IM tun2socks.exe"
         );
         assert_eq!(windows::image_name("xray"), "xray.exe");
+    }
+
+    /// An elevated process must not let `CreateProcess` find these tools by
+    /// searching, because the search starts in the directory of our own
+    /// executable — writable in a portable or dev layout.
+    #[test]
+    fn windows_system_tools_are_absolute_paths_in_system32() {
+        assert_eq!(
+            windows::system32_in(r"C:\Windows", "netsh.exe"),
+            r"C:\Windows\System32\netsh.exe"
+        );
+        // A trailing separator in %SystemRoot% must not double up.
+        assert_eq!(
+            windows::system32_in(r"D:\WINNT\", "taskkill.exe"),
+            r"D:\WINNT\System32\taskkill.exe"
+        );
+
+        for argv in [
+            windows::device_set_address(),
+            windows::split_default_add(SPLIT_LOW),
+            windows::kill_stray("tun2socks.exe"),
+            windows::process_alive("tun2socks.exe"),
+        ] {
+            let program = argv.program.to_ascii_lowercase();
+            assert!(
+                program.contains(r"\system32\"),
+                "{} is resolved by searching, not by path",
+                argv.program
+            );
+            assert!(
+                program.ends_with(".exe"),
+                "{} should name the executable outright",
+                argv.program
+            );
+        }
     }
 
     /// Every write goes to the volatile store, so a crash cannot leave a
@@ -880,12 +961,17 @@ mod tests {
         );
     }
 
+    /// This sweep runs as root in the helper, so it needs two limits, not one:
+    /// exact name, and root-owned only. Another logged-in user's tun2socks is
+    /// not ours to kill.
     #[test]
-    fn linux_kill_stray_is_exact_match_only() {
+    fn linux_kill_stray_matches_only_our_own_root_processes() {
         let argv = linux::kill_stray("tun2socks");
-        assert_eq!(argv.to_string(), "pkill -9 -x tun2socks");
+        assert_eq!(argv.to_string(), "pkill -9 -x -u 0 tun2socks");
         // Without -x this would also kill, say, "tun2socks-wrapper".
         assert!(argv.args.contains(&"-x".to_string()));
+        let uid_filter = argv.args.windows(2).any(|w| w == ["-u", "0"]);
+        assert!(uid_filter, "the sweep must be limited to root's processes");
     }
 
     // ------------------------------------------------- cross-platform shape

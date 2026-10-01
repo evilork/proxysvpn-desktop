@@ -10,9 +10,13 @@ one run on real hardware before this ships to anybody.
 Identical in shape to macOS — same engines, same chain, same split routing:
 
 ```
-VLESS:  tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10808 (xray)  --vless--> node
-Hy2:    tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10808 (xray) --socks--> 127.0.0.1:10809 (hysteria) -> node
+VLESS:  tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10808 (xray)     --vless--> node
+Hy2:    tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10809 (hysteria) --hy2---->  node
 ```
+
+The two are alternatives, not a chain: for a hy2 server `lib.rs` starts hysteria
+only and hands `tun::start` the hysteria port directly, so xray is not running
+at all and tun2socks dials hysteria.
 
 Startup order (`crates/pvpn-platform/src/net/local.rs`, shared with macOS):
 
@@ -95,8 +99,11 @@ scripts/check-platform.sh
 ```
 
 It builds and tests everything on the host and then runs
-`cargo check -p pvpn-platform --target x86_64-pc-windows-msvc`, which type-checks
-the whole Windows platform layer including its `windows`-crate FFI.
+`cargo clippy -p pvpn-platform --all-targets --target x86_64-pc-windows-msvc
+-- -D warnings`, which type-checks *and* lints the whole Windows platform layer
+including its `windows`-crate FFI. Clippy rather than `cargo check` on purpose:
+the lints are where the FFI mistakes show up, and this target gets no other
+review on this machine. CI runs the same script, so the two cannot drift.
 
 `cargo check` for the **whole app** with that target cannot work here: `reqwest`
 pulls in `ring`, whose build script compiles C and fails with
@@ -115,3 +122,29 @@ SDK. That is exactly why the platform layer is a separate crate.
 * behaviour on logoff/shutdown: there is no reliable notification for a GUI
   process, so the design relies on `store=active` plus route-hint cleanup rather
   than on a teardown handler.
+
+## Content security policy
+
+`tauri.conf.json` carries a policy now (it used to be `"csp": null`), which
+matters more here than on Linux because the WebView runs elevated:
+
+```
+default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
+img-src 'self' data:; font-src 'self' data:;
+connect-src 'self' ipc: http://ipc.localhost;
+object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'
+```
+
+`'unsafe-inline'` for styles because the UI uses a few `style=` attributes, and
+`data:` for images because the pairing QR code is a data URL. Everything the app
+fetches over the network is fetched by Rust, so the WebView itself needs no
+outside origin — `connect-src` only has to cover Tauri's own IPC, which is
+`ipc:` on macOS and `http://ipc.localhost` on Windows and Linux.
+
+Verified against the real production bundle (`dist/`) by serving it with this
+exact policy and loading it in a browser: the bundle executes, React mounts, the
+stylesheet applies, the `style=` attributes take effect and a `data:` image
+loads, with no CSP violation reported. What that does **not** cover is Tauri's
+own IPC under the policy, because the test page had no Tauri runtime — if a
+command call ever fails with a CSP error in the console, `connect-src` is where
+to look.

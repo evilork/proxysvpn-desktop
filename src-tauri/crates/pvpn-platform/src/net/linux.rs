@@ -129,7 +129,11 @@ async fn request(link: &mut Link, req: Request, timeout: Duration) -> Result<boo
 
 fn spawn_command() -> Result<Command> {
     let exe = std::env::current_exe().context("locate our own executable")?;
-    let dev = std::env::var(DEV_ENV).map(|v| v == "1").unwrap_or(false);
+    // Debug builds only. The helper ignores the flag in a release build anyway
+    // (helper/proto.rs::dev_mode_allowed), but a release argv should not even
+    // contain it.
+    let dev = cfg!(debug_assertions)
+        && std::env::var(DEV_ENV).map(|v| v == "1").unwrap_or(false);
 
     let mut cmd = if privilege::is_elevated() {
         // Already root (the user ran us with sudo on X11): no dialog needed,

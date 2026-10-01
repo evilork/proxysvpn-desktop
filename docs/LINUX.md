@@ -3,7 +3,7 @@
 Status: the Linux target is implemented and type-checked, but **never built or
 run on a Linux machine** — the development box is an Apple Silicon Mac with no
 Docker, no Windows and no Linux. The GitHub Actions workflow
-`.github/workflows/build-linux.yml` is the first place this code is really
+`.github/workflows/desktop-build.yml` is the first place this code is really
 compiled and packaged. What is verified and what is not is listed at the bottom.
 
 ## Build dependencies
@@ -45,9 +45,12 @@ everyone. Without it the app starts and says so instead of failing silently.
 Same chain as macOS:
 
 ```
-tun2socks(proxysvpn0) -> socks5 127.0.0.1:10808 (xray) -> node
-                                 \-> 127.0.0.1:10809 (hysteria) -> node   (hy2)
+VLESS:  tun2socks(proxysvpn0) -> socks5 127.0.0.1:10808 (xray)     --vless--> node
+Hy2:    tun2socks(proxysvpn0) -> socks5 127.0.0.1:10809 (hysteria) --hy2---->  node
 ```
+
+The two are alternatives, not a chain: a hy2 server starts hysteria only, and
+tun2socks dials it directly.
 
 and the same routing shape:
 
@@ -98,10 +101,21 @@ The action's `exec.path` is `/usr/bin/proxysvpn-desktop`. Note that this is the
 the first CI build, so the dialog gets our wording rather than the generic
 fallback.
 
-The helper refuses to exec a sidecar that is group- or world-writable, or that is
-neither root-owned nor sitting in its own directory; `PROXYSVPN_HELPER_DEV=1`
-relaxes the last rule for `cargo run`. The invariant is "no easier to tamper with
-than the helper binary itself".
+The helper refuses to exec a sidecar that is group- or world-writable, that is a
+symlink, that is not named `tun2socks`, or that is neither root-owned nor sitting
+in its own directory. `PROXYSVPN_HELPER_DEV=1` relaxes the last rule for
+`cargo run` — **in a debug build only**: the flag that asks for it is an argument
+of the helper, and the helper's argv comes from an unprivileged peer, so a
+release build ignores it outright instead of trusting that no bundle sets the
+variable. The invariant is "no easier to tamper with than the helper binary
+itself".
+
+The same reasoning applies to the rest of the request: the SOCKS port is checked
+against this app's own two engine ports, because it decides where every packet on
+the machine goes once the half-defaults are installed, and a request line is
+bounded at 64 KiB. polkit's `auth_admin_keep` means an authorization earned by
+one connect is reusable without a password for the rest of the keep window, so
+the helper assumes its peer may not be our GUI.
 
 Prefer the `.deb` for the strongest posture: in an AppImage the executable that
 pkexec runs lives in a user-writable file.
@@ -113,7 +127,15 @@ pkexec runs lives in a user-writable file.
 * helper killed — `purge_stale_sync()` on the next start removes the leftover
   device, the host route (remembered in `/run/proxysvpn/route-hint`) and the
   `/etc/resolv.conf` backup, and kills orphaned tun2socks processes;
-* reboot — `/run` is a tmpfs, so nothing survives it anyway.
+* reboot — the route hint is in `/run`, a tmpfs, and that is right: routes do
+  not survive a reboot either, so a hint that did would name entries that no
+  longer exist. The `/etc/resolv.conf` backup is the opposite case and lives in
+  `/var/lib/proxysvpn`: our replacement file *is* on disk and does survive, so
+  the copy of the original has to as well — with it in a tmpfs, a power cut left
+  the machine pointed at our resolvers with nothing left to restore.
+  `purge_stale_sync()` puts it back on the next start, which means the machine
+  keeps our resolvers until the app is launched again; a systemd unit that
+  restores it at boot instead is the proper fix and is not written yet.
 
 ## DNS
 
@@ -129,8 +151,8 @@ So the helper publishes resolvers that are only reachable through the tunnel:
   `resolvectl domain proxysvpn0 '~.'`, `resolvectl default-route proxysvpn0 yes`,
   caches flushed. Reverted with `resolvectl revert` and by the link disappearing.
 * **otherwise** — `/etc/resolv.conf` is replaced, with the original remembered in
-  `/run/proxysvpn/` (a symlink target is stored as a target, a regular file is
-  copied) and restored on teardown or at the next start after a crash. A second
+  `/var/lib/proxysvpn/` (a symlink target is stored as a target, a regular file
+  is copied) and restored on teardown or at the next start after a crash. A second
   apply never overwrites the first backup, and the symlink is unlinked rather
   than written through, so resolved's own stub file is left alone.
 
@@ -171,7 +193,9 @@ decoding (little-endian hex), split-default detection, `ip route get` parsing,
 the resolv.conf backup/restore dance including the symlink and crash cases,
 request validation and the sidecar trust rule. It also covers the Linux argv
 itself (`net::plan::linux`) and the shared up/ensure/down sequence with a fake
-backend, including every rollback path. 115 tests, green on macOS.
+backend, including every rollback path. All green on macOS; the count is in the
+`cargo test` output and deliberately not repeated here, because the two copies
+of it this file used to carry had already drifted apart.
 
 Beyond the tests, the whole Linux backend — the helper, the route code, the DNS
 code — is **compiled** for `x86_64-unknown-linux-gnu` on the developer's Mac and
@@ -188,12 +212,13 @@ this branch is unseen by a compiler.
 
 Verified here:
 
-* the whole workspace compiles and all tests pass on macOS (`cargo test`, 116);
+* the whole workspace compiles and all tests pass on macOS (`cargo test`);
 * the Linux code is **compiled for Linux** — not with the `cfg` gates lifted, but
   really, for `x86_64-unknown-linux-gnu`, and linted with `clippy -D warnings`.
   That is possible because the platform layer is its own crate with no
   tauri/reqwest/rustls, so it has no `ring` and needs no C compiler. Run it with
-  `scripts/check-platform.sh`; CI runs the same commands in the `cross-check` job;
+  `scripts/check-platform.sh`; the `cross-check` job runs that very script, so a
+  target added to it cannot be missed by CI;
 * `scripts/fetch-binaries.sh` really downloads and sha256-verifies the Linux
   x86_64 **and** aarch64 sidecars; `file` confirms the architectures;
 * tun2socks flag names (`-device`, `-proxy`, `-mtu`, `-loglevel warn`) read from

@@ -121,17 +121,35 @@ impl std::fmt::Display for Argv {
 /// Exact-match only (`pkill -x`, taskkill's `/IM` with the full image name): a
 /// prefix match would also reap an unrelated `xray-helper` or the user's own
 /// build of the same tool.
+/// Sends SIGTERM first on Unix and only then SIGKILL, with a short grace
+/// period: hysteria closes its QUIC session on TERM, and killing it outright
+/// looked to the node (and to the user) like a connection that dropped. The
+/// pre-split code sent only TERM here; the guarantee that the port is actually
+/// released is what the follow-up KILL is for.
+///
+/// Windows has no graceful equivalent for a console-less GUI child, so
+/// `taskkill /F` stands as it was.
+#[cfg_attr(windows, allow(dead_code))] // only the Unix arm waits; see above
+const KILL_GRACE: std::time::Duration = std::time::Duration::from_millis(400);
+
 pub async fn kill_by_name(stem: &str) {
     #[cfg(unix)]
-    let argv = Argv::new("pkill", ["-9", "-x", stem]);
+    {
+        // On Windows `taskkill` resolves through the System32 path for the same
+        // reason as netsh; see net::plan::windows::system32.
+        Argv::new("pkill", ["-x", stem]).run_best_effort().await;
+        tokio::time::sleep(KILL_GRACE).await;
+        Argv::new("pkill", ["-9", "-x", stem]).run_best_effort().await;
+    }
 
     #[cfg(windows)]
-    let argv = Argv::new(
-        "taskkill",
-        ["/F", "/IM", &format!("{}.exe", stem), "/T"],
-    );
-
-    argv.run_best_effort().await;
+    {
+        let argv = Argv::new(
+            crate::net::plan::windows::taskkill_path(),
+            ["/F", "/IM", &format!("{}.exe", stem), "/T"],
+        );
+        argv.run_best_effort().await;
+    }
 }
 
 #[cfg(test)]
@@ -161,6 +179,14 @@ mod tests {
             let argv = Argv::new("taskkill", ["/F", "/IM", "xray.exe", "/T"]);
             assert!(argv.args.contains(&"xray.exe".to_string()));
         }
+    }
+
+    /// The grace period must be long enough for a QUIC close to go out and
+    /// short enough that the UI does not feel stuck between the two signals.
+    #[test]
+    fn kill_grace_is_a_short_wait_not_a_hang() {
+        assert!(KILL_GRACE >= std::time::Duration::from_millis(100));
+        assert!(KILL_GRACE <= std::time::Duration::from_millis(1000));
     }
 
     /// The failure text embeds `{:?}` of the argument vector. Pinning it keeps

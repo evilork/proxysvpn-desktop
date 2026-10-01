@@ -38,6 +38,15 @@
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/proxysvpn-desktop</annotate>
+    <!--
+      argv1 pins the action to the helper invocation. Without it, the
+      auth_admin_keep grant earned by one connect would also cover
+      `pkexec /usr/bin/proxysvpn-desktop <anything else>` for the rest of the
+      keep window. It does not make `--helper` itself unreachable — nothing
+      can — which is why the helper re-validates everything it is told; see
+      helper/proto.rs.
+    -->
+    <annotate key="org.freedesktop.policykit.exec.argv1">--helper</annotate>
     <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
   </action>
 </policyconfig>

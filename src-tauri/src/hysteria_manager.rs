@@ -66,12 +66,15 @@ pub async fn start(
     // Fixed location per platform (TMPDIR differs under sudo, and Windows has
     // no /tmp at all) — see pvpn_platform::paths.
     let cfg_path = paths::hy2_config_file()?;
-    std::fs::write(&cfg_path, &yaml).context("write hysteria config")?;
-    // The file holds the node password: restrict it before hysteria reads it.
-    paths::harden_secret_file(&cfg_path).context("restrict hysteria config")?;
+    // Owner-only from the moment it exists, and never through a symlink: it
+    // holds the node password, and on macOS this path is in /tmp and written by
+    // root. See paths::write_private_file.
+    paths::write_private_file(&cfg_path, yaml.as_bytes()).context("write hysteria config")?;
 
     crate::logger::log("info", "hysteria", &format!("config written: {}", cfg_path.display()));
-    crate::logger::log("info", "hysteria", &format!("server {}:{}", cfg.host, cfg.port));
+    // The node address is deliberately absent: it is not public information and
+    // this log is attached to support tickets. The remark identifies the node.
+    crate::logger::log("info", "hysteria", &format!("node: {}", cfg.remark));
     crate::logger::log("info", "hysteria", &format!("binary: {}", bin.display()));
 
     let cfg_arg = cfg_path
@@ -119,6 +122,20 @@ pub async fn stop(state: &SharedHysteriaState) -> Result<()> {
     }
     // A sidecar that outlived its handle still holds the SOCKS port.
     pvpn_platform::process::kill_by_name("hysteria").await;
+    // The config holds the node password and hysteria is no longer reading it.
+    // On Linux and Windows it lives in the user's profile, where it would
+    // otherwise sit until the next connect overwrote it.
+    if let Ok(cfg_path) = paths::hy2_config_file() {
+        if let Err(e) = std::fs::remove_file(&cfg_path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                crate::logger::log(
+                    "warn",
+                    "hysteria",
+                    &format!("could not remove {}: {}", cfg_path.display(), e),
+                );
+            }
+        }
+    }
     Ok(())
 }
 

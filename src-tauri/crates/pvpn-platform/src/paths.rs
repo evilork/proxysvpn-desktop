@@ -97,8 +97,8 @@ pub fn log_file() -> Option<PathBuf> {
     Some(path)
 }
 
-/// Config handed to the hysteria client. Holds the node password, so it is
-/// created with a restrictive mode — see [`harden_secret_file`].
+/// Config handed to the hysteria client. Holds the node password, so it must be
+/// written with [`write_private_file`].
 pub fn hy2_config_file() -> Result<PathBuf> {
     // Unchanged literal on macOS: a fixed path, because TMPDIR differs under sudo.
     #[cfg(target_os = "macos")]
@@ -139,23 +139,63 @@ pub fn linux_runtime_dir() -> PathBuf {
     PathBuf::from("/run/proxysvpn")
 }
 
-/// Restricts a file that contains a secret to the current user.
+/// Where the Linux root helper keeps state that must outlive a reboot.
 ///
-/// Unix: 0600. The pre-split code left the hysteria config at the default
-/// umask (world-readable), which leaked the node password to any local user.
-/// Windows: nothing to do — %LOCALAPPDATA% already inherits an owner-only ACL,
-/// and rewriting ACLs would need privileges the installer does not grant.
-pub fn harden_secret_file(path: &Path) -> Result<()> {
+/// `/var/lib` and not `/run`, and the distinction matters: the route hint
+/// belongs in `/run` because routes die with the kernel it was written under, so
+/// a stale hint would be worse than none. The `/etc/resolv.conf` backup is the
+/// opposite — our replacement is on disk and survives, so if the copy of the
+/// original is in a tmpfs then a power cut leaves the machine pointed at our
+/// resolvers for good, with nothing left to restore. Root-owned 0700 for the
+/// same reason as the runtime dir: no unprivileged process may plant a symlink
+/// in a directory root writes into.
+#[cfg(target_os = "linux")]
+pub fn linux_persistent_dir() -> PathBuf {
+    PathBuf::from("/var/lib/proxysvpn")
+}
+
+/// Writes a file that only its owner may read, refusing to follow a symlink.
+///
+/// Both callers write a fixed, predictable path, and on macOS they do it **as
+/// root** into `/tmp`, which is mode 1777 and empty after a reboot. A plain
+/// `fs::write` follows symlinks, so any local user could plant
+/// `/tmp/proxysvpn-hy2.yaml -> /etc/sudoers` and have root overwrite that file
+/// (and, with the old `chmod 600` afterwards, change its mode too). Keeping the
+/// path and refusing the link is the fix that does not break the upgrade
+/// cleanup, which still looks for those names.
+///
+/// The sequence is unlink, then create with `O_EXCL`: if the attacker wins the
+/// race and re-creates the link in between, the create fails and we return an
+/// error instead of writing through it. 0600 also replaces the old
+/// write-then-chmod, which left the hysteria config holding the node password
+/// world-readable for the moment in between.
+///
+/// Windows: `%LOCALAPPDATA%` already inherits an owner-only ACL and has no
+/// symlink exposure of this kind, so the write is plain.
+pub fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
+    use std::io::Write;
+
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(e).with_context(|| format!("replace {}", path.display()));
+        }
+    }
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("chmod 600 {}", path.display()))?;
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-    }
+
+    let mut file = opts
+        .open(path)
+        .with_context(|| format!("create {}", path.display()))?;
+    file.write_all(contents)
+        .with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
 
@@ -217,13 +257,49 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn harden_sets_owner_only_mode() {
+    fn private_write_creates_an_owner_only_file() {
         use std::os::unix::fs::PermissionsExt;
         let path = std::env::temp_dir().join(format!("pvpn-secret-{}", std::process::id()));
-        std::fs::write(&path, b"secret").expect("write");
-        harden_secret_file(&path).expect("harden");
-        let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
         std::fs::remove_file(&path).ok();
+
+        write_private_file(&path, b"secret").expect("write");
+        let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the node password must not be readable by others");
+        assert_eq!(std::fs::read(&path).expect("read"), b"secret");
+
+        // Rewriting must replace the contents, not append to them.
+        write_private_file(&path, b"second").expect("rewrite");
+        assert_eq!(std::fs::read(&path).expect("read"), b"second");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// The reason this helper exists: on macOS these files are written by root
+    /// into mode-1777 /tmp under a predictable name, so following a symlink
+    /// would hand any local user a root-owned write to a file of their choice.
+    #[cfg(unix)]
+    #[test]
+    fn private_write_refuses_to_follow_a_planted_symlink() {
+        let dir = std::env::temp_dir().join(format!("pvpn-link-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let victim = dir.join("victim");
+        let link = dir.join("config.yaml");
+        std::fs::write(&victim, b"do not touch").expect("victim");
+        std::os::unix::fs::symlink(&victim, &link).expect("symlink");
+
+        // The unlink step removes the link itself, so the write lands on a
+        // fresh regular file and the victim keeps its contents.
+        write_private_file(&link, b"ours").expect("write");
+        assert_eq!(std::fs::read(&victim).expect("read"), b"do not touch");
+        assert_eq!(std::fs::read(&link).expect("read"), b"ours");
+        assert!(
+            !std::fs::symlink_metadata(&link)
+                .expect("stat")
+                .file_type()
+                .is_symlink(),
+            "the link must have been replaced by a regular file"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
