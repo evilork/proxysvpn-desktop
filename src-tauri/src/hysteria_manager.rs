@@ -3,10 +3,10 @@
 // hysteria in client mode, exposing a SOCKS5 inbound that tun2socks consumes.
 
 use anyhow::{anyhow, Context, Result};
+use pvpn_platform::{net, paths, process as pprocess, triple};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -27,42 +27,8 @@ pub fn new_state() -> SharedHysteriaState {
     Arc::new(Mutex::new(HysteriaState::default()))
 }
 
-fn current_target_triple() -> &'static str {
-    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        "aarch64-apple-darwin"
-    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-        "x86_64-apple-darwin"
-    } else {
-        "unknown"
-    }
-}
-
 pub fn hysteria_path(app: &tauri::AppHandle) -> Result<PathBuf> {
-    let triple = current_target_triple();
-    let mut candidates: Vec<PathBuf> = Vec::new();
-
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("hysteria"));
-            candidates.push(dir.join(format!("hysteria-{}", triple)));
-        }
-    }
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(resource_dir.join("hysteria"));
-        candidates.push(resource_dir.join(format!("hysteria-{}", triple)));
-        candidates.push(resource_dir.join("binaries").join("hysteria"));
-        candidates.push(resource_dir.join("binaries").join(format!("hysteria-{}", triple)));
-    }
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        let base = PathBuf::from(manifest_dir);
-        candidates.push(base.join("binaries").join(format!("hysteria-{}", triple)));
-    }
-
-    candidates
-        .iter()
-        .find(|p| p.exists())
-        .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
-        .ok_or_else(|| anyhow!("hysteria binary not found; tried: {:?}", candidates))
+    triple::find_sidecar("hysteria", &crate::tun::sidecar_dirs(app))
 }
 
 /// Build the hysteria client YAML config.
@@ -97,19 +63,27 @@ pub async fn start(
     let bin = hysteria_path(app)?;
     let yaml = build_config(cfg);
 
-    // Фиксированный путь (под sudo TMPDIR может отличаться).
-    let cfg_path = std::path::PathBuf::from("/tmp/proxysvpn-hy2.yaml");
+    // Fixed location per platform (TMPDIR differs under sudo, and Windows has
+    // no /tmp at all) — see pvpn_platform::paths.
+    let cfg_path = paths::hy2_config_file()?;
     std::fs::write(&cfg_path, &yaml).context("write hysteria config")?;
+    // The file holds the node password: restrict it before hysteria reads it.
+    paths::harden_secret_file(&cfg_path).context("restrict hysteria config")?;
 
     crate::logger::log("info", "hysteria", &format!("config written: {}", cfg_path.display()));
     crate::logger::log("info", "hysteria", &format!("server {}:{}", cfg.host, cfg.port));
     crate::logger::log("info", "hysteria", &format!("binary: {}", bin.display()));
 
+    let cfg_arg = cfg_path
+        .to_str()
+        .ok_or_else(|| anyhow!("hysteria config path is not valid UTF-8: {}", cfg_path.display()))?;
     let mut cmd = Command::new(&bin);
-    cmd.args(["client", "-c", cfg_path.to_str().unwrap()])
+    cmd.args(["client", "-c", cfg_arg])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // Without this a console window pops up on Windows for every engine start.
+    pprocess::no_window(&mut cmd);
 
     let mut child = cmd.spawn().context("spawn hysteria")?;
 
@@ -143,14 +117,73 @@ pub async fn stop(state: &SharedHysteriaState) -> Result<()> {
         let _ = child.kill().await;
         let _ = child.wait().await;
     }
-    let _ = Command::new("/usr/bin/pkill")
-        .args(["-x", "hysteria"])
-        .status()
-        .await;
+    // A sidecar that outlived its handle still holds the SOCKS port.
+    net::kill_stray("hysteria").await;
     Ok(())
 }
 
 #[allow(dead_code)]
 pub async fn is_running(state: &SharedHysteriaState) -> bool {
     state.lock().await.child.is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::subscription::test_support::sample_hy2;
+
+    /// The YAML is hand-built, so its exact shape is worth pinning: hysteria
+    /// silently ignores keys it does not understand, which turns a typo into a
+    /// connection that "works" without TLS pinning.
+    #[test]
+    fn config_yaml_is_stable() {
+        let yaml = build_config(&sample_hy2());
+        assert_eq!(
+            yaml,
+            concat!(
+                "server: node.example.invalid:8443\n",
+                "auth: example-password-not-a-real-one\n",
+                "tls:\n",
+                "  sni: cover.example.invalid\n",
+                "  insecure: true\n",
+                "  pinSHA256: AA:BB:CC\n",
+                "socks5:\n",
+                "  listen: 127.0.0.1:10809\n",
+                "fastOpen: true\n",
+            )
+        );
+    }
+
+    #[test]
+    fn insecure_and_pin_are_omitted_when_unset() {
+        let mut cfg = sample_hy2();
+        cfg.insecure = false;
+        cfg.pin_sha256 = String::new();
+        let yaml = build_config(&cfg);
+        assert!(!yaml.contains("insecure"), "{}", yaml);
+        assert!(!yaml.contains("pinSHA256"), "{}", yaml);
+        assert!(yaml.contains("  sni: cover.example.invalid\n"), "{}", yaml);
+    }
+
+    #[test]
+    fn hysteria_listens_on_its_own_port() {
+        // Sharing xray's inbound would make the two engines fight for 10808.
+        assert_ne!(HY2_SOCKS_PORT, crate::tun::SOCKS_PORT);
+        let yaml = build_config(&sample_hy2());
+        assert!(yaml.contains(&format!("127.0.0.1:{}", HY2_SOCKS_PORT)), "{}", yaml);
+    }
+
+    /// The config carries the node password, so it must never land in a
+    /// world-readable place.
+    #[test]
+    fn config_path_is_app_private() {
+        let path = pvpn_platform::paths::hy2_config_file().expect("config path");
+        if cfg!(target_os = "windows") {
+            let text = path.to_string_lossy().to_ascii_lowercase();
+            assert!(text.contains("proxysvpn"), "{}", text);
+            assert!(!text.starts_with(r"c:\windows\temp"), "{}", text);
+        } else {
+            assert_eq!(path, std::path::PathBuf::from("/tmp/proxysvpn-hy2.yaml"));
+        }
+    }
 }

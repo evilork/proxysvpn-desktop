@@ -6,10 +6,15 @@ mod xray_manager;
 mod hysteria_manager;
 
 mod logger;
+use pvpn_platform::net;
+use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use subscription::{build_xray_config, ServerInfo};
-use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
+use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+#[cfg(target_os = "macos")]
+use tauri::menu::Submenu;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, RunEvent, WindowEvent};
 use tun::{new_state as new_tun_state, SharedTunState};
 use xray_manager::{new_state as new_xray_state, SharedXrayState};
@@ -30,41 +35,48 @@ struct ConnectResult {
     port: u16,
 }
 
-const PID_FILE: &str = "/tmp/proxysvpn-desktop.pid";
-
-fn sync_cleanup() {
-    use std::process::Command;
-
-    let _ = Command::new("/usr/bin/pkill").args(["-9", "-x", "tun2socks"]).status();
-    let _ = Command::new("/usr/bin/pkill").args(["-9", "-x", "xray"]).status();
-    let _ = Command::new("/sbin/route")
-        .args(["-n", "delete", "-net", "0.0.0.0/1"])
-        .status();
-    let _ = Command::new("/sbin/route")
-        .args(["-n", "delete", "-net", "128.0.0.0/1"])
-        .status();
-    let _ = Command::new("/sbin/ifconfig").args([tun::TUN_NAME, "down"]).status();
-
-    if let Ok(contents) = std::fs::read_to_string(PID_FILE) {
-        for line in contents.lines() {
-            if let Some(ip) = line.strip_prefix("server_ip=") {
-                let _ = Command::new("/sbin/route")
-                    .args(["-n", "delete", "-host", ip])
-                    .status();
-            }
+/// Where the node address of a live tunnel is recorded, so that a run which
+/// follows a crash can delete a host route it did not install itself.
+/// macOS keeps the pre-split path (/tmp/proxysvpn-desktop.pid).
+fn route_hint_path() -> Option<PathBuf> {
+    match pvpn_platform::paths::route_hint_file() {
+        Ok(path) => Some(path),
+        Err(e) => {
+            logger::log("warn", "app", &format!("no route hint location: {}", e));
+            None
         }
-        let _ = std::fs::remove_file(PID_FILE);
     }
 }
 
-fn write_pid_file(server_ip: &str) {
-    let my_pid = std::process::id();
-    let contents = format!("pid={}\nserver_ip={}\n", my_pid, server_ip);
-    let _ = std::fs::write(PID_FILE, contents);
+/// Blocking teardown for the startup and exit paths, where there is no async
+/// runtime to await on. Removes our routes, kills leftover engines, and clears
+/// the host route recorded by a previous run.
+fn sync_cleanup() {
+    let stale: Vec<Ipv4Addr> = route_hint_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|c| net::parse_route_hint(&c))
+        .unwrap_or_default();
+
+    net::sync_cleanup(&stale);
+
+    if let Some(path) = route_hint_path() {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
-fn remove_pid_file() {
-    let _ = std::fs::remove_file(PID_FILE);
+fn write_route_hint(server_ip: Ipv4Addr) {
+    if let Some(path) = route_hint_path() {
+        let contents = net::format_route_hint(std::process::id(), server_ip);
+        if let Err(e) = std::fs::write(&path, contents) {
+            logger::log("warn", "app", &format!("could not write route hint: {}", e));
+        }
+    }
+}
+
+fn remove_route_hint() {
+    if let Some(path) = route_hint_path() {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 #[tauri::command]
@@ -115,7 +127,7 @@ async fn vpn_connect(
     }
 
     if let Some(ip) = tun::get_server_ip(&state.tun).await {
-        write_pid_file(&ip);
+        write_route_hint(ip);
     }
 
     ping::set_target(host.clone(), port);
@@ -152,7 +164,7 @@ async fn vpn_disconnect(state: tauri::State<'_, Arc<VpnState>>) -> Result<(), St
     let _ = tun::stop(&state.tun).await;
     let _ = xray_manager::stop(&state.xray).await;
     let _ = hysteria_manager::stop(&state.hysteria).await;
-    remove_pid_file();
+    remove_route_hint();
     Ok(())
 }
 
@@ -168,6 +180,17 @@ async fn vpn_ping() -> Result<u32, String> {
     ping::tcp_ping_async().await.map_err(|e| e.to_string())
 }
 
+/// Leaves the routing table clean when the process is asked to die outside the
+/// normal UI path.
+///
+/// Unix keeps the pre-split behaviour (TERM/INT/HUP). Windows has no signals:
+/// Ctrl+C is the only equivalent a GUI process can observe, and a logoff or
+/// shutdown kills us without a usable notification. That case is covered
+/// instead by the platform layer — every Windows route is written with
+/// `store=active`, so it does not survive a reboot, the Wintun adapter dies
+/// with tun2socks and takes its own routes with it, and the host route left
+/// behind by a logoff is cleared from the route hint on the next start.
+#[cfg(unix)]
 fn install_signal_handlers() {
     tauri::async_runtime::spawn(async {
         use tokio::signal::unix::{signal, SignalKind};
@@ -191,6 +214,24 @@ fn install_signal_handlers() {
     });
 }
 
+#[cfg(windows)]
+fn install_signal_handlers() {
+    tauri::async_runtime::spawn(async {
+        if tokio::signal::ctrl_c().await.is_err() {
+            return;
+        }
+        sync_cleanup();
+        std::process::exit(0);
+    });
+}
+
+/// macOS application menu.
+///
+/// Only macOS: `hide_others` / `show_all` are Cocoa concepts, and on Windows
+/// and Linux `set_menu` would draw a menu bar inside the 480x720 fixed window,
+/// which is not part of the design. Copy/paste still work there through the
+/// WebView's own accelerators.
+#[cfg(target_os = "macos")]
 fn build_menu(handle: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let app_submenu = Submenu::with_items(
         handle, "ProxysVPN", true,
@@ -229,7 +270,8 @@ fn build_menu(handle: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     Menu::with_items(handle, &[&app_submenu, &edit_submenu, &window_submenu])
 }
 
-/// Tray icon in the macOS menu bar with Show/Disconnect/Quit actions.
+/// Tray icon (macOS menu bar, Windows notification area, Linux app indicator)
+/// with Show/Disconnect/Quit actions.
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let show_item = MenuItem::with_id(app, "show", "Показать окно", true, None::<&str>)?;
     let disconnect_item = MenuItem::with_id(app, "disconnect", "Отключить VPN", true, None::<&str>)?;
@@ -242,11 +284,22 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         &quit_item,
     ])?;
 
+    // No unwrap: a bundle whose icon list lost the PNG entries would otherwise
+    // panic on startup instead of reporting a packaging problem.
+    let icon = app
+        .default_window_icon()
+        .ok_or_else(|| {
+            tauri::Error::Anyhow(anyhow::anyhow!(
+                "bundle has no default window icon — cannot build the tray"
+            ))
+        })?
+        .clone();
+
     let _tray = TrayIconBuilder::with_id("main-tray")
         .tooltip("ProxysVPN")
-        .icon(app.default_window_icon().unwrap().clone())
+        .icon(icon)
         .menu(&tray_menu)
-        .menu_on_left_click(false)
+        .show_menu_on_left_click(false)
         .on_menu_event(|app, event: MenuEvent| match event.id.as_ref() {
             "show" => {
                 if let Some(w) = app.get_webview_window("main") {
@@ -261,7 +314,10 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                         ping::clear_target();
                         let _ = tun::stop(&state.tun).await;
                         let _ = xray_manager::stop(&state.xray).await;
-                        remove_pid_file();
+                        // Hy2 sessions have no xray: without this the hysteria
+                        // sidecar kept running and held its SOCKS port.
+                        let _ = hysteria_manager::stop(&state.hysteria).await;
+                        remove_route_hint();
                     });
                 }
             }
@@ -292,6 +348,9 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     logger::init();
+    // Route the platform layer's messages into the same ring buffer the
+    // support UI reads; without this they would only reach stdout.
+    pvpn_platform::log::set_sink(logger::log);
 
     sync_cleanup();
 
@@ -306,16 +365,19 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
-            let menu = build_menu(app.handle())?;
-            app.set_menu(menu)?;
+            #[cfg(target_os = "macos")]
+            {
+                let menu = build_menu(app.handle())?;
+                app.set_menu(menu)?;
+            }
             build_tray(app.handle())?;
             install_signal_handlers();
             Ok(())
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                // Red-X / Cmd+W — hide to tray, VPN keeps running.
-                // Use tray → Quit or Cmd+Q to fully exit.
+                // Close button — hide to the tray, the VPN keeps running.
+                // Use tray → Quit (Cmd+Q on macOS) to exit for real.
                 api.prevent_close();
                 let _ = window.hide();
             }
