@@ -179,10 +179,13 @@ const SETTLING_WINDOW: Duration = Duration::from_secs(45);
 /// asking the network first.
 ///
 /// The owner's target is 3-5 seconds from the button to the shield (27.09.2026);
-/// fetching the list cost 1.2 s of the 6.7. Node addresses change seldom, and
-/// when a stored one is stale the connect fails into the ladder, whose step C4
-/// re-reads the subscription anyway — so reuse costs a slower recovery in a
-/// rare case, not a wrong connection.
+/// fetching the list cost 1.2 s of the 6.7. Node addresses change seldom, but
+/// when a stored one is stale the ladder's step C4 cannot be relied on to
+/// notice: it re-reads the subscription with the routes still pointing into
+/// the tunnel it is trying to repair. So reuse ends the moment a connect or a
+/// repair ends in Failed (`Session::sub_reuse_blocked`): the next Retry tears
+/// the tunnel down and asks the network for a fresh list, instead of reusing
+/// the stale one for the rest of the 15 minutes.
 const SUB_REUSE_MS: u64 = 15 * 60 * 1000;
 
 /// Outgoing bytes with nothing coming back for this long is the passive half
@@ -527,6 +530,9 @@ struct Session {
     race_credentials: Option<RaceCredentials>,
 
     sub_fetched_at: Option<u64>,
+    /// Set when a connect or a repair ends in Failed, cleared by the next
+    /// successful fetch: a list that just failed is not one to reuse.
+    sub_reuse_blocked: bool,
     sub_used_fallback: bool,
     /// The site name that answered last. Used for the cabinet link, so the one
     /// button on a failure screen leads somewhere this person can open.
@@ -591,6 +597,18 @@ fn settling_applies(
 }
 
 impl Session {
+    /// Age of a list a connect may use without fetching, or `None` when it
+    /// has to ask the network: no list, too old, or the last attempt with it
+    /// ended in Failed.
+    fn reusable_sub_age(&self, now: u64) -> Option<u64> {
+        if self.servers.is_empty() || self.sub_reuse_blocked {
+            return None;
+        }
+        self.sub_fetched_at
+            .map(|at| now.saturating_sub(at))
+            .filter(|age| *age < SUB_REUSE_MS)
+    }
+
     fn new() -> Self {
         Self {
             phase: VpnPhase::Off,
@@ -616,6 +634,7 @@ impl Session {
             pending_race: None,
             race_credentials: None,
             sub_fetched_at: None,
+            sub_reuse_blocked: false,
             sub_used_fallback: false,
             sub_source_host: None,
             meter: TunnelMeter::new(),
@@ -760,6 +779,10 @@ impl Core {
             let old_phase = s.phase;
             s.phase = phase;
             s.error = error;
+            if phase == VpnPhase::Failed {
+                // See SUB_REUSE_MS: the next attempt asks for a fresh list.
+                s.sub_reuse_blocked = true;
+            }
             if phase == VpnPhase::Healing {
                 s.healing_since.get_or_insert_with(Instant::now);
             } else {
@@ -1563,16 +1586,7 @@ impl Core {
     async fn connect_inner(self: &Arc<Self>, generation: u64) -> Result<(), AppError> {
         let started = Instant::now();
         self.set_step(VpnStep::FetchingSub).await;
-        let reusable_age = {
-            let s = self.session.lock().await;
-            if s.servers.is_empty() {
-                None
-            } else {
-                s.sub_fetched_at
-                    .map(|at| now_ms().saturating_sub(at))
-                    .filter(|age| *age < SUB_REUSE_MS)
-            }
-        };
+        let reusable_age = self.session.lock().await.reusable_sub_age(now_ms());
         if let Some(age) = reusable_age {
             logger::log(
                 "info",
@@ -1975,6 +1989,7 @@ impl Core {
             s.servers = sub.servers;
             s.meta = sub.meta;
             s.sub_fetched_at = Some(now_ms());
+            s.sub_reuse_blocked = false;
             s.sub_used_fallback = used_fallback;
             s.sub_source_host = Some(sub.source_host);
             s.push_event(
@@ -4708,6 +4723,24 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+
+    /// A list a connect or repair just failed with must not be reused by the
+    /// Retry: step C4 re-reads the subscription through the broken tunnel and
+    /// cannot be relied on, so the 15-minute reuse kept a stale list alive.
+    #[test]
+    fn a_list_that_ended_in_failed_is_fetched_again_on_retry() {
+        let mut s = Session::new();
+        s.servers = vec![vless("Германия")];
+        s.sub_fetched_at = Some(1_000);
+        assert_eq!(s.reusable_sub_age(61_000), Some(60_000));
+        assert_eq!(s.reusable_sub_age(1_000 + SUB_REUSE_MS), None, "too old");
+
+        s.sub_reuse_blocked = true;
+        assert_eq!(s.reusable_sub_age(61_000), None);
+
+        let empty = Session::new();
+        assert_eq!(empty.reusable_sub_age(0), None);
+    }
 
     /// The QR slot is writable by anyone who reads the token off the screen;
     /// a link it returns must be https on one of our own sites, exactly like
