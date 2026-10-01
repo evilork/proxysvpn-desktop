@@ -69,6 +69,8 @@ use pidfile_windows as pidfile;
 mod sidecars;
 #[cfg(target_os = "macos")]
 mod engine_stage;
+#[cfg(desktop)]
+mod location_name;
 #[cfg(target_os = "macos")]
 mod sysdns;
 #[cfg(target_os = "macos")]
@@ -4462,7 +4464,13 @@ impl Core {
         let en = self.ui_lang_en.load(std::sync::atomic::Ordering::Relaxed);
         let location = self.session.lock().await.location.clone();
         let text = match (phase, location) {
-            (VpnPhase::On, Some(place)) => format!("{} · {place}", tray_state_text(phase, en)),
+            // The service's Russian name, translated the way the window does
+            // it (location_name.rs mirrors src/locationName.ts).
+            (VpnPhase::On, Some(place)) => format!(
+                "{} · {}",
+                tray_state_text(phase, en),
+                location_name::display_location(&place, en)
+            ),
             _ => tray_state_text(phase, en).to_string(),
         };
         if let Some(tray) = self.app.tray_by_id("main-tray") {

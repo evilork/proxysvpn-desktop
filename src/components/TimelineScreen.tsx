@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { bridge, type TimelineEntry } from "../bridge";
 import { formatTime, type MsgKey, type TParams } from "../i18n";
+import { displayLocation } from "../locationName";
 import { Screen, Spinner, useUi } from "./ui";
 
 const LIMIT = 500;
@@ -78,7 +79,8 @@ export default function TimelineScreen({
 
   const line = (entry: TimelineEntry): string => {
     const params: TParams = {};
-    if (entry.location) params.location = entry.location;
+    // The service's own (Russian) name, as every other screen shows it.
+    if (entry.location) params.location = displayLocation(entry.location, lang);
     // The core tells us the network changed, not what it changed TO — so the
     // sentence naming the network is only used when that word actually
     // arrived. Picking the key here rather than letting the placeholder fall
