@@ -2405,6 +2405,16 @@ impl Core {
 
             self.passive_tick().await;
 
+            // A connect, a Disconnect, a location change or a repair step
+            // holds the operation lock while it stops and starts engines.
+            // What looks dead, misrouted or silent in the middle of that is
+            // its work in progress: reviving or probing it then raced the
+            // switch's own restart (an old node's engine could end up running
+            // under the new node's name). The next tick looks again.
+            if operation_in_progress(&self.operation) {
+                continue;
+            }
+
             if let Some(dead) = self.dead_engine().await {
                 logger::log("error", "app", &format!("{dead} is not running"));
                 // Handled: the person is not being asked to do anything, and
@@ -2570,7 +2580,16 @@ impl Core {
             // the config is rebuilt — TUN and routes are untouched.
             let index = self.session.lock().await.current;
             if let Some(index) = index {
-                if let Err(err) = self.start_on(index, generation, true).await {
+                // Under the operation lock, like every other engine restart
+                // (`repair_step`); released before `heal`, which takes it per
+                // step itself.
+                let rebuilt = {
+                    let Some(_step) = self.repair_step(generation).await else {
+                        return true;
+                    };
+                    self.start_on(index, generation, true).await
+                };
+                if let Err(err) = rebuilt {
                     self.heal(generation, err).await;
                     return true;
                 }
@@ -2593,7 +2612,16 @@ impl Core {
             if !self.is_current(generation).await {
                 return;
             }
-            if self.restart_dead(generation).await.is_ok() && self.engines_alive().await {
+            // Under the operation lock (`repair_step`): a location change
+            // that is restarting the engines right now finishes first, and
+            // `restart_dead` then looks at what it left, not at its middle.
+            let restarted = {
+                let Some(_step) = self.repair_step(generation).await else {
+                    return;
+                };
+                self.restart_dead(generation).await.is_ok() && self.engines_alive().await
+            };
+            if restarted {
                 if let Some(phase) = self.try_probe(generation).await {
                     let label = self.session.lock().await.location.clone();
                     self.note(TimelineCode::Healed, label).await;
@@ -2798,7 +2826,10 @@ impl Core {
     /// must not wait for the ladder to finish — only around each restart, so
     /// a location chosen by hand (`select_location`, which holds this lock
     /// across its own switch and then retires the ladder) and a repair never
-    /// restart the engines at the same time.
+    /// restart the engines at the same time. The same goes for the
+    /// supervisor's own restarts: `revive` and the network-change rebuild in
+    /// `mend_routes` take it too, and the supervisor does not even look at
+    /// the engines while anyone holds it.
     async fn repair_step(&self, generation: u64) -> Option<tokio::sync::MutexGuard<'_, ()>> {
         let guard = self.operation.lock().await;
         if !self.is_current(generation).await {
@@ -3140,7 +3171,8 @@ async fn select_location(core: tauri::State<'_, Arc<Core>>, id: Option<String>) 
     // or one restart failed with "already running". A new generation retires
     // that ladder and the supervisor that runs it (both stop at their next
     // check, and the ladder's engine steps wait for this lock — see
-    // `repair_step`); a fresh supervisor follows this switch.
+    // `repair_step`); a fresh supervisor follows this switch, and leaves the
+    // engines alone until this lock is released (`operation_in_progress`).
     let generation = core.bump_generation().await;
     core.spawn_supervisor(generation);
     let switched = core.switch_to(index, generation).await;
@@ -3178,6 +3210,12 @@ async fn select_location(core: tauri::State<'_, Arc<Core>>, id: Option<String>) 
         }
     }
     Ok(())
+}
+
+/// Is a connect, Disconnect, location change or repair step holding the
+/// operation lock right now? Asks without waiting, and holds nothing after.
+fn operation_in_progress(operation: &Mutex<()>) -> bool {
+    operation.try_lock().is_err()
 }
 
 /// Does a location picked in this phase move a live tunnel? Not when there is
@@ -4871,6 +4909,23 @@ mod tests {
 
         let empty = Session::new();
         assert_eq!(empty.reusable_sub_age(0), None);
+    }
+
+    /// The supervisor's look at the lock neither waits for it nor keeps it:
+    /// while a switch holds it the tick is skipped, and once it is free the
+    /// revive or rebuild that follows can take it at once.
+    #[tokio::test]
+    async fn the_supervisor_sees_a_held_operation_lock_without_taking_it() {
+        let operation = Mutex::new(());
+        assert!(!operation_in_progress(&operation));
+        assert!(operation.try_lock().is_ok(), "looking did not keep the lock");
+
+        let held = operation.lock().await;
+        assert!(operation_in_progress(&operation));
+        drop(held);
+        assert!(!operation_in_progress(&operation));
+        let taken = tokio::time::timeout(Duration::from_secs(1), operation.lock()).await;
+        assert!(taken.is_ok(), "free again for revive's repair_step");
     }
 
     /// A switch whose probe comes back after a Disconnect (or any newer
