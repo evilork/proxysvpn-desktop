@@ -3033,6 +3033,12 @@ async fn notify_prefs_set(enabled: bool) -> Cmd<()> {
 async fn set_ui_lang(core: tauri::State<'_, Arc<Core>>, lang: String) -> Cmd<()> {
     core.ui_lang_en
         .store(lang == "en", std::sync::atomic::Ordering::Relaxed);
+    // The tray speaks the window's language too.
+    #[cfg(desktop)]
+    {
+        let phase = core.session.lock().await.phase;
+        core.refresh_tray(phase).await;
+    }
     Ok(())
 }
 
@@ -4264,36 +4270,66 @@ fn build_menu(handle: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     Menu::with_items(handle, &[&app_submenu, &edit_submenu, &window_submenu])
 }
 
-// The only Russian sentences left in Rust, and they are here because a native
-// menu cannot read src/i18n.ts: the strings are handed to macOS, not to the
-// window. Everything the WINDOW says still arrives as a code. When the tray
-// gains more languages it will be by asking the window for these five labels,
-// not by growing a dictionary here.
+// The tray's own words, in the window's language: a native menu cannot read
+// src/i18n.ts, so the two languages the window has are kept here and chosen by
+// the language the window last reported (`set_ui_lang`). On Windows and Linux
+// the tray is the only way to quit and the usual way back to the window, so an
+// English window with a Russian tray left English speakers guessing which
+// item quits.
 #[cfg(desktop)]
-const TRAY_STATE_OFF: &str = "Защита выключена";
-#[cfg(desktop)]
-const TRAY_STATE_WORKING: &str = "Подключаем…";
-#[cfg(desktop)]
-const TRAY_STATE_ON: &str = "Защищено";
-#[cfg(desktop)]
-const TRAY_STATE_UNCONFIRMED: &str = "Подтвердить не удалось";
-#[cfg(desktop)]
-const TRAY_STATE_FAILED: &str = "Не проходит";
-#[cfg(desktop)]
-const TRAY_SHOW: &str = "Открыть окно";
-#[cfg(desktop)]
-const TRAY_DISCONNECT: &str = "Выключить защиту";
-#[cfg(desktop)]
-const TRAY_QUIT: &str = "Выйти";
+struct TrayWords {
+    off: &'static str,
+    working: &'static str,
+    on: &'static str,
+    unconfirmed: &'static str,
+    failed: &'static str,
+    show: &'static str,
+    disconnect: &'static str,
+    quit: &'static str,
+}
 
 #[cfg(desktop)]
-fn tray_state_text(phase: VpnPhase) -> &'static str {
+const TRAY_RU: TrayWords = TrayWords {
+    off: "Защита выключена",
+    working: "Подключаем…",
+    on: "Защищено",
+    unconfirmed: "Подтвердить не удалось",
+    failed: "Не проходит",
+    show: "Открыть окно",
+    disconnect: "Выключить защиту",
+    quit: "Выйти",
+};
+
+#[cfg(desktop)]
+const TRAY_EN: TrayWords = TrayWords {
+    off: "Protection is off",
+    working: "Connecting…",
+    on: "Protected",
+    unconfirmed: "Could not confirm",
+    failed: "Not getting through",
+    show: "Open window",
+    disconnect: "Turn protection off",
+    quit: "Quit",
+};
+
+#[cfg(desktop)]
+fn tray_words(en: bool) -> &'static TrayWords {
+    if en {
+        &TRAY_EN
+    } else {
+        &TRAY_RU
+    }
+}
+
+#[cfg(desktop)]
+fn tray_state_text(phase: VpnPhase, en: bool) -> &'static str {
+    let words = tray_words(en);
     match phase {
-        VpnPhase::Off => TRAY_STATE_OFF,
-        VpnPhase::Starting | VpnPhase::Healing => TRAY_STATE_WORKING,
-        VpnPhase::On => TRAY_STATE_ON,
-        VpnPhase::Unconfirmed => TRAY_STATE_UNCONFIRMED,
-        VpnPhase::Failed => TRAY_STATE_FAILED,
+        VpnPhase::Off => words.off,
+        VpnPhase::Starting | VpnPhase::Healing => words.working,
+        VpnPhase::On => words.on,
+        VpnPhase::Unconfirmed => words.unconfirmed,
+        VpnPhase::Failed => words.failed,
     }
 }
 
@@ -4301,10 +4337,11 @@ fn tray_state_text(phase: VpnPhase) -> &'static str {
 impl Core {
     /// First line of the tray menu is always the state (design [13]).
     async fn refresh_tray(&self, phase: VpnPhase) {
+        let en = self.ui_lang_en.load(std::sync::atomic::Ordering::Relaxed);
         let location = self.session.lock().await.location.clone();
         let text = match (phase, location) {
-            (VpnPhase::On, Some(place)) => format!("{} · {place}", tray_state_text(phase)),
-            _ => tray_state_text(phase).to_string(),
+            (VpnPhase::On, Some(place)) => format!("{} · {place}", tray_state_text(phase, en)),
+            _ => tray_state_text(phase, en).to_string(),
         };
         if let Some(tray) = self.app.tray_by_id("main-tray") {
             let _ = tray.set_tooltip(Some(&format!("ProxysVPN · {text}")));
@@ -4314,6 +4351,16 @@ impl Core {
         if let Some(items) = self.app.try_state::<TrayItems>() {
             if let Some(item) = items.state.lock().await.as_ref() {
                 let _ = item.set_text(&text);
+            }
+            let words = tray_words(en);
+            for (item, label) in [
+                (&items.show, words.show),
+                (&items.disconnect, words.disconnect),
+                (&items.quit, words.quit),
+            ] {
+                if let Some(item) = item.lock().await.as_ref() {
+                    let _ = item.set_text(label);
+                }
             }
         }
     }
@@ -4352,19 +4399,26 @@ impl Core {
     }
 }
 
-/// The tray's state line, so it can be rewritten as the phase changes.
+/// The tray's items, so the state line can be rewritten as the phase changes
+/// and every label when the window's language does.
 #[cfg(desktop)]
 struct TrayItems {
     state: Mutex<Option<MenuItem<tauri::Wry>>>,
+    show: Mutex<Option<MenuItem<tauri::Wry>>>,
+    disconnect: Mutex<Option<MenuItem<tauri::Wry>>>,
+    quit: Mutex<Option<MenuItem<tauri::Wry>>>,
 }
 
 #[cfg(desktop)]
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
-    let state_item = MenuItem::with_id(app, "state", TRAY_STATE_OFF, false, None::<&str>)?;
-    let show_item = MenuItem::with_id(app, "show", TRAY_SHOW, true, None::<&str>)?;
+    // Russian until the window reports its language (`set_ui_lang`), which
+    // it does as soon as it mounts.
+    let words = tray_words(false);
+    let state_item = MenuItem::with_id(app, "state", words.off, false, None::<&str>)?;
+    let show_item = MenuItem::with_id(app, "show", words.show, true, None::<&str>)?;
     let disconnect_item =
-        MenuItem::with_id(app, "disconnect", TRAY_DISCONNECT, true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, "quit", TRAY_QUIT, true, None::<&str>)?;
+        MenuItem::with_id(app, "disconnect", words.disconnect, true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", words.quit, true, None::<&str>)?;
 
     let tray_menu = Menu::with_items(
         app,
@@ -4379,7 +4433,10 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     )?;
 
     let items = TrayItems {
-        state: Mutex::new(Some(state_item)),
+        state: Mutex::new(Some(state_item.clone())),
+        show: Mutex::new(Some(show_item.clone())),
+        disconnect: Mutex::new(Some(disconnect_item.clone())),
+        quit: Mutex::new(Some(quit_item.clone())),
     };
     app.manage(items);
 
@@ -4730,6 +4787,19 @@ mod tests {
 
         let empty = Session::new();
         assert_eq!(empty.reusable_sub_age(0), None);
+    }
+
+    /// The tray is the only way to quit on Windows and Linux: in an English
+    /// window it must say "Quit", not "Выйти".
+    #[test]
+    fn the_tray_speaks_the_windows_language() {
+        for phase in [VpnPhase::Off, VpnPhase::Starting, VpnPhase::On, VpnPhase::Unconfirmed, VpnPhase::Failed] {
+            let en = tray_state_text(phase, true);
+            assert!(!en.chars().any(|c| ('\u{0400}'..='\u{04FF}').contains(&c)), "{en}");
+            assert_ne!(en, tray_state_text(phase, false));
+        }
+        assert_eq!(tray_words(true).quit, "Quit");
+        assert_eq!(tray_words(false).quit, "Выйти");
     }
 
     /// The QR slot is writable by anyone who reads the token off the screen;
