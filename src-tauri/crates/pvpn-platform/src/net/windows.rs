@@ -6,9 +6,9 @@
 //   reads  -> IP Helper (the `windows` crate). `route print` and
 //             `netsh … show …` are localised: on a Russian Windows the column
 //             headers and the "no tasks" sentences are Russian, so parsing
-//             them is a bug waiting for the first non-English user. The four
-//             read calls used here (ConvertInterfaceAliasToLuid,
-//             ConvertInterfaceLuidToIndex, GetBestRoute2, GetIpForwardTable2)
+//             them is a bug waiting for the first non-English user. The read
+//             calls used here (GetIfTable2, GetIfEntry2, GetBestRoute2,
+//             GetIpForwardTable2 and the LUID/index/alias conversions)
 //             return structs, not text.
 //   writes -> netsh. We never read its output, only the exit code, so locale
 //             does not matter, and it keeps the unsafe surface small. Every
@@ -16,10 +16,16 @@
 //             cheapest possible crash recovery.
 //
 // The device itself is created by tun2socks (wireguard-go's Wintun driver),
-// exactly as utun225 is on macOS. Wintun publishes the requested name as the
-// interface alias, which is how `device_index` finds it again, and the adapter
+// exactly as utun225 is on macOS, with a new random GUID on every start.
+// Wintun publishes the requested name as the interface alias and the device
 // disappears together with the process that owns it — so a hard kill of
-// tun2socks takes the adapter and all of its routes with it. The only thing
+// tun2socks takes the adapter and all of its routes with it. Windows keeps
+// the interface of the removed device, though, alias included: such a
+// leftover can hold "ProxysVPN" while the new adapter gets another name
+// (seen on a Windows 11 VM, 02.10.2026). So the adapter is found among the
+// *present* interfaces (`plan::windows::pick_device`), leftovers under our
+// name are removed before tun2socks starts (`free_device_name`), and every
+// netsh write names the adapter by index, never by alias. The other thing
 // that can outlive a crash is the /32 host route to the node, which
 // `sync_cleanup` removes from the route hint on the next start.
 //
@@ -33,11 +39,9 @@ use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use windows::core::HSTRING;
 use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
 use windows::Win32::NetworkManagement::IpHelper::{
-    ConvertInterfaceAliasToLuid, ConvertInterfaceIndexToLuid, ConvertInterfaceLuidToAlias,
-    ConvertInterfaceLuidToIndex, FreeMibTable, GetBestRoute2, GetExtendedTcpTable, GetIfEntry2,
+    ConvertInterfaceIndexToLuid, ConvertInterfaceLuidToAlias, FreeMibTable, GetBestRoute2, GetExtendedTcpTable, GetIfEntry2,
     GetIfTable2, GetIpForwardTable2, GetIpInterfaceEntry, MIB_IF_ROW2, MIB_IF_TABLE2, MIB_IPFORWARD_ROW2,
     MIB_IPFORWARD_TABLE2, MIB_IPINTERFACE_ROW, MIB_TCP6ROW_OWNER_PID, MIB_TCP6TABLE_OWNER_PID,
     MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER,
@@ -81,21 +85,80 @@ fn next_hop_of(row: &MIB_IPFORWARD_ROW2) -> Option<Ipv4Addr> {
 }
 
 /// Interface index of our TUN adapter, or an error while it does not exist.
+///
+/// Chosen from the interface table rather than by alias: the alias may still
+/// belong to a leftover interface whose device is gone (`plan::windows::
+/// pick_device` says why), and netsh cannot address that one.
 fn device_index() -> Result<u32> {
-    let alias = HSTRING::from(DEVICE);
-    let mut luid = NET_LUID_LH::default();
-    // SAFETY: both arguments are valid for the duration of the call.
-    let err = unsafe { ConvertInterfaceAliasToLuid(&alias, &mut luid) };
-    if err != NO_ERROR {
-        return Err(anyhow!("adapter {} not found ({:?})", DEVICE, err));
+    let rows = adapter_rows()?;
+    p::pick_device(&rows).ok_or_else(|| anyhow!("adapter {} not present", DEVICE))
+}
+
+/// The interface table, as `plan` needs it.
+fn adapter_rows() -> Result<Vec<p::AdapterRow>> {
+    let mut table: *mut MIB_IF_TABLE2 = std::ptr::null_mut();
+    // SAFETY: `table` is an out-pointer that IP Helper allocates; it is freed
+    // with FreeMibTable below on every path that reaches it.
+    let err = unsafe { GetIfTable2(&mut table) };
+    if err != NO_ERROR || table.is_null() {
+        return Err(anyhow!("interface table unreadable ({:?})", err));
     }
-    let mut index = 0u32;
-    // SAFETY: `luid` was filled in by the call above.
-    let err = unsafe { ConvertInterfaceLuidToIndex(&luid, &mut index) };
-    if err != NO_ERROR {
-        return Err(anyhow!("no interface index for {} ({:?})", DEVICE, err));
+    let mut out = Vec::new();
+    // SAFETY: the table is non-null (NO_ERROR) and NumEntries describes the
+    // length of the trailing Table array; nothing escapes the loop by pointer.
+    unsafe {
+        let entries = (*table).NumEntries as usize;
+        let rows = std::slice::from_raw_parts((*table).Table.as_ptr(), entries);
+        for row in rows {
+            let len = row.Alias.iter().position(|&c| c == 0).unwrap_or(row.Alias.len());
+            let g = row.InterfaceGuid;
+            out.push(p::AdapterRow {
+                alias: String::from_utf16_lossy(&row.Alias[..len]),
+                index: row.InterfaceIndex,
+                oper: row.OperStatus.0,
+                guid: format!(
+                    "{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
+                    g.data1, g.data2, g.data3, g.data4[0], g.data4[1], g.data4[2], g.data4[3], g.data4[4],
+                    g.data4[5], g.data4[6], g.data4[7]
+                ),
+            });
+        }
+        FreeMibTable(table as *const _);
     }
-    Ok(index)
+    Ok(out)
+}
+
+/// Free our adapter name before tun2socks asks for it: remove what is left
+/// of earlier adapters under that name whose device is gone. Best effort —
+/// `device_index` copes with a leftover that stays — but with the name free
+/// the new adapter gets exactly "ProxysVPN" again.
+async fn free_device_name() {
+    let rows = match adapter_rows() {
+        Ok(rows) => rows,
+        Err(e) => {
+            log::warn("net", &format!("{e:#}"));
+            return;
+        }
+    };
+    for stale in p::stale_devices(&rows) {
+        let Some(argv) = p::remove_stale_device(&stale.guid) else {
+            log::warn("net", &format!("leftover {} (index {}) has no usable GUID", stale.alias, stale.index));
+            continue;
+        };
+        match argv.output().await {
+            Ok(out) => {
+                let removed = String::from_utf8_lossy(&out.stdout).split_whitespace().count();
+                log::info(
+                    "net",
+                    &format!(
+                        "leftover {} (index {}, device gone): removed {} device(s)",
+                        stale.alias, stale.index, removed
+                    ),
+                );
+            }
+            Err(e) => log::warn("net", &format!("could not remove leftover {}: {e:#}", stale.alias)),
+        }
+    }
 }
 
 /// Interface the OS would currently use to reach `dest`.
@@ -353,11 +416,10 @@ pub async fn physical_route() -> Result<PhysicalRoute> {
 
 /// Byte counters of the tunnel adapter, `None` while it does not exist.
 pub fn device_counters() -> Option<IfCounters> {
-    let alias = HSTRING::from(DEVICE);
+    let index = device_index().ok()?;
     let mut row = MIB_IF_ROW2::default();
-    // SAFETY: both arguments are valid for the duration of the call; the
-    // second one is the LUID field of a live, zero-initialised row.
-    if unsafe { ConvertInterfaceAliasToLuid(&alias, &mut row.InterfaceLuid) } != NO_ERROR {
+    // SAFETY: the second argument is the LUID field of a live, zero-initialised row.
+    if unsafe { ConvertInterfaceIndexToLuid(index, &mut row.InterfaceLuid) } != NO_ERROR {
         return None;
     }
     // SAFETY: `row` is a live MIB_IF_ROW2 whose key (InterfaceLuid) is set,
@@ -467,20 +529,26 @@ pub async fn host_route_ok(dest: Ipv4Addr) -> bool {
 }
 
 pub async fn add_split_defaults() -> Result<()> {
-    p::split_default_add(SPLIT_LOW)
+    let index = device_index()?;
+    p::split_default_add(SPLIT_LOW, index)
         .run()
         .await
         .context("add route 0.0.0.0/1")?;
-    p::split_default_add(SPLIT_HIGH)
+    p::split_default_add(SPLIT_HIGH, index)
         .run()
         .await
         .context("add route 128.0.0.0/1")?;
     Ok(())
 }
 
+/// The halves go with the adapter when it disappears, so there is nothing to
+/// delete once it is gone.
 pub async fn delete_split_defaults() {
-    p::split_default_delete(SPLIT_LOW).run_best_effort().await;
-    p::split_default_delete(SPLIT_HIGH).run_best_effort().await;
+    let Ok(index) = device_index() else {
+        return;
+    };
+    p::split_default_delete(SPLIT_LOW, index).run_best_effort().await;
+    p::split_default_delete(SPLIT_HIGH, index).run_best_effort().await;
 }
 
 pub async fn split_defaults_ok() -> bool {
@@ -510,7 +578,8 @@ pub async fn wait_for_device(timeout: Duration) -> Result<()> {
 }
 
 pub async fn configure_device() -> Result<()> {
-    if let Err(e) = p::device_set_address().run().await {
+    let index = device_index().with_context(|| format!("assign IP to {}", DEVICE))?;
+    if let Err(e) = p::device_set_address(index).run().await {
         // netsh's own words are logged by `run`; this names what it worked
         // on. A second "ProxysVPN 2" or a stale adapter under our name is the
         // first thing to rule out (a Windows VM, 02.10.2026).
@@ -522,47 +591,30 @@ pub async fn configure_device() -> Result<()> {
     }
     // Not fatal: the split routes are more specific than any physical default,
     // so a failed metric change degrades predictability, not connectivity.
-    if let Err(e) = p::device_set_metric().run().await {
+    if let Err(e) = p::device_set_metric(index).run().await {
         log::warn("net", &format!("could not set interface metric: {}", e));
     }
     // Must not be skipped silently: with a DNS server on the tunnel adapter
     // Windows would query into the tunnel, where nothing answers.
-    p::device_clear_dns()
+    p::device_clear_dns(index)
         .run()
         .await
         .context("clear DNS servers on the tunnel adapter")?;
     Ok(())
 }
 
-/// Every interface whose alias starts with our adapter's name, with its
-/// index and states, for the log when configuring it fails.
+/// Every interface under our name, with its index and state, for the log
+/// when configuring it fails.
 fn describe_devices() -> String {
-    let mut table: *mut MIB_IF_TABLE2 = std::ptr::null_mut();
-    // SAFETY: `table` is an out-pointer that IP Helper allocates; it is freed
-    // with FreeMibTable below on every path that reaches it.
-    let err = unsafe { GetIfTable2(&mut table) };
-    if err != NO_ERROR || table.is_null() {
-        return format!("interface table unreadable ({err:?})");
-    }
-    let wanted = DEVICE.to_lowercase();
-    let mut found = Vec::new();
-    // SAFETY: the table is non-null (NO_ERROR) and NumEntries describes the
-    // length of the trailing Table array; nothing escapes the loop by pointer.
-    unsafe {
-        let entries = (*table).NumEntries as usize;
-        let rows = std::slice::from_raw_parts((*table).Table.as_ptr(), entries);
-        for row in rows {
-            let len = row.Alias.iter().position(|&c| c == 0).unwrap_or(row.Alias.len());
-            let alias = String::from_utf16_lossy(&row.Alias[..len]);
-            if alias.to_lowercase().starts_with(&wanted) {
-                found.push(format!(
-                    "{alias} (index {}, oper {}, media {})",
-                    row.InterfaceIndex, row.OperStatus.0, row.MediaConnectState.0
-                ));
-            }
-        }
-        FreeMibTable(table as *const _);
-    }
+    let rows = match adapter_rows() {
+        Ok(rows) => rows,
+        Err(e) => return format!("{e:#}"),
+    };
+    let found: Vec<String> = rows
+        .iter()
+        .filter(|r| p::is_our_alias(&r.alias))
+        .map(|r| format!("{} (index {}, oper {})", r.alias, r.index, r.oper))
+        .collect();
     if found.is_empty() {
         "none".to_string()
     } else {
@@ -604,8 +656,10 @@ fn sync_cleanup_inner(stale_hosts: &[Ipv4Addr]) {
 
     // Routes first: while an engine is still alive the tunnel keeps working,
     // so there is no window where traffic has nowhere to go.
-    run(p::split_default_delete(SPLIT_LOW));
-    run(p::split_default_delete(SPLIT_HIGH));
+    if let Ok(index) = device_index() {
+        run(p::split_default_delete(SPLIT_LOW, index));
+        run(p::split_default_delete(SPLIT_HIGH, index));
+    }
     for host in stale_hosts {
         for row in host_route_rows(*host).unwrap_or_default() {
             run(p::host_route_delete(*host, row));
@@ -646,6 +700,12 @@ impl Privileged for Windows {
 
     fn tun2socks_argv(bin: &Path, socks_port: u16) -> Argv {
         p::tun2socks(bin, socks_port)
+    }
+
+    async fn start_engine(bin: &Path, socks_port: u16) -> Result<()> {
+        free_device_name().await;
+        let argv = Self::tun2socks_argv(bin, socks_port);
+        super::engine::spawn(bin, &argv.args).await
     }
 
     async fn physical_route() -> Result<PhysicalRoute> {
