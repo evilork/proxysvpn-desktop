@@ -81,6 +81,11 @@ pub fn sidecar_dirs(app: &tauri::AppHandle) -> Vec<PathBuf> {
         dirs.push(resource_dir.join("binaries"));
         dirs.push(resource_dir.join("_up_").join("binaries"));
     }
+    // Debug builds only. This reads an environment variable at *runtime*, so in
+    // a shipped build anyone who can set CARGO_MANIFEST_DIR in our environment
+    // could add a directory to the sidecar search — and on macOS and Windows
+    // the process that execs from it is root/administrator.
+    #[cfg(debug_assertions)]
     if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
         dirs.push(PathBuf::from(manifest_dir).join("binaries"));
     }

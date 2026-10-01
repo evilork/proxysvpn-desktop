@@ -37,7 +37,8 @@ use windows::core::HSTRING;
 use windows::Win32::Foundation::NO_ERROR;
 use windows::Win32::NetworkManagement::IpHelper::{
     ConvertInterfaceAliasToLuid, ConvertInterfaceLuidToIndex, FreeMibTable, GetBestRoute2,
-    GetIpForwardTable2, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
+    GetIpForwardTable2, GetIpInterfaceEntry, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
+    MIB_IPINTERFACE_ROW,
 };
 use windows::Win32::NetworkManagement::Ndis::NET_LUID_LH;
 use windows::Win32::Networking::WinSock::{AF_INET, SOCKADDR_INET};
@@ -119,14 +120,51 @@ fn best_route_index(dest: Ipv4Addr) -> Result<u32> {
     Ok(row.InterfaceIndex)
 }
 
+/// Interface metric of the adapter a route row belongs to.
+///
+/// `MIB_IPFORWARD_ROW2::Metric` is only the route's own offset, and in practice
+/// it is 0 on every adapter. What Windows actually ranks by is
+/// `InterfaceMetric + Metric`, so without this a machine with more than one
+/// 0.0.0.0/0 row — Ethernet up with the cable out next to Wi-Fi, or a
+/// Hyper-V/VMware virtual NIC — had all candidates tie at 0 and the first row
+/// encountered won. Pinning the node's /32 to the wrong adapter shows up as
+/// "no route to the node" with no clue why.
+fn interface_metric(row: &MIB_IPFORWARD_ROW2) -> Option<u32> {
+    let mut iface = MIB_IPINTERFACE_ROW {
+        Family: AF_INET,
+        InterfaceLuid: row.InterfaceLuid,
+        InterfaceIndex: row.InterfaceIndex,
+        ..Default::default()
+    };
+    // SAFETY: `iface` is a live, zero-initialised row with the two key fields
+    // filled in, which is what GetIpInterfaceEntry requires; it only writes
+    // into that struct.
+    let err = unsafe { GetIpInterfaceEntry(&mut iface) };
+    if err != NO_ERROR {
+        return None;
+    }
+    Some(iface.Metric)
+}
+
+/// How Windows ranks one default route: the interface metric plus the route's
+/// own offset, saturating so a pathological pair cannot wrap.
+fn route_rank(row: &MIB_IPFORWARD_ROW2) -> u32 {
+    match interface_metric(row) {
+        Some(iface) => iface.saturating_add(row.Metric),
+        // The query failed: fall back to the route offset alone rather than
+        // dropping an otherwise usable default.
+        None => row.Metric,
+    }
+}
+
 /// The machine's real IPv4 default route, read from the forwarding table.
 ///
 /// Why the table and not `GetBestRoute2`: once our 0.0.0.0/1 and 128.0.0.0/1
 /// are installed, a best-path lookup for any address answers "the tunnel". The
 /// physical default is still its own 0.0.0.0/0 row, so read that row directly —
 /// the same reason macOS asks `route get default` instead of `route get <ip>`.
-/// Rows on our own adapter are skipped, and the lowest metric wins, which is
-/// how Windows itself picks between several defaults.
+/// Rows on our own adapter are skipped, and the lowest rank wins — see
+/// [`route_rank`] for what "rank" has to mean here.
 fn physical_default(exclude_index: Option<u32>) -> Result<PhysicalRoute> {
     let mut table: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
     // SAFETY: `table` is an out-pointer that IP Helper allocates; it is freed
@@ -158,9 +196,9 @@ fn physical_default(exclude_index: Option<u32>) -> Result<PhysicalRoute> {
                 if_name: None,
                 if_index: Some(row.InterfaceIndex),
             };
-            let metric = row.Metric;
-            if best.as_ref().map(|(_, m)| metric < *m).unwrap_or(true) {
-                best = Some((candidate, metric));
+            let rank = route_rank(row);
+            if best.as_ref().map(|(_, m)| rank < *m).unwrap_or(true) {
+                best = Some((candidate, rank));
             }
         }
         FreeMibTable(table as *const _);
