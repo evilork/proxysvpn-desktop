@@ -244,6 +244,27 @@ mod tests {
         assert_eq!(port, SOCKS_PORT as u64);
     }
 
+    /// The Linux helper refuses any SOCKS port that is not one of this app's
+    /// own engine ports, because the port is where every packet on the machine
+    /// ends up once the half-defaults are installed. The allow-list lives in
+    /// the platform crate, which cannot see these two constants, so nothing but
+    /// this test keeps the three values together.
+    #[test]
+    fn engine_ports_are_the_ones_the_helper_accepts() {
+        use pvpn_platform::helper::proto::ALLOWED_SOCKS_PORTS;
+        assert!(
+            ALLOWED_SOCKS_PORTS.contains(&SOCKS_PORT),
+            "xray's inbound {} is not in {:?}",
+            SOCKS_PORT,
+            ALLOWED_SOCKS_PORTS
+        );
+        assert!(
+            ALLOWED_SOCKS_PORTS.contains(&crate::hysteria_manager::HY2_SOCKS_PORT),
+            "hysteria's inbound is not in {:?}",
+            ALLOWED_SOCKS_PORTS
+        );
+    }
+
     /// The device name in this module and the one the platform layer configures
     /// must be the same string, or we would address an interface that tun2socks
     /// never created.
