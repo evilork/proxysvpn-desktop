@@ -1,29 +1,36 @@
 # Сборка и установка ProxysVPN Desktop
 
 Сборку делают раннеры GitHub (`.github/workflows/desktop-build.yml`): macOS (Apple Silicon),
-Windows x86_64, Linux x86_64. Ничего не подписывается и никуда не публикуется — готовые файлы
-кладутся в артефакты запуска и лежат там 14 дней. Секреты репозитория не используются.
+Windows x86_64, Linux x86_64. Ничего не подписывается и никуда не публикуется. Секреты
+репозитория не используются.
+
+**Установщики по умолчанию никуда не выкладываются.** Репозиторий публичный, и артефакты
+запуска может скачать любой вошедший пользователь GitHub. Поэтому pull request и push в `main`
+только собирают, проверяют и упаковывают (поломка упаковки всё равно роняет прогон), а файлы
+остаются на раннере. Выложить их в артефакты (на 14 дней) можно только ручным запуском с
+отметкой `upload_installers` — это решение «сборку можно показывать», и принимает его владелец.
 
 ## 1. Запустить сборку
 
 1. GitHub → репозиторий `evilork/proxysvpn-desktop` → вкладка **Actions**.
 2. Слева выбрать воркфлоу **desktop-build** → кнопка **Run workflow**.
-3. Выбрать ветку (например `main`) → **Run workflow**.
+3. Выбрать ветку (например `main`). Нужны файлы — отметить **upload_installers**
+   (их увидит любой вошедший в GitHub) → **Run workflow**.
 
-Та же сборка запускается сама на каждый pull request, который трогает приложение
-(`src/`, `src-tauri/`, `scripts/`, `package.json`, конфиги сборки).
+Та же сборка без выкладки файлов запускается сама на каждый pull request и push в `main`,
+которые трогают приложение (`src/`, `src-tauri/`, `scripts/`, `package.json`, конфиги сборки).
 
 Три задания идут параллельно, каждое 10–25 минут. Одно упавшее задание не отменяет остальные.
 
 ## 2. Скачать готовые файлы
 
-Открыть завершившийся запуск → внизу страницы раздел **Artifacts**:
+Открыть завершившийся ручной запуск с `upload_installers` → внизу страницы раздел **Artifacts**:
 
 | Артефакт | Что внутри |
 | --- | --- |
 | `proxysvpn-macos-aarch64` | `ProxysVPN_<версия>_aarch64.dmg` |
 | `proxysvpn-windows-x86_64` | `ProxysVPN_<версия>_x64-setup.exe` (установщик NSIS) |
-| `proxysvpn-linux-x86_64` | `ProxysVPN_<версия>_amd64.deb` и `ProxysVPN_<версия>_amd64.AppImage` |
+| `proxysvpn-linux-x86_64` | `ProxysVPN_<версия>_amd64.deb` |
 
 GitHub отдаёт артефакт одним zip-архивом — распаковать перед установкой.
 
@@ -32,16 +39,16 @@ sha256. Прогон печатает его сам: в логе задания 
 with checksums**. Сверить после распаковки:
 
 ```bash
-shasum -a 256 ProxysVPN_0.1.0_aarch64.dmg          # macOS
-certutil -hashfile ProxysVPN_0.1.0_x64-setup.exe SHA256   # Windows
-sha256sum ProxysVPN_0.1.0_amd64.deb                # Linux
+shasum -a 256 ProxysVPN_0.3.1_aarch64.dmg          # macOS
+certutil -hashfile ProxysVPN_0.3.1_x64-setup.exe SHA256   # Windows
+sha256sum ProxysVPN_0.3.1_amd64.deb                # Linux
 ```
 
 ## 3. macOS (Apple Silicon)
 
 ```bash
 # после распаковки артефакта
-open ProxysVPN_0.1.0_aarch64.dmg          # смонтировать образ
+open ProxysVPN_0.3.1_aarch64.dmg          # смонтировать образ
 # перетащить ProxysVPN.app в «Программы», образ размонтировать
 xattr -cr /Applications/ProxysVPN.app     # снять карантин: сборка без подписи Apple
 open /Applications/ProxysVPN.app
@@ -64,24 +71,20 @@ Windows 11 содержит WebView2 изначально. На Windows 10 ус�
 
 ## 5. Linux x86_64
 
-`.deb` (Ubuntu/Debian, рекомендуется — ставит зависимости сам):
+`.deb` (Ubuntu/Debian, ставит зависимости сам):
 
 ```bash
-sudo apt install ./ProxysVPN_0.1.0_amd64.deb
+sudo apt install ./ProxysVPN_0.3.1_amd64.deb
 ```
 
-AppImage (любой дистрибутив, ничего не ставится в систему):
-
-```bash
-chmod +x ProxysVPN_0.1.0_amd64.AppImage
-./ProxysVPN_0.1.0_amd64.AppImage
-```
+AppImage не собирается: она работает из FUSE-монтирования, куда root не пускают, и помощник
+с правами через pkexec из неё не запускается — туннель там не поднялся бы никогда.
 
 Замечания:
 
 - Сборка идёт на Ubuntu 22.04, поэтому файлы работают на 22.04 и новее (glibc 2.35+).
-- Значок в трее требует пакета `libayatana-appindicator3-1`; `.deb` тянет его сам, для AppImage
-  поставить вручную.
+- Значок в трее требует `libayatana-appindicator3-1`, а запрос пароля — `pkexec` (polkit); `.deb`
+  тянет оба сам.
 - Туннелю нужны права на сеть (`CAP_NET_ADMIN`): при подключении система спросит пароль.
 
 ## 6. Что в этих сборках не проверено

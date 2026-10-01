@@ -112,6 +112,138 @@ impl std::fmt::Display for Argv {
     }
 }
 
+/// Pids of the engines this app is running right now (Windows: xray and
+/// hysteria, registered by the GUI's pidfile_windows.rs as they start and
+/// forgotten as they stop).
+///
+/// The Windows backend asks it who may listen on the SOCKS port tun2socks
+/// sends the whole machine's traffic to (`net::windows`): a listener that is
+/// not one of these is a stranger that took the port while xray restarted.
+static ENGINE_PIDS: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+fn engine_pids() -> std::sync::MutexGuard<'static, Vec<u32>> {
+    // A poisoned list is still a list of pids; refusing to read it would make
+    // every engine of ours look like a stranger.
+    ENGINE_PIDS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Record a running engine of ours.
+pub fn note_engine(pid: u32) {
+    let mut pids = engine_pids();
+    if !pids.contains(&pid) {
+        pids.push(pid);
+    }
+}
+
+/// Forget an engine that has stopped.
+pub fn forget_engine(pid: u32) {
+    engine_pids().retain(|&known| known != pid);
+}
+
+/// Is `pid` one of our running engines?
+pub fn is_engine(pid: u32) -> bool {
+    engine_pids().contains(&pid)
+}
+
+/// Ties a child process to the lifetime of this app, so it cannot outlive us.
+///
+/// Windows: the child joins a job object created with
+/// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, whose only handle this process holds
+/// and never closes. The kernel closes it when the process ends — a clean quit,
+/// a crash or "End task" alike — and that kills every member. This is what lets
+/// the Windows build stop its own engines without sweeping by image name, which
+/// would also kill another VPN client's `tun2socks.exe` or `xray.exe`.
+///
+/// Only the engines join the job, not this process: the WebView2 runtime is
+/// our child too and has its own lifetime rules.
+///
+/// Elsewhere this is a no-op: macOS and Linux record their engines and stop
+/// only what they recorded (the GUI's pidfile.rs), and the Linux helper owns
+/// tun2socks and tears it down when the GUI's pipe closes.
+pub fn tie_to_app(child: &tokio::process::Child) -> Result<()> {
+    #[cfg(windows)]
+    {
+        job::assign(child)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = child;
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+mod job {
+    use std::sync::OnceLock;
+
+    use anyhow::{anyhow, Context, Result};
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    /// The job handle as a plain number: `HANDLE` wraps a raw pointer and is
+    /// therefore neither `Send` nor `Sync`, but the value is a kernel handle
+    /// that stays valid for the life of the process. The error is kept as text
+    /// so a failed creation is reported on every spawn, not only the first.
+    static JOB: OnceLock<std::result::Result<usize, String>> = OnceLock::new();
+
+    fn create() -> Result<HANDLE> {
+        // SAFETY: no security attributes and no name: an anonymous job whose
+        // only handle is the one returned here.
+        let job = unsafe { CreateJobObjectW(None, PCWSTR::null()) }.context("CreateJobObjectW")?;
+
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let size = u32::try_from(std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+            .context("job limit struct size")?;
+        // SAFETY: `info` is a live JOBOBJECT_EXTENDED_LIMIT_INFORMATION and
+        // `size` is its exact size; the call only reads from it.
+        unsafe {
+            SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION as *const core::ffi::c_void,
+                size,
+            )
+        }
+        .context("SetInformationJobObject")?;
+
+        // Deliberately never closed: closing it is exactly what kills the
+        // members, and that must happen when this process ends, not before.
+        Ok(job)
+    }
+
+    fn job() -> Result<HANDLE> {
+        let slot = JOB.get_or_init(|| {
+            create()
+                .map(|handle| handle.0 as usize)
+                .map_err(|e| format!("{e:#}"))
+        });
+        match slot {
+            Ok(raw) => Ok(HANDLE(*raw as *mut core::ffi::c_void)),
+            Err(e) => Err(anyhow!("no job object: {e}")),
+        }
+    }
+
+    pub fn assign(child: &tokio::process::Child) -> Result<()> {
+        let process = child
+            .raw_handle()
+            .ok_or_else(|| anyhow!("the child has already exited and been reaped"))?;
+        let job = job()?;
+        // SAFETY: the job handle is never closed (see `create`), and the
+        // process handle belongs to `child`, which outlives this call.
+        unsafe { AssignProcessToJobObject(job, HANDLE(process)) }
+            .context("AssignProcessToJobObject")
+    }
+}
+
 /// Kills every process whose *exact* image name is `stem`, ignoring failures.
 ///
 /// For a sidecar that outlived the handle we had on it — a crash, or a kill the
@@ -155,6 +287,22 @@ pub async fn kill_by_name(stem: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engines_are_known_from_start_to_stop() {
+        // Pids no real process here has; the list is process-wide.
+        let (a, b) = (4_000_000_001, 4_000_000_002);
+        assert!(!is_engine(a));
+        note_engine(a);
+        note_engine(a);
+        note_engine(b);
+        assert!(is_engine(a) && is_engine(b));
+        forget_engine(a);
+        assert!(!is_engine(a), "one forget undoes a repeated note");
+        assert!(is_engine(b));
+        forget_engine(b);
+        assert!(!is_engine(b));
+    }
 
     #[test]
     fn argv_keeps_program_and_args() {

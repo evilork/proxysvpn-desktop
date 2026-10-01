@@ -3,22 +3,32 @@ members = ["crates/pvpn-platform"]
 
 [package]
 name = "proxysvpn-desktop"
-version = "0.1.0"
+version = "0.3.1"
 description = "ProxysVPN Desktop"
 authors = ["ProxysVPN"]
 edition = "2021"
 
 [lib]
 name = "proxysvpn_desktop_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# No "cdylib": iOS links the staticlib into the app, and a cdylib build fails
+# because the pvpn_* FFI symbols only exist in Swift at Xcode link time.
+# Re-add "cdylib" if an Android target ever appears (JNI needs a shared lib).
+crate-type = ["staticlib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+# tauri-build is versioned on its own line: 2.7 is the one tauri 2.12 ships
+# with (tauri-utils 2.10 on both sides).
+tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
-tauri-plugin-opener = "2"
-tauri-plugin-shell = "2"
+# 2.12 is the floor, not a preference: it pulls tao 0.37, the first tao that
+# answers application:configurationForConnectingSceneSession: on every launch
+# and so runs the app on the UIScene lifecycle, which apps built with the
+# iOS 27 SDK need to launch at all (Apple TN3187). tao 0.36+ also keeps the
+# iPadOS 26 window controls off the web view. The minimums hold that floor
+# even when Cargo.lock is regenerated.
+tauri = { version = "2.12", features = [] }
+tauri-plugin-opener = "2.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
@@ -29,5 +39,45 @@ url = "2"
 anyhow = "1"
 thiserror = "2"
 libc = "0.2"
-tauri-plugin-clipboard-manager = "2.3.2"
+# Salted network fingerprints for the per-network memory (src/netmem.rs).
+sha2 = "0.10"
+tauri-plugin-clipboard-manager = "2.4"
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+
+# Desktop-only: the tray icon lives outside the iOS sandbox model.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
+# "Уведомления" (MoreScreen): protection-drop / restored toasts. Desktop-only
+# for the same reason as the tray - iOS has no window to hide behind and the
+# Network Extension has its own OS-level lifecycle notices.
+tauri-plugin-notification = "2.5"
+# The platform layer: elevation, paths, the TUN device and its routes on
+# macOS, Windows and Linux, and the Linux root helper. Desktop-only — the crate
+# refuses to compile for anything else, and iOS has its own tunnel in the
+# Network Extension (src/ios_vpn.rs).
 pvpn-platform = { path = "crates/pvpn-platform" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# SCDynamicStore: the system resolver pointed into the tunnel (src/sysdns.rs).
+core-foundation = "0.10"
+
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+# One instance per session. A second launch from the Start menu or the
+# desktop shows the running window instead of starting a second core, whose
+# startup cleanup would tear down the first one's routes and engines while
+# its window still says "protected". macOS gets this from LaunchServices.
+tauri-plugin-single-instance = "2.5"
+
+[target.'cfg(windows)'.dependencies]
+# The system CSPRNG for the device id, the network-memory salt and the race
+# password (src/entropy.rs): Windows has no /dev/urandom. Already in the tree
+# through rustls/ring, so this adds no new code to the build.
+getrandom = "0.3"
+
+[features]
+# App Store / TestFlight builds. tauri.ios.conf.json turns it on for every iOS
+# build; the direct DMG builds without it. It tags requests to the service
+# (User-Agent `; appstore)`, header `x-client-dist: appstore`) so the service
+# can leave purchase text and links out of what it sends such a build: the app
+# ships without in-app purchases (guideline 3.1.1).
+appstore = []

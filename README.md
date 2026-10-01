@@ -1,6 +1,9 @@
 # ProxysVPN Desktop
 
 > 🇷🇺 [Русская версия](README_RU.md)
+>
+> 📱 **iPhone / iPad:** the same codebase builds an iOS app with a Network
+> Extension tunnel (Xray-core engine via libXray) — see [docs/IOS.md](docs/IOS.md).
 
 Native macOS VPN client for the [ProxysVPN](https://proxysvpn.com) service. Routes **all** system traffic (browser, Telegram, Discord, games, App Store) through a VLESS Reality + ML-KEM tunnel — no manual proxy config required.
 
@@ -98,7 +101,7 @@ MIT — see [LICENSE](LICENSE).
 
 This project bundles several open-source components, each under its own license:
 - [xray-core](https://github.com/XTLS/Xray-core) — MPL-2.0
-- [tun2socks](https://github.com/xjasonlyu/tun2socks) — GPL-3.0
+- [tun2socks](https://github.com/xjasonlyu/tun2socks) — MIT
 - [Tauri](https://github.com/tauri-apps/tauri) — MIT/Apache-2.0
 
 ## Links

@@ -1,0 +1,141 @@
+// src/externalUrl.ts
+//
+// Which addresses the app may hand to the system browser.
+//
+// Direct builds: the same four schemes the opener plugin's default scope lets
+// through (`opener:default` in capabilities/desktop.json). The plugin stays the
+// gate there; this only mirrors it, so asking "would this open?" has one answer.
+//
+// App Store builds: a short allowlist, and nothing else. The app ships without
+// in-app purchases, so no button may lead to a page where one can pay
+// (guidelines 3.1.1 and 3.1.3). Several addresses reach the app from the
+// SERVICE — announce-url, support-url — and can change after review without a
+// new build; this list is what keeps such an edit from putting the cabinet, a
+// payment page or the bot (it sells top-ups) behind a reviewed button.
+//
+// Pure on purpose, with no build-time input: node --test imports it as is.
+
+/** Languages of proxysvpn.com (frontend/src/i18n/langs.ts). */
+// With its extension: node --test runs this file as is, without a bundler.
+import { APP_VIEW_QUERY } from "./legal.ts";
+
+const SITE_LANGS = ["ru", "en", "zh", "es", "tr", "ar", "ja", "de", "fr", "ko"] as const;
+
+/** Pages an App Store build may open on proxysvpn.com, in every language. */
+const SITE_PAGES = ["privacy", "terms", "support"] as const;
+
+/**
+ * The legal pages, each in its app view: path AND its one query, as the
+ * server spells them. The plain page carries the site's header, whose link
+ * home leads to the prices, so `/privacy` alone is NOT allowed — only
+ * `/privacy?src=app`.
+ */
+const LEGAL_PATHS: readonly string[] = [
+  ...SITE_PAGES.map((page) => `/${page}`),
+  ...SITE_LANGS.flatMap((lang) => SITE_PAGES.map((page) => `/${lang}/${page}`)),
+].map((path) => `${path}${APP_VIEW_QUERY}`);
+
+const PROXYSVPN_PATHS: ReadonlySet<string> = new Set<string>([
+  ...LEGAL_PATHS,
+  // Account deletion (guideline 5.1.1(v)). The one cabinet page allowed: it
+  // deletes, it does not sell. It has no app view, so no query.
+  "/dashboard/account/delete",
+]);
+
+const WATAFAST_PATHS: ReadonlySet<string> = new Set<string>(["/", "/privacy", "/terms", "/support"]);
+
+/** Exact host -> exact paths. No wildcard hosts, no path prefixes. */
+const APPSTORE_ALLOWED: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["proxysvpn.com", PROXYSVPN_PATHS],
+  ["www.proxysvpn.com", PROXYSVPN_PATHS],
+  ["wata.fast", WATAFAST_PATHS],
+]);
+
+/** What `opener:default` allows (tauri-plugin-opener, allow-default-urls). */
+const DIRECT_SCHEMES: ReadonlySet<string> = new Set(["http:", "https:", "mailto:", "tel:"]);
+
+function parse(url: string): URL | null {
+  try {
+    return new URL(url);
+  } catch {
+    return null;
+  }
+}
+
+/** `proxysvpn.com.` is the same name as `proxysvpn.com`; one dot, not more. */
+function normalHost(hostname: string): string {
+  const lower = hostname.toLowerCase();
+  return lower.endsWith(".") ? lower.slice(0, -1) : lower;
+}
+
+function isIpLiteral(host: string): boolean {
+  // The URL parser has already turned every IPv4 spelling (hex, octal, short
+  // forms) into dotted decimal, and IPv6 always keeps its brackets.
+  return host.startsWith("[") || /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+}
+
+/**
+ * The path as the server will see it, or null when it hides something.
+ *
+ * `new URL` already resolves `..` and `%2e%2e` segments, so `/privacy/../pay`
+ * arrives here as `/pay` and simply is not on the list. Decoding once more
+ * catches what the parser leaves alone — an encoded slash or backslash that
+ * a server may still treat as a separator (`/privacy%2F..%2Fpay`).
+ */
+function normalPath(pathname: string): string | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+  if (decoded.includes("\\") || decoded.includes("\0")) return null;
+  const segments = decoded.split("/");
+  if (segments.some((segment) => segment === ".." || segment === ".")) return null;
+  // `/privacy/` is `/privacy`; the root stays `/`.
+  return decoded.length > 1 && decoded.endsWith("/") ? decoded.slice(0, -1) : decoded;
+}
+
+/**
+ * May the app open `url` in the system browser?
+ *
+ * App Store builds: https only, no user or password part, the default port,
+ * a named host (never an address), no query and no fragment — then the exact
+ * host and the exact path must both be on the list above.
+ */
+export function isAllowedExternal(url: string, isAppstore: boolean): boolean {
+  const parsed = parse(url.trim());
+  if (!parsed) return false;
+  if (!isAppstore) return DIRECT_SCHEMES.has(parsed.protocol);
+
+  if (parsed.protocol !== "https:") return false;
+  if (parsed.username !== "" || parsed.password !== "") return false;
+  // The parser drops an explicit :443, so any port left here is not the default.
+  if (parsed.port !== "") return false;
+  // A fragment, or any query other than the app view's, can turn an allowed
+  // page into a redirect to one that is not (`/support?next=/pay`). The query
+  // is not dropped here but compared as part of the path below, so an address
+  // is allowed only in the one spelling the list holds.
+  if (parsed.hash !== "") return false;
+
+  const host = normalHost(parsed.hostname);
+  if (host === "" || isIpLiteral(host)) return false;
+  const paths = APPSTORE_ALLOWED.get(host);
+  if (!paths) return false;
+
+  const path = normalPath(parsed.pathname);
+  return path !== null && paths.has(`${path}${parsed.search}`);
+}
+
+/**
+ * Does this window hand links to the system shell instead of the opener
+ * plugin? Windows only: the whole app runs as administrator there, and a
+ * browser the plugin starts would inherit that. `open_external_unelevated`
+ * (lib.rs, pvpn-platform shell.rs) gives the link to the person's own,
+ * unelevated Explorer. Decided by the web view's user agent, which is
+ * synchronous and needs no round trip to the core: WebView2 always reports
+ * "Windows NT".
+ */
+export function opensThroughShell(userAgent: string): boolean {
+  return /\bWindows NT\b/.test(userAgent);
+}

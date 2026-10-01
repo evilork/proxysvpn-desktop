@@ -1,415 +1,658 @@
-import { useState, useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { readText } from "@tauri-apps/plugin-clipboard-manager";
-import { Power, Zap, AlertCircle, ClipboardPaste, QrCode, Settings, X } from "lucide-react";
-import QRCode from "qrcode";
-import logo from "./assets/logo.png";
+// src/App.tsx
+//
+// The shell: it owns the truth about the tunnel, the navigation stack and the
+// two preferences (language, appearance). Every screen below is a pure view
+// over what arrives here.
+//
+// Where the truth comes from: `vpn:*` events for liveness and `vpn_snapshot`
+// for correctness. Events can be missed — a reloaded window, a backgrounded
+// app — so the snapshot is re-read on mount and whenever the window comes
+// back into view. The old screen asked once at mount and never again, which
+// is why a dead tunnel could stay green forever.
+//
+// Depth rule from DESIGN.md: no more than two taps from the main screen to
+// any action. The stack below is therefore mostly one level deep.
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
 import "./App.css";
+import {
+  IS_TAURI,
+  bridge,
+  toAppError,
+  type AppInfo,
+  type OnboardingStep,
+  type SubState,
+} from "./bridge";
+import { IS_APPSTORE, purchaseLinksAllowed } from "./dist";
+import { isAllowedExternal } from "./externalUrl";
 import { makeT, type Lang } from "./i18n";
+import { setNativeTilt } from "./gaze";
+import { detectLang } from "./lang";
+import {
+  AUTO_CONNECT_KEY,
+  LANG_KEY,
+  THEME_KEY,
+  applyTheme,
+  readStored,
+  readThemePref,
+  watchSystemTheme,
+  writeStored,
+} from "./prefs";
+import { errorTitleKey } from "./storeCopy";
+import type {
+  AppError,
+  ErrorAction,
+  MetricPayload,
+  StatePayload,
+  SubMeta,
+  VpnStep,
+} from "./types";
+
+import CheckScreen from "./components/CheckScreen";
+import DemoStrip from "./components/DemoStrip";
+import DetailsSheet from "./components/DetailsSheet";
+import HealingSheet from "./components/HealingSheet";
+import LocationsScreen from "./components/LocationsScreen";
 import LogViewer from "./components/LogViewer";
+import MainScreen from "./components/MainScreen";
+import MoreScreen from "./components/MoreScreen";
+import RulesScreen from "./components/RulesScreen";
+import TunnelScreen from "./components/TunnelScreen";
+import OnboardingScreen from "./components/OnboardingScreen";
+import PairScreen from "./components/PairScreen";
+import ProblemScreen from "./components/ProblemScreen";
+import ReportScreen from "./components/ReportScreen";
+import SubscriptionScreen from "./components/SubscriptionScreen";
+import TimelineScreen from "./components/TimelineScreen";
+import WhereScreen from "./components/WhereScreen";
+import { Toast, UiProvider, type ThemePref, type UiContextValue } from "./components/ui";
+import { supportUrl as supportPageUrl } from "./legal";
+import DataNoticeScreen from "./components/DataNoticeScreen";
+import LicensesScreen from "./components/LicensesScreen";
 
-type Status = "disconnected" | "connecting" | "connected";
-
-interface ConnectResult {
-  ok: boolean;
-  remark: string;
-  host: string;
-  port: number;
-  socks_port: number;
-  http_port: number;
+// The eye on the emblem follows device tilt the way it follows the mouse on
+// the Mac. Inside the app the tilt comes from the core (CoreMotion on iPhone
+// and iPad, no permission prompt); on the Mac the core answers "no sensor" and
+// the eye stays on the pointer. Wired once, before any eye is shown.
+if (IS_TAURI) {
+  setNativeTilt({
+    start: () => bridge.tiltStart(),
+    stop: () => bridge.tiltStop(),
+    subscribe: (fn) => bridge.onTilt(fn),
+  });
 }
 
-const SUB_URL_KEY = "proxysvpn_sub_url";
-const PING_INTERVAL_MS = 5000;
+type Route =
+  | "pair"
+  | "locations"
+  | "check"
+  | "problem"
+  | "subscription"
+  | "more"
+  | "timeline"
+  | "techlog"
+  | "report"
+  | "where"
+  | "tunnel"
+  | "rules"
+  | "dataNotice"
+  | "licenses";
 
-function App() {
-  const [status, setStatus] = useState<Status>("disconnected");
-  const [subUrl, setSubUrl] = useState<string>("");
-  const [info, setInfo] = useState<ConnectResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [ping, setPing] = useState<number | null>(null);
-  const [showQr, setShowQr] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [qrDataUrl, setQrDataUrl] = useState<string>("");
-  const [theme, setTheme] = useState<"light" | "dark">(() => {
-    const t = localStorage.getItem("proxysvpn_theme");
-    return t === "light" || t === "dark" ? t : "dark";
-  });
-  const [lang, setLang] = useState<Lang>(() => {
-    const l = localStorage.getItem("proxysvpn_lang");
-    return l === "en" ? "en" : "ru";
-  });
-  const t = makeT(lang);
-  const [servers, setServers] = useState<{ index: number; remark: string; host: string; port: number; proto: string }[]>([]);
-  const [selectedServer, setSelectedServer] = useState<number>(() => {
-    const v = localStorage.getItem("proxysvpn_server");
-    return v ? parseInt(v, 10) || 0 : 0;
-  });
-  const pingTimer = useRef<number | null>(null);
+const TOAST_MS = 4000;
+/** Recovery is silent below this; past it the sheet may be opened. */
+const HEAL_SHEET_AT_MS = 8000;
+
+function initialLang(): Lang {
+  const stored = readStored(LANG_KEY);
+  if (stored === "ru" || stored === "en") return stored;
+  if (typeof navigator === "undefined") return detectLang([]);
+  // Some web views hand back an empty `languages`; the single `language` is
+  // still the system's first choice then.
+  const preferred: readonly (string | undefined)[] =
+    navigator.languages && navigator.languages.length > 0
+      ? navigator.languages
+      : [navigator.language];
+  return detectLang(preferred.filter((tag): tag is string => typeof tag === "string"));
+}
+
+function initialAutoConnect(): boolean {
+  return readStored(AUTO_CONNECT_KEY) === "true";
+}
+
+export default function App() {
+  const [lang, setLang] = useState<Lang>(initialLang);
+  const [theme, setTheme] = useState<ThemePref>(readThemePref);
+  const [autoConnect, setAutoConnectState] = useState<boolean>(initialAutoConnect);
+  // One attempt per window, made once we actually know there is a link to
+  // connect with — never again after that, or turning the tunnel off by hand
+  // would be undone by the very next render.
+  const triedAutoConnect = useRef(false);
+
+  const [state, setState] = useState<StatePayload>({ phase: "off" });
+  const [step, setStep] = useState<VpnStep | undefined>(undefined);
+  const [metric, setMetric] = useState<MetricPayload>({ rxBytes: 0, txBytes: 0 });
+  const [meta, setMeta] = useState<SubMeta>({});
+  const [sub, setSub] = useState<SubState | null>(null);
+  const [info, setInfo] = useState<AppInfo | null>(null);
+  const [onboarding, setOnboarding] = useState<OnboardingStep[] | null>(null);
+
+  const [stack, setStack] = useState<Route[]>([]);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [healOpen, setHealOpen] = useState(false);
+  const [toastText, setToastText] = useState<string | null>(null);
+  const [forcedError, setForcedError] = useState<AppError | null>(null);
+  const [busy, setBusy] = useState(false);
+  const toastTimer = useRef<number | null>(null);
+
+  const t = useMemo(() => makeT(lang), [lang]);
+
+  // ── preferences ──────────────────────────────────────────────────────────
 
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem("proxysvpn_theme", theme);
-  }, [theme]);
-
-  useEffect(() => {
-    localStorage.setItem("proxysvpn_lang", lang);
+    writeStored(LANG_KEY, lang);
+    document.documentElement.setAttribute("lang", lang);
+    // Ядро не хранит язык окна само - оно только говорит на нём в системных
+    // уведомлениях (notify_prefs.rs), когда окно не в фокусе. "Не удалось" тут
+    // не о чем сообщать: следующий системный тост просто выйдет на прежнем
+    // языке, ничего в самом окне от этого не портится.
+    void bridge.setUiLang(lang).catch(() => undefined);
   }, [lang]);
 
   useEffect(() => {
-    const saved = localStorage.getItem(SUB_URL_KEY);
-    if (saved) setSubUrl(saved);
-    invoke<boolean>("vpn_status").then((running) => {
-      if (running) setStatus("connected");
-    });
+    writeStored(THEME_KEY, theme);
+    applyTheme(theme);
+    // "Как в системе" is a standing subscription, not a one-off read: the
+    // person can flip macOS to light while the window is open, and before
+    // this the window kept whatever it had resolved at startup.
+    if (theme !== "system") return undefined;
+    return watchSystemTheme(() => applyTheme("system"));
+  }, [theme]);
+
+  const setAutoConnect = useCallback((value: boolean) => {
+    setAutoConnectState(value);
+    writeStored(AUTO_CONNECT_KEY, value ? "true" : "false");
   }, []);
 
-  // Подгрузить список серверов, когда есть ссылка подписки.
-  const loadServers = async (url: string) => {
-    if (!url.trim()) return;
+  // ── toast ────────────────────────────────────────────────────────────────
+
+  const toast = useCallback((message: string) => {
+    setToastText(message);
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToastText(null), TOAST_MS);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    },
+    [],
+  );
+
+  const openExternal = useCallback(
+    (url: string) => {
+      void bridge.openExternal(url).catch(() => toast(t("err.UNKNOWN.title")));
+    },
+    [t, toast],
+  );
+
+  const ui: UiContextValue = useMemo(
+    () => ({ t, lang, toast, openExternal }),
+    [t, lang, toast, openExternal],
+  );
+
+  // ── truth from the core ──────────────────────────────────────────────────
+
+  const pullSnapshot = useCallback(async () => {
     try {
-      const list = await invoke<typeof servers>("list_servers", { subUrl: url.trim() });
-      setServers(list);
-      if (selectedServer >= list.length) setSelectedServer(0);
-    } catch {
-      setServers([]);
+      const snapshot = await bridge.snapshot();
+      setState(snapshot.state);
+      setStep(snapshot.step);
+      setMetric(snapshot.metric);
+      setMeta(snapshot.meta);
+    } catch (err) {
+      // A core that cannot answer at all is itself a failure worth naming.
+      setState({ phase: "failed", error: toAppError(err) });
     }
-  };
+  }, []);
 
   useEffect(() => {
-    if (subUrl.trim()) loadServers(subUrl);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subUrl]);
+    const unsubscribe = bridge.subscribe({
+      onState: (next) => {
+        setState(next);
+        if (next.phase !== "starting") setStep(undefined);
+      },
+      onStep: setStep,
+      onMetric: setMetric,
+      onMeta: setMeta,
+      onEvent: (event) => {
+        // `handled` means the core is already fixing it and the person is not
+        // being asked for anything — those stay silent by design.
+        if (!event.handled) toast(t(errorTitleKey(event.error.code, IS_APPSTORE)));
+      },
+    });
+    return unsubscribe;
+  }, [t, toast]);
 
   useEffect(() => {
-    localStorage.setItem("proxysvpn_server", String(selectedServer));
-  }, [selectedServer]);
+    void pullSnapshot();
+    void bridge
+      .subState()
+      .then(setSub)
+      .catch(() => setSub({ hasLink: false }));
+    void bridge
+      .appInfo()
+      .then(setInfo)
+      .catch(() => setInfo(null));
+    void bridge
+      .onboarding()
+      .then((value) => setOnboarding(value.steps))
+      .catch(() => setOnboarding([]));
+  }, [pullSnapshot]);
 
+  // Events are missed while the window is hidden; the snapshot is the cure.
   useEffect(() => {
-    if (status !== "connected") {
-      if (pingTimer.current) {
-        clearInterval(pingTimer.current);
-        pingTimer.current = null;
-      }
-      setPing(null);
-      return;
-    }
-    const measure = async () => {
-      try {
-        const ms = await invoke<number>("vpn_ping");
-        setPing(ms);
-      } catch {
-        setPing(null);
-      }
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void pullSnapshot();
     };
-    measure();
-    pingTimer.current = window.setInterval(measure, PING_INTERVAL_MS);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
     return () => {
-      if (pingTimer.current) {
-        clearInterval(pingTimer.current);
-        pingTimer.current = null;
-      }
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
     };
-  }, [status]);
+  }, [pullSnapshot]);
 
-  // Connect using whatever sub URL is currently stored in state.
-  const connectWith = async (url: string) => {
-    setStatus("connecting");
+  // ── navigation ───────────────────────────────────────────────────────────
+
+  const push = useCallback((route: Route) => {
+    setDetailsOpen(false);
+    setStack((previous) => (previous[previous.length - 1] === route ? previous : [...previous, route]));
+  }, []);
+
+  const pop = useCallback(() => setStack((previous) => previous.slice(0, -1)), []);
+  const reset = useCallback(() => setStack([]), []);
+
+  const top = stack[stack.length - 1];
+
+  // ── the one button ───────────────────────────────────────────────────────
+
+  // A rejection is trusted only once the core has nothing newer to say. Right
+  // after a relaunch (the privileged one, or any other) the very first
+  // `connect` can reject while the core's OWN events already moved past it —
+  // its generation guard is what decides which attempt owns the phase, not
+  // this promise's order of arrival. Asking for the snapshot re-reads that
+  // same decision instead of overwriting it with a stale "failed".
+  const settleAfterRejection = useCallback(async (err: unknown) => {
     try {
-      localStorage.setItem(SUB_URL_KEY, url);
-      const result = await invoke<ConnectResult>("vpn_connect", { subUrl: url, serverIndex: selectedServer });
-      setInfo(result);
-      setStatus("connected");
-    } catch (e) {
-      setError(String(e));
-      setStatus("disconnected");
-    }
-  };
-
-  const handleToggle = async () => {
-    setError(null);
-    if (status === "connected") {
-      try {
-        await invoke("vpn_disconnect");
-        setStatus("disconnected");
-        setInfo(null);
-      } catch (e) {
-        setError(String(e));
-      }
-      return;
-    }
-    if (!subUrl.trim()) {
-      setError(t("err.noSub"));
-      return;
-    }
-    await connectWith(subUrl.trim());
-  };
-
-  // Read clipboard, validate it looks like a sub link, store + connect.
-  const handlePaste = async () => {
-    setError(null);
-    try {
-      const text = (await readText()).trim();
-      if (!text || !/^https?:\/\//i.test(text)) {
-        setError(t("err.clipboardEmpty"));
-        return;
-      }
-      setSubUrl(text);
-      await connectWith(text);
+      const snapshot = await bridge.snapshot();
+      setState(snapshot.state);
+      if (snapshot.state.phase !== "failed") return;
     } catch {
-      setError(t("err.clipboardRead"));
+      // No core to ask at all - the rejection is the only truth left.
     }
-  };
+    setState({ phase: "failed", error: toAppError(err) });
+  }, []);
 
-  // Заглушка: показываем QR-плейсхолдер. Pairing с сервером пока отключён.
-  const handleShowQr = async () => {
-    setError(null);
+  const connect = useCallback(async () => {
+    setBusy(true);
     try {
-      const img = await QRCode.toDataURL("proxysvpn-pairing-soon", {
-        width: 280,
-        margin: 1,
-        color: { dark: "#0d1117", light: "#ffffff" },
-      });
-      setQrDataUrl(img);
-      setShowQr(true);
+      await bridge.connect();
+    } catch (err) {
+      // `connect` can fail before the core emits anything (no link, malformed
+      // link), so the rejection has to become a phase by itself.
+      await settleAfterRejection(err);
+    } finally {
+      setBusy(false);
+    }
+  }, [settleAfterRejection]);
+
+  const disconnect = useCallback(async () => {
+    setBusy(true);
+    try {
+      await bridge.disconnect();
+    } catch (err) {
+      await settleAfterRejection(err);
+    } finally {
+      setBusy(false);
+    }
+  }, [settleAfterRejection]);
+
+  const toggle = useCallback(() => {
+    if (state.phase === "off" || state.phase === "failed") void connect();
+    else void disconnect();
+  }, [state.phase, connect, disconnect]);
+
+  const refreshSubState = useCallback(async () => {
+    try {
+      setSub(await bridge.subState());
     } catch {
-      setError(t("err.qr"));
+      // Keep the previous answer: guessing "no link" would throw the person
+      // back onto the pairing screen for no reason.
+    }
+  }, []);
+
+  // Effect [2]: "Подключаться сразу" (MoreScreen). Waits for every barrier
+  // the button itself would wait for — the onboarding steps resolved to none
+  // needed, and a link actually confirmed by `sub_state` (not the optimistic
+  // `hasLink` default [1] uses for its first frame) — so this can never race
+  // ahead of the screen that would otherwise ask for one. One attempt per
+  // window: a person who disconnects by hand must stay disconnected, not be
+  // reconnected by the next unrelated render.
+  //
+  // `top === "pair"` below only rules out the PUSHED pairing screen (the
+  // `switch (top)` case). [1]'s own un-pushed pairing screen never sets
+  // `top`, so both of its `onDone` handlers claim `triedAutoConnect` for
+  // themselves before calling `connect` — see the comment there for why this
+  // effect cannot be trusted to notice that a connect is already underway.
+  useEffect(() => {
+    if (triedAutoConnect.current) return;
+    if (!autoConnect) return;
+    if (onboarding === null || onboarding.length > 0) return;
+    if (sub === null || !sub.hasLink) return;
+    if (state.phase !== "off") return;
+    // [1]'s own "connect right after pairing" already owns this moment for a
+    // brand-new link; firing here too would just be a second, wasted
+    // reconnect racing the first.
+    if (top === "pair") return;
+    triedAutoConnect.current = true;
+    void connect();
+  }, [autoConnect, onboarding, sub, state.phase, top, connect]);
+
+  // ── recovery sheet ───────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (state.phase === "healing" && (state.healingForMs ?? 0) >= HEAL_SHEET_AT_MS) {
+      setHealOpen(true);
+    }
+  }, [state]);
+
+  // ── what a failure offers ────────────────────────────────────────────────
+
+  const runAction = useCallback(
+    (action: ErrorAction) => {
+      const retry = () => {
+        setForcedError(null);
+        reset();
+        void connect();
+      };
+      switch (action) {
+        case "addLink":
+          reset();
+          void refreshSubState();
+          break;
+        case "retry":
+          retry();
+          break;
+        case "openCabinet":
+          // App Store builds never open the cabinet. No screen offers this
+          // there (ERROR_ACTION maps it to "retry"); this is the backstop.
+          if (IS_APPSTORE) break;
+          if (info) openExternal(info.cabinetUrl);
+          break;
+        case "topUp":
+          // No purchase link in App Store builds, on any storefront
+          // (distPolicy.ts): the same "check again" as the retry branch.
+          if (!purchaseLinksAllowed()) {
+            retry();
+            break;
+          }
+          if (info) openExternal(info.cabinetUrl);
+          break;
+        case "diagnose":
+          setStack(["check"]);
+          break;
+        case "waitAndSee":
+          setForcedError(null);
+          reset();
+          break;
+        case "contactSupport":
+          setStack(["report"]);
+          break;
+      }
+    },
+    [connect, info, openExternal, refreshSubState, reset],
+  );
+
+  // A reason the SCREENS name themselves, for the cases the core has no phase
+  // for — an empty location list is always one of the subscription states, and
+  // "UNKNOWN" would send the person to support for a billing problem.
+  const problemError: AppError = forcedError ?? state.error ?? { code: "UNKNOWN" };
+  const cabinetUrl = info?.cabinetUrl ?? "https://proxysvpn.com";
+  // `support-url` is what the SERVICE says support is today; the bundled bot
+  // address is only the fallback for a subscription that never answered.
+  const botUrl = meta.supportUrl ?? info?.botUrl ?? cabinetUrl;
+  // App Store builds: the service's address only when the allowlist passes
+  // it (it can change after review), the public support page otherwise
+  // (legal.ts) — never the bot, which `info.botUrl` falls back to: it sells
+  // top-ups, and the app ships without in-app purchases (guideline 3.1.1).
+  const supportUrl = IS_APPSTORE
+    ? meta.supportUrl && isAllowedExternal(meta.supportUrl, true)
+      ? meta.supportUrl
+      : supportPageUrl(lang)
+    : botUrl;
+
+  // ── render ───────────────────────────────────────────────────────────────
+
+  // Until `sub_state` answers we assume there IS a link: that is true for
+  // everyone but a first run, and guessing the other way makes every launch
+  // flash "Не настроено" for a frame.
+  const hasLink = sub?.hasLink ?? true;
+  const needsOnboarding = onboarding !== null && onboarding.length > 0;
+
+  const screen = () => {
+    if (needsOnboarding) {
+      return (
+        <OnboardingScreen
+          steps={onboarding}
+          platform={info?.platform}
+          onDone={() => {
+            setOnboarding([]);
+            void refreshSubState();
+          }}
+        />
+      );
+    }
+
+    // Until the core has said which first-run steps are pending, nothing that
+    // talks to the service may appear. The pairing screen asks the service
+    // for a code the moment it mounts, and `sub_state` can answer before
+    // `onboarding_state` does — without this, a first run would request a
+    // pairing code before the data notice (guideline 5.4) was ever shown.
+    if (onboarding === null) return null;
+
+    // No link: [1] is the whole app until there is one. It has no close
+    // button, because there is nowhere to close it to; support and the
+    // privacy policy are reachable from its footer instead.
+    if (sub !== null && !hasLink && top !== "pair") {
+      return (
+        <PairScreen
+          onSupport={() => openExternal(supportUrl)}
+          onDone={() => {
+            // Claim the one auto-connect attempt BEFORE `refreshSubState`
+            // resolves, not after: its `setSub` below is what turns
+            // `sub.hasLink` true, and the auto-connect effect [2] reacts to
+            // that same change. Left unset, `setSub` and `connect`'s own
+            // `setBusy(true)` land in the same batch, the effect re-runs
+            // seeing `sub.hasLink: true` and `phase: "off"` (the real
+            // `connect` below hasn't heard back yet) and fires a SECOND,
+            // concurrent connect that tears down the first.
+            triedAutoConnect.current = true;
+            void refreshSubState().then(() => void connect());
+          }}
+        />
+      );
+    }
+
+    switch (top) {
+      case "pair":
+        return (
+          <PairScreen
+            onClose={pop}
+            onSupport={() => openExternal(supportUrl)}
+            onDone={() => {
+              pop();
+              // Same race as [1]'s pairing screen above, guarded the same way.
+              triedAutoConnect.current = true;
+              void refreshSubState().then(() => void connect());
+            }}
+          />
+        );
+      case "locations":
+        return (
+          <LocationsScreen
+            currentLabel={state.location}
+            onClose={pop}
+            onPicked={(label) => {
+              pop();
+              toast(label ? t("loc.switched", { location: label }) : t("loc.auto"));
+            }}
+            onEmpty={() => {
+              setForcedError({ code: "SUB_EMPTY" });
+              setStack(["problem"]);
+            }}
+          />
+        );
+      case "check":
+        return (
+          <CheckScreen
+            onClose={pop}
+            onReport={() => push("report")}
+            onOpenCabinet={() => openExternal(cabinetUrl)}
+          />
+        );
+      case "problem":
+        return (
+          <ProblemScreen
+            error={problemError}
+            busy={busy}
+            onAction={runAction}
+            onClose={() => {
+              setForcedError(null);
+              pop();
+            }}
+            onCheck={() => push("check")}
+            onTimeline={() => push("timeline")}
+          />
+        );
+      case "subscription":
+        return (
+          <SubscriptionScreen
+            meta={meta}
+            info={info}
+            sub={sub}
+            onClose={pop}
+            onOpenCabinet={() => openExternal(cabinetUrl)}
+            onOpenBot={() => openExternal(supportUrl)}
+          />
+        );
+      case "tunnel":
+        return <TunnelScreen onClose={pop} platform={info?.platform} />;
+      case "rules":
+        return <RulesScreen onClose={pop} />;
+      case "more":
+        return (
+          <MoreScreen
+            info={info}
+            sub={sub}
+            theme={theme}
+            onTheme={setTheme}
+            onLang={setLang}
+            autoConnect={autoConnect}
+            onAutoConnect={setAutoConnect}
+            onClose={pop}
+            onSubscription={() => push("subscription")}
+            onWhere={() => push("where")}
+            onTunnel={() => push("tunnel")}
+            onRules={() => push("rules")}
+            onTimeline={() => push("timeline")}
+            onUnlinked={() => {
+              reset();
+              void refreshSubState();
+            }}
+            onOpenCabinet={() => openExternal(cabinetUrl)}
+            onDataNotice={() => push("dataNotice")}
+            onSupport={() => openExternal(supportUrl)}
+            onLicenses={() => push("licenses")}
+          />
+        );
+      case "dataNotice":
+        // Read again from More: nothing is recorded, it was accepted once.
+        return <DataNoticeScreen mode="readOnly" platform={info?.platform} onClose={pop} />;
+      case "licenses":
+        return <LicensesScreen platform={info?.platform} onClose={pop} />;
+      case "timeline":
+        return (
+          <TimelineScreen
+            onClose={pop}
+            onReport={() => push("report")}
+            onTechLog={() => push("techlog")}
+          />
+        );
+      case "techlog":
+        return <LogViewer onClose={pop} />;
+      case "report":
+        return <ReportScreen onClose={pop} onOpenBot={() => openExternal(supportUrl)} />;
+      case "where":
+        return <WhereScreen onClose={pop} />;
+      default:
+        return null;
     }
   };
-
-
-  const statusLabel = {
-    disconnected: t("status.disconnected"),
-    connecting: t("status.connecting"),
-    connected: t("status.connected"),
-  }[status];
-
-  const statusColor = {
-    disconnected: "text-nm-text-secondary",
-    connecting: "text-yellow-400",
-    connected: "text-nm-accent",
-  }[status];
-
-  const pingColor =
-    ping === null
-      ? "text-nm-text-secondary"
-      : ping < 100
-      ? "text-nm-accent"
-      : ping < 200
-      ? "text-yellow-400"
-      : "text-red-400";
 
   return (
-    <div className="h-screen w-screen flex flex-col items-center justify-between p-6 bg-nm-bg">
-      {/* Header */}
-      <div className="w-full flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <img src={logo} alt="ProxysVPN" className="w-6 h-6 rounded" />
-          <span className="font-semibold text-sm">ProxysVPN</span>
-        </div>
-        <button
-          onClick={() => setShowSettings(true)}
-          className="nm-circle-pressed w-8 h-8 flex items-center justify-center"
-          title={t("settings.title")}
-        >
-          <Settings className="w-4 h-4 text-nm-text-secondary" />
-        </button>
+    <UiProvider value={ui}>
+      <div className="app">
+        <MainScreen
+          state={state}
+          step={step}
+          metric={metric}
+          meta={meta}
+          hasLink={hasLink}
+          busy={busy}
+          onToggle={toggle}
+          onAddLink={() => push("pair")}
+          onWhatHappened={() => push("problem")}
+          onOpenDetails={() => setDetailsOpen(true)}
+          onOpenLocations={() => push("locations")}
+          onOpenCheck={() => push("check")}
+          onOpenMore={() => push("more")}
+        />
       </div>
 
-      {/* Power button + status */}
-      <div className="flex flex-col items-center gap-6">
-        <button
-          onClick={handleToggle}
-          disabled={status === "connecting"}
-          className={`w-40 h-40 flex items-center justify-center transition-all ${
-            status === "connected" ? "nm-btn-accent" : "nm-raised"
-          }`}
-          style={{ borderRadius: "24px" }}
-        >
-          <Power
-            className={`w-16 h-16 ${
-              status === "connected" ? "text-[#0d1117]" : "text-nm-text-secondary"
-            } ${status === "connecting" ? "animate-pulse" : ""}`}
-          />
-        </button>
+      {detailsOpen ? (
+        <DetailsSheet
+          state={state}
+          meta={meta}
+          onClose={() => setDetailsOpen(false)}
+          onLocations={() => push("locations")}
+          onWhere={() => push("where")}
+          onSubscription={() => push("subscription")}
+          onCheck={() => push("check")}
+        />
+      ) : null}
 
-        <div className="text-center">
-          <div className={`text-lg font-semibold ${statusColor}`}>{statusLabel}</div>
-          {status === "connected" && (
-            <div className={`text-xs mt-1 flex items-center justify-center gap-1 ${pingColor}`}>
-              <Zap className="w-3 h-3" />
-              {ping === null ? t("ping.measuring") : `${t("ping.label")}: ${ping} ms`}
-            </div>
-          )}
-        </div>
+      {healOpen ? (
+        <HealingSheet
+          state={state}
+          onClose={() => setHealOpen(false)}
+          onFailed={() => {
+            setHealOpen(false);
+            setStack(["problem"]);
+          }}
+          onCancel={() => {
+            setHealOpen(false);
+            void disconnect();
+          }}
+        />
+      ) : null}
 
-        {error && (
-          <div className="text-xs text-red-400 flex items-start gap-1.5 max-w-[260px]">
-            <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-            <span className="break-words">{error}</span>
-          </div>
-        )}
-      </div>
+      {screen()}
 
-      {/* Bottom: paste + QR buttons (hidden when connected) */}
-      {status !== "connected" && servers.length > 1 && (
-        <div className="w-full flex items-center justify-center gap-2 mb-1">
-          <span className="text-xs text-nm-text-secondary">{t("settings.server")}:</span>
-          <select
-            value={selectedServer}
-            onChange={(e) => setSelectedServer(parseInt(e.target.value, 10))}
-            className="nm-pressed-sm text-xs text-nm-text bg-transparent px-2 py-1.5 rounded-lg outline-none"
-          >
-            {servers.map((srv) => (
-              <option key={srv.index} value={srv.index} className="bg-nm-bg text-nm-text">
-                {(srv.remark || srv.host) + " · " + srv.proto}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {status !== "connected" ? (
-        <div className="w-full flex gap-3">
-          <button
-            onClick={handlePaste}
-            disabled={status === "connecting"}
-            className="nm-raised flex-1 py-3 flex items-center justify-center gap-2 text-sm font-medium disabled:opacity-50"
-          >
-            <ClipboardPaste className="w-4 h-4 text-nm-accent" />
-            {t("btn.paste")}
-          </button>
-          <button
-            onClick={handleShowQr}
-            disabled={status === "connecting"}
-            className="nm-raised w-14 flex items-center justify-center disabled:opacity-50"
-            title={t("btn.qrTitle")}
-          >
-            <QrCode className="w-5 h-5 text-nm-accent" />
-          </button>
-        </div>
-      ) : (
-        <div className="w-full text-center text-xs text-nm-text-secondary">
-          {info ? `${info.remark || info.host}` : ""}
-        </div>
-      )}
-
-      <div className="w-full flex items-center justify-center mt-2">
-        <span className="version-label">v0.1.0</span>
-      </div>
-
-      <LogViewer />
-
-      {/* QR modal */}
-      {showQr && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
-          onClick={() => setShowQr(false)}
-        >
-          <div
-            className="nm-raised p-6 flex flex-col items-center gap-4 mx-6"
-            style={{ borderRadius: "20px" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="w-full flex items-center justify-between">
-              <span className="font-semibold text-sm">{t("qr.title")}</span>
-              <button
-                onClick={() => setShowQr(false)}
-                className="nm-circle-pressed w-7 h-7 flex items-center justify-center"
-              >
-                <X className="w-4 h-4 text-nm-text-secondary" />
-              </button>
-            </div>
-            {qrDataUrl && (
-              <img src={qrDataUrl} alt="QR" className="rounded-lg" width={240} height={240} />
-            )}
-            <p className="text-xs text-nm-text-secondary text-center max-w-[240px]">
-              {t("qr.soon")}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Settings modal (placeholder) */}
-      {showSettings && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
-          onClick={() => setShowSettings(false)}
-        >
-          <div
-            className="nm-raised p-6 flex flex-col items-center gap-4 mx-6 min-w-[260px]"
-            style={{ borderRadius: "20px" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="w-full flex items-center justify-between">
-              <span className="font-semibold text-sm">{t("settings.title")}</span>
-              <button
-                onClick={() => setShowSettings(false)}
-                className="nm-circle-pressed w-7 h-7 flex items-center justify-center"
-              >
-                <X className="w-4 h-4 text-nm-text-secondary" />
-              </button>
-            </div>
-            <div className="w-full flex flex-col gap-4 py-2">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-nm-text">{t("settings.theme")}</span>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setTheme("light")}
-                    className={`px-3 py-1.5 text-xs rounded-lg ${theme === "light" ? "nm-btn-accent text-[#0d1117]" : "nm-pressed-sm text-nm-text-secondary"}`}
-                  >
-                    {t("settings.theme.light")}
-                  </button>
-                  <button
-                    onClick={() => setTheme("dark")}
-                    className={`px-3 py-1.5 text-xs rounded-lg ${theme === "dark" ? "nm-btn-accent text-[#0d1117]" : "nm-pressed-sm text-nm-text-secondary"}`}
-                  >
-                    {t("settings.theme.dark")}
-                  </button>
-                </div>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-nm-text">{t("settings.lang")}</span>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setLang("ru")}
-                    className={`px-3 py-1.5 text-xs rounded-lg ${lang === "ru" ? "nm-btn-accent text-[#0d1117]" : "nm-pressed-sm text-nm-text-secondary"}`}
-                  >
-                    RU
-                  </button>
-                  <button
-                    onClick={() => setLang("en")}
-                    className={`px-3 py-1.5 text-xs rounded-lg ${lang === "en" ? "nm-btn-accent text-[#0d1117]" : "nm-pressed-sm text-nm-text-secondary"}`}
-                  >
-                    EN
-                  </button>
-                </div>
-              </div>
-              {subUrl.trim() && (
-                <button
-                  onClick={() => {
-                    localStorage.removeItem(SUB_URL_KEY);
-                    localStorage.removeItem("proxysvpn_server");
-                    setSubUrl("");
-                    setServers([]);
-                    setSelectedServer(0);
-                    setInfo(null);
-                    setShowSettings(false);
-                  }}
-                  className="nm-pressed-sm w-full py-2.5 text-xs text-red-400 rounded-lg mt-1"
-                >
-                  {t("settings.clearSub")}
-                </button>
-              )}
-              <p className="text-xs text-nm-text-secondary text-center pt-2">
-                {t("settings.soon")}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      {toastText ? <Toast message={toastText} /> : null}
+      {/* IS_APPSTORE first: a build-time constant, so the App Store bundle
+          drops the demo strip and everything only it imports. */}
+      {IS_APPSTORE || IS_TAURI ? null : <DemoStrip />}
+    </UiProvider>
   );
 }
-
-export default App;

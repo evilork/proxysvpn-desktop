@@ -18,6 +18,7 @@ use super::proto::{
     Frame, Line, Request,
 };
 use super::{HELPER_DEV_FLAG, HELPER_FLAG};
+use crate::net::linux_logic;
 use crate::net::linux_priv::{self as net, Tunnel};
 
 static OUT: OnceLock<Mutex<std::io::Stdout>> = OnceLock::new();
@@ -145,6 +146,29 @@ fn check_sidecar(path: &std::path::Path) -> Result<(), String> {
     .map_err(|e| format!("refusing to run {}: {}", path.display(), e))
 }
 
+/// Refuse to point the machine at a SOCKS port that a program of another user
+/// is listening on.
+///
+/// tun2socks (ours, root) sends every packet of the machine to
+/// 127.0.0.1:<port>. Between the stop and the start of an xray restart — a
+/// location change, a revived engine — nobody holds that port, and any local
+/// user could bind it and receive all of it, other users' traffic included.
+/// Only root and the person who started the helper may hold it. No listener
+/// at all is fine: that is the restart itself.
+fn check_socks_listener(port: u16) -> Result<(), String> {
+    // World-readable, and the helper is root: a read failure means no /proc,
+    // where nothing else here would work either. Read as "nobody listens".
+    let tcp = std::fs::read_to_string("/proc/net/tcp").unwrap_or_default();
+    let tcp6 = std::fs::read_to_string("/proc/net/tcp6").unwrap_or_default();
+    let owners = linux_logic::loopback_listener_uids(&tcp, &tcp6, port);
+    match linux_logic::foreign_listener(&owners, invoking_uid_from_env()) {
+        None => Ok(()),
+        Some(uid) => Err(format!(
+            "порт {port} занят программой другого пользователя (uid {uid}) — туннель на него не направлен"
+        )),
+    }
+}
+
 fn handle(req: Request) -> Result<bool, String> {
     let mut guard = lock(tunnel());
     match req {
@@ -159,6 +183,7 @@ fn handle(req: Request) -> Result<bool, String> {
         Request::Up(params) => {
             let valid = validate_up(&params)?;
             check_sidecar(&valid.tun2socks)?;
+            check_socks_listener(valid.socks_port)?;
             if let Some(active) = guard.take() {
                 net::down(active);
             }
@@ -174,8 +199,29 @@ fn handle(req: Request) -> Result<bool, String> {
             if active.server_ip() != valid.server_ip {
                 return Err("ensure refers to a different node than the active one".to_string());
             }
+            // Someone else took the port the machine is pointed at: lower the
+            // tunnel rather than keep feeding them. The GUI sees the engine
+            // gone and says protection dropped; its next Up is refused for as
+            // long as the stranger holds the port.
+            if let Err(refusal) = check_socks_listener(valid.socks_port) {
+                emit_log("error", "helper", &refusal);
+                if let Some(active) = guard.take() {
+                    net::down(active);
+                }
+                return Err(refusal);
+            }
             net::ensure(active).map_err(|e| format!("{:#}", e))?;
             Ok(true)
+        }
+        Request::Retarget(params) => {
+            // The same validation as `Up`: a retarget can point the host route
+            // at nothing an `Up` could not, and it execs nothing.
+            let valid = validate_up(&params)?;
+            let active = guard
+                .as_mut()
+                .ok_or_else(|| "tunnel is not up".to_string())?;
+            net::retarget(active, valid.server_ip).map_err(|e| format!("{:#}", e))?;
+            Ok(net::engine_alive(active))
         }
     }
 }

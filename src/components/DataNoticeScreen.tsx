@@ -1,0 +1,140 @@
+// src/components/DataNoticeScreen.tsx
+//
+// "Какие данные мы используем" — the declaration guideline 5.4 wants from a
+// VPN app, on a screen of its own, before the service is used at all.
+//
+// Two ways in, one text:
+//   • "consent" — the first first-run step (the core puts it before pairing,
+//     so no request reaches the service before this screen was seen);
+//     "Продолжить" tells the core to remember it (`onboarding_run`).
+//   • "readOnly" — from More → О приложении, to read again. Nothing is
+//     written: reading it twice is not a second consent.
+//
+// Every line is something the app or the service actually does, checked
+// against the code that does it — the device id (device_id.rs), the headers
+// on each request, the resolvers in the engine configs. A sentence this
+// screen cannot back up does not go on it: "we keep no logs" waits for
+// NO_ACTIVITY_LOGS_CONFIRMED (src/legal.ts).
+//
+// The resolvers differ by engine and platform, so the DNS line does too:
+// src/platformCopy.ts holds which sentence each one may say and why. Windows
+// has its own, because it does not point the system resolver into the tunnel.
+
+import { useEffect, useRef } from "react";
+
+import type { AppInfo } from "../bridge";
+import { IS_APPSTORE } from "../dist";
+import type { MsgKey } from "../i18n";
+import { NO_ACTIVITY_LOGS_CONFIRMED, privacyUrl, termsUrl } from "../legal";
+import { dnsNoticeKey } from "../platformCopy";
+import { Screen, Spinner, useUi } from "./ui";
+
+type Platform = AppInfo["platform"];
+
+function bulletKeys(platform: Platform | undefined): MsgKey[] {
+  const keys: MsgKey[] = [
+    "notice.token",
+    "notice.installId",
+    "notice.version",
+    "notice.ip",
+    "notice.traffic",
+    dnsNoticeKey(platform, IS_APPSTORE),
+  ];
+  if (NO_ACTIVITY_LOGS_CONFIRMED) keys.push("notice.noActivityLogs");
+  keys.push("notice.log", "notice.promise");
+  return keys;
+}
+
+// A plain block list: as flex items the bullets lose their markers.
+const LIST_STYLE = { margin: "4px 0 0", paddingLeft: 20, listStyleType: "disc" } as const;
+const ITEM_STYLE = { marginBottom: 10 } as const;
+
+export default function DataNoticeScreen({
+  mode,
+  platform,
+  stepLabel,
+  busy = false,
+  onContinue,
+  onClose,
+}: {
+  mode: "consent" | "readOnly";
+  platform: Platform | undefined;
+  /** "Шаг 1 из 3" when the notice is one of several first-run steps. */
+  stepLabel?: string;
+  busy?: boolean;
+  /** consent: "Продолжить". */
+  onContinue?: () => void;
+  /** readOnly: back to More. */
+  onClose?: () => void;
+}) {
+  const { t, lang, openExternal } = useUi();
+  const heading = useRef<HTMLHeadingElement | null>(null);
+
+  // VoiceOver and the keyboard start at the heading, not at whatever the
+  // previous screen had focused: the whole point is that this gets read.
+  useEffect(() => {
+    heading.current?.focus();
+  }, []);
+
+  const consent = mode === "consent";
+
+  return (
+    <Screen
+      title={consent ? t("app.name") : t("about.title")}
+      onClose={consent ? undefined : onClose}
+      closeKind="back"
+      footer={
+        consent ? (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={onContinue}
+            disabled={busy || !onContinue}
+          >
+            {busy ? (
+              <>
+                <Spinner /> {t("notice.continue")}
+              </>
+            ) : (
+              t("notice.continue")
+            )}
+          </button>
+        ) : undefined
+      }
+    >
+      <div className="section">
+        {stepLabel ? <span className="caps">{stepLabel}</span> : null}
+        <h1 className="h1" ref={heading} tabIndex={-1}>
+          {t("notice.title")}
+        </h1>
+        <p className="body dim">{t("notice.intro")}</p>
+        <ul className="body" style={LIST_STYLE}>
+          {bulletKeys(platform).map((key) => (
+            <li key={key} style={ITEM_STYLE}>
+              {t(key)}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* Stacked, not side by side: at twice the text size two half-width
+          buttons break their names over three lines each. */}
+      <div className="section">
+        <button
+          type="button"
+          className="btn btn-quiet"
+          onClick={() => openExternal(privacyUrl(lang))}
+        >
+          {t("notice.privacy")}
+        </button>
+        <button
+          type="button"
+          className="btn btn-quiet"
+          onClick={() => openExternal(termsUrl(lang))}
+        >
+          {t("notice.terms")}
+        </button>
+      </div>
+    </Screen>
+  );
+}

@@ -1,0 +1,198 @@
+name: proxysvpn-desktop
+options:
+  deploymentTarget:
+    # LibXray.xcframework is built for iOS 15.0+ (libXray's apple build,
+    # scripts/build-libxray.sh).
+    iOS: 15.0
+fileGroups: [../../src]
+configs:
+  debug: debug
+  release: release
+settings:
+  base:
+    # The App Store bundle id, set once: the app is $(PVPN_BUNDLE_ID), the
+    # tunnel extension $(PVPN_BUNDLE_ID).PacketTunnel, and the Swift sources
+    # derive the provider id and their log subsystems from the running bundle.
+    # `tauri ios build/dev` rewrites the app target's PRODUCT_BUNDLE_IDENTIFIER
+    # from the Tauri config, so the same value is "identifier" in
+    # src-tauri/tauri.ios.conf.json; scripts/setup-ios.sh refuses a mismatch.
+    # The macOS DMG keeps com.proxysvpn.desktop (src-tauri/tauri.conf.json).
+    PVPN_BUNDLE_ID: com.proxysvpn.app
+    # App and extension must carry the same versions or App Store Connect
+    # warns on upload. MARKETING_VERSION follows "version" in tauri.conf.json
+    # (setup-ios.sh checks). `tauri ios build --build-number N` overwrites
+    # CURRENT_PROJECT_VERSION in both targets through agvtool with
+    # bundle.iOS.bundleVersion of tauri.ios.conf.json + ".N", i.e. 1.N
+    # (docs/IOS.md).
+    MARKETING_VERSION: 0.3.1
+    CURRENT_PROJECT_VERSION: 1
+    # Expanded by xcodegen from the environment; empty is fine for the
+    # simulator, device and App Store builds need the paid team's id.
+    DEVELOPMENT_TEAM: ${PVPN_TEAM_ID}
+    CODE_SIGN_STYLE: Automatic
+settingGroups:
+  app:
+    base:
+      PRODUCT_NAME: ProxysVPN
+      PRODUCT_BUNDLE_IDENTIFIER: $(PVPN_BUNDLE_ID)
+      SWIFT_VERSION: "5.0"
+targetTemplates:
+  app:
+    type: application
+    sources:
+      - path: Sources
+    scheme:
+      environmentVariables:
+        RUST_BACKTRACE: full
+        RUST_LOG: info
+    settings:
+      groups: [app]
+targets:
+  proxysvpn-desktop_iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Assets.xcassets
+      # Externals/<arch>/<configuration>/libapp.a is the Rust core, linked
+      # through the libapp.a dependency below. Listed with the default build
+      # phase, xcodegen puts every libapp.a present at generation time into
+      # Copy Bundle Resources: the app then ships the static library (hundreds
+      # of MB) and, once debug and release both exist, the archive fails with
+      # "Multiple commands produce .../ProxysVPN.app/libapp.a".
+      - path: Externals
+        buildPhase: none
+      # en.lproj / ru.lproj (InfoPlist.strings) are picked up from here as a
+      # localized variant group in the Resources phase; listing them on their
+      # own would copy two flat InfoPlist.strings into the bundle root.
+      - path: proxysvpn-desktop_iOS
+        excludes:
+          - PrivacyInfo.xcprivacy
+      - path: proxysvpn-desktop_iOS/PrivacyInfo.xcprivacy
+        buildPhase: resources
+      - path: assets
+        buildPhase: resources
+        type: folder
+      - path: LaunchScreen.storyboard
+    info:
+      path: proxysvpn-desktop_iOS/Info.plist
+      properties:
+        LSRequiresIPhoneOS: true
+        UILaunchStoryboardName: LaunchScreen
+        UIRequiredDeviceCapabilities: [arm64, metal]
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations: [en, ru]
+        # The base value of the name under the icon; {en,ru}.lproj/
+        # InfoPlist.strings localize it.
+        CFBundleDisplayName: ProxysVPN
+        # Documents/app.log is reachable through Finder file sharing. The logs
+        # are sanitized by logger.rs and named in the in-app data notice.
+        UIFileSharingEnabled: true
+        # ITSAppUsesNonExemptEncryption is added only after the export
+        # compliance questionnaire in App Store Connect is answered, with the
+        # value that questionnaire gives - not guessed here.
+    entitlements:
+      path: proxysvpn-desktop_iOS/proxysvpn-desktop_iOS.entitlements
+      properties:
+        com.apple.developer.networking.networkextension:
+          - packet-tunnel-provider
+    scheme:
+      environmentVariables:
+        RUST_BACKTRACE: full
+        RUST_LOG: info
+    settings:
+      base:
+        ENABLE_BITCODE: false
+        ARCHS: [arm64]
+        LIBRARY_SEARCH_PATHS[arch=arm64]: $(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)
+        ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
+        EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
+      groups: [app]
+    dependencies:
+      - framework: libapp.a
+        embed: false
+      - sdk: CoreGraphics.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+      - sdk: QuartzCore.framework
+      - sdk: Security.framework
+      - sdk: UIKit.framework
+      - sdk: WebKit.framework
+      - sdk: NetworkExtension.framework
+      # MotionBridge.swift: device tilt for the eye, no permission needed.
+      - sdk: CoreMotion.framework
+      - target: PacketTunnel
+        embed: true
+        codeSign: true
+    preBuildScripts:
+      # Release builds keep line tables in the Rust code. swift-rs compiles the
+      # Swift half of Tauri and its plugins in the configuration named by
+      # Cargo's DEBUG, and optimized Swift in Xcode 27 makes swift-rs's own
+      # @_cdecl helpers (retain_object, release_object, string_from_bytes)
+      # local, so a release app fails to link; with debug info on they are
+      # built unoptimized and stay global. The executable is stripped on
+      # archive anyway, and the line tables go into the uploaded dSYM.
+      # Drop this once swift-rs exports those helpers from optimized builds.
+      - script: |
+          export CARGO_PROFILE_RELEASE_DEBUG=line-tables-only
+          npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
+        name: Build Rust Code
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a
+          - $(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a
+  PacketTunnel:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: PacketTunnel
+        excludes:
+          - PrivacyInfo.xcprivacy
+      - path: PacketTunnel/PrivacyInfo.xcprivacy
+        buildPhase: resources
+    info:
+      path: PacketTunnel/Info.plist
+      properties:
+        CFBundleDisplayName: ProxysVPN Tunnel
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
+    entitlements:
+      path: PacketTunnel/PacketTunnel.entitlements
+      properties:
+        com.apple.developer.networking.networkextension:
+          - packet-tunnel-provider
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PVPN_BUNDLE_ID).PacketTunnel
+        PRODUCT_NAME: PacketTunnel
+        SWIFT_VERSION: "5.0"
+        ENABLE_BITCODE: false
+        ARCHS: [arm64]
+    dependencies:
+      # Xray-core as a static library, produced by scripts/build-libxray.sh
+      # (not in git). The only Go code this process may link: a second Go
+      # runtime (another Go framework) crashes the extension at load.
+      - framework: Frameworks/LibXray.xcframework
+        embed: false
+      - sdk: NetworkExtension.framework
+      # The Go runtime inside LibXray calls into these system libraries
+      # (res_9_* for DNS; Security and CoreFoundation for certificates). A
+      # c-archive does not carry its link flags, so they are named here.
+      - sdk: libresolv.tbd
+      - sdk: Security.framework
+      - sdk: CoreFoundation.framework

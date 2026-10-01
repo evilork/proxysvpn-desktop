@@ -199,12 +199,26 @@ pub mod windows {
     /// Files and unwritable, but a portable copy, an unpacked folder or a dev
     /// build are all ordinary user-writable directories. macOS already resolves
     /// `/sbin/route` for the same reason.
-    fn system32(exe: &str) -> String {
-        let root = std::env::var("SystemRoot")
+    fn windows_root() -> String {
+        std::env::var("SystemRoot")
             .ok()
             .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| WINDOWS_ROOT_FALLBACK.to_string());
-        system32_in(&root, exe)
+            .unwrap_or_else(|| WINDOWS_ROOT_FALLBACK.to_string())
+    }
+
+    fn system32(exe: &str) -> String {
+        system32_in(&windows_root(), exe)
+    }
+
+    /// Explorer, which lives in the Windows folder itself, not in System32:
+    /// the unelevated shell links are handed to (shell.rs). Absolute for the
+    /// same reason as the System32 tools.
+    pub fn explorer_path() -> String {
+        explorer_in(&windows_root())
+    }
+
+    pub fn explorer_in(root: &str) -> String {
+        format!(r"{}\explorer.exe", root.trim_end_matches('\\'))
     }
 
     /// Where Windows itself is when `%SystemRoot%` is missing from the
@@ -237,8 +251,11 @@ pub mod windows {
     /// default driver, which is Wintun here.
     pub const DEVICE_ARG: &str = DEVICE;
 
-    /// Argv for the engine, unchanged from the pre-split build: no `-mtu`, and
-    /// `-loglevel info`. tun2socks creates the device itself from `-device`.
+    /// Argv for the engine: no `-mtu`, and `-loglevel warn` as on macOS
+    /// (0.3.1) and Linux. On `info` tun2socks writes a line per connection,
+    /// which is the list of addresses the person visited. `warn`, never
+    /// `warning`: the long form makes tun2socks exit. tun2socks creates the
+    /// device itself from `-device`.
     pub fn tun2socks(bin: &std::path::Path, socks_port: u16) -> Argv {
         Argv::new(
             bin.to_string_lossy().to_string(),
@@ -248,7 +265,7 @@ pub mod windows {
                 "-proxy".to_string(),
                 format!("socks5://127.0.0.1:{}", socks_port),
                 "-loglevel".to_string(),
-                "info".to_string(),
+                "warn".to_string(),
             ],
         )
     }
@@ -782,6 +799,9 @@ mod tests {
             windows::system32_in(r"D:\WINNT\", "taskkill.exe"),
             r"D:\WINNT\System32\taskkill.exe"
         );
+        // Explorer, the shell links are handed to, is in the Windows folder.
+        assert_eq!(windows::explorer_in(r"C:\Windows"), r"C:\Windows\explorer.exe");
+        assert_eq!(windows::explorer_in(r"D:\WINNT\"), r"D:\WINNT\explorer.exe");
 
         for argv in [
             windows::device_set_address(),
@@ -918,6 +938,26 @@ mod tests {
             linux::host_route_query(Ipv4Addr::new(203, 0, 113, 7)).to_string(),
             "ip -4 route get 203.0.113.7"
         );
+    }
+
+    /// On `info` tun2socks prints a line for every connection — the list of
+    /// addresses the person visited, and the 82.7 MB log 0.3.1 moved off it.
+    /// Windows takes the same level as macOS and Linux.
+    #[test]
+    fn windows_tun2socks_logs_only_warnings() {
+        let argv = windows::tun2socks(std::path::Path::new(r"C:\pvpn\tun2socks.exe"), 10808);
+        assert_eq!(
+            argv.args,
+            vec![
+                "-device",
+                "ProxysVPN",
+                "-proxy",
+                "socks5://127.0.0.1:10808",
+                "-loglevel",
+                "warn",
+            ]
+        );
+        assert!(!argv.args.contains(&"info".to_string()));
     }
 
     #[test]

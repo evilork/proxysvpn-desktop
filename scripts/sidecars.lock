@@ -21,6 +21,12 @@
 # 2.6.0, hysteria 2.9.3), so pinning does not change the macOS build. Bumping
 # any of them is a separate, deliberate change.
 #
+# xray in particular must stay on 26.3.27 until the config moves with it: the
+# desktop config's dns-out uses proxySettings, which Xray 26.9.9 rejects, so a
+# fresh clone on "latest" built a DMG whose tunnel never came up (found
+# 28.09.2026). Move the pin only together with a config change tested on a real
+# machine.
+#
 # Columns: <tool> <platform> <tag> <asset> <sha256>
 
 xray      darwin-arm64    v26.3.27  Xray-macos-arm64-v8a.zip     2e93a67e8aa1936ecefb307e120830fcbd4c643ab9b1c46a2d0838d5f8409eaf

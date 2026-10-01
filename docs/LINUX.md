@@ -25,7 +25,7 @@ Then, once:
 ```sh
 ./scripts/fetch-binaries.sh                 # sidecars for this host, sha256 pinned
 npm ci
-npm run tauri -- build --bundles deb,appimage
+npm run tauri -- build --bundles deb
 ```
 
 Build on **Ubuntu 22.04**, not 24.04: a binary linked against glibc 2.39 will not
@@ -33,24 +33,42 @@ start on 22.04, and 22.04 is still the most common desktop LTS. CI pins the
 runner image for the same reason.
 
 Runtime packages (what the `.deb` asks for): `libwebkit2gtk-4.1-0`, `libgtk-3-0`,
-`iproute2`; recommended `libayatana-appindicator3-1` (tray icon) and
-`systemd-resolved` (clean per-link DNS).
+`iproute2`, `pkexec | policykit-1` and
+`libayatana-appindicator3-1 | libappindicator3-1`; recommended `systemd-resolved`
+(clean per-link DNS).
 
-`pkexec` (polkit) is **not** in `Depends` on purpose — the package name moved
-between Ubuntu releases, and an unsatisfiable dependency breaks installation for
-everyone. Without it the app starts and says so instead of failing silently.
+`pkexec` is a dependency with both package names as alternatives: it moved from
+`policykit-1` (Ubuntu 22.04) into a package of its own (Debian 12, Ubuntu 23.04+),
+and either satisfies apt. Without pkexec there is no way to start the helper;
+if it is missing anyway, the window says so with its own error
+(`ELEVATION_UNAVAILABLE`) instead of offering a Retry that cannot work. The tray
+library is a dependency too: with neither of the two present, `libappindicator`
+panics while the tray is built.
+
+**No AppImage.** An AppImage runs from a FUSE mount that only the user who
+mounted it may access — root included, since it is mounted without
+`allow_other`. pkexec would ask for the password and then fail to execute the
+helper from that mount (exit 127), so the tunnel could never come up. The app
+recognises that case (statfs reports FUSE for its own executable) and shows
+`ELEVATION_UNAVAILABLE` before any password dialog; CI builds only the `.deb`.
 
 ## How the tunnel is put together
 
-Same chain as macOS:
+The same core as macOS 0.3.1 (`src-tauri/src/lib.rs`, with the tunnel in
+`src-tauri/src/tun_platform.rs`), so the same chain — xray is always the front,
+and the split-routing rules apply on Hysteria2 locations too:
 
 ```
-VLESS:  tun2socks(proxysvpn0) -> socks5 127.0.0.1:10808 (xray)     --vless--> node
-Hy2:    tun2socks(proxysvpn0) -> socks5 127.0.0.1:10809 (hysteria) --hy2---->  node
+VLESS:  tun2socks(proxysvpn0) -> socks5 127.0.0.1:10808 (xray) --vless--> node
+Hy2:    tun2socks(proxysvpn0) -> socks5 127.0.0.1:10808 (xray) --socks--> 127.0.0.1:10809 (hysteria) -> node
 ```
 
-The two are alternatives, not a chain: a hy2 server starts hysteria only, and
-tun2socks dials it directly.
+xray and hysteria run as the user, in the GUI; only tun2socks runs in the root
+helper. xray binds its sockets to the physical interface (`sockopt.interface`,
+`SO_BINDTODEVICE`, allowed unprivileged on an unbound socket since Linux 5.7),
+read from `/proc/net/route` by the GUI itself. A location change sends the
+helper `Retarget`, which pins the new node's address before it drops the old
+one; the device, the split defaults and DNS stay up.
 
 and the same routing shape:
 
@@ -84,16 +102,14 @@ Why not the alternatives:
 * **GUI as root** — impossible on Wayland: a root process cannot talk to the
   user's compositor, so no window appears. On X11 it needs `xhost +si:localuser:root`.
 * **File capabilities** (`setcap cap_net_admin+ep`) — not inherited by children,
-  so tun2socks would still fail; and capabilities do not survive an AppImage
-  mount, which would mean two different privilege models for `.deb` and AppImage.
+  so tun2socks would still fail.
 
 The polkit action is `com.proxysvpn.desktop.helper`
 (`src-tauri/linux/com.proxysvpn.desktop.policy`, installed by the `.deb` to
 `/usr/share/polkit-1/actions/`). It only makes the dialog readable and lets
 `auth_admin_keep` cache the answer: when no action matches the program path,
 `pkexec` falls back to the built-in `org.freedesktop.policykit.exec` action and
-everything still works with a generic prompt. That is what happens in the
-AppImage, which cannot install a policy file.
+everything still works with a generic prompt.
 
 The action's `exec.path` is `/usr/bin/proxysvpn-desktop`. Note that this is the
 **Cargo package name**, not `productName`: Tauri uses productName only for the
@@ -117,8 +133,16 @@ bounded at 64 KiB. polkit's `auth_admin_keep` means an authorization earned by
 one connect is reusable without a password for the rest of the keep window, so
 the helper assumes its peer may not be our GUI.
 
-Prefer the `.deb` for the strongest posture: in an AppImage the executable that
-pkexec runs lives in a user-writable file.
+Checking the port number is not enough on its own. The 0.3.1 core restarts xray
+with the tunnel up (a location change, a revived engine), and between the stop
+and the start nobody listens on 127.0.0.1:10808 — any local user could bind it
+and receive the whole machine's traffic from our root tun2socks. So the helper
+also reads `/proc/net/tcp{,6}` on `Up` and on every `Ensure` tick: a listener
+that a connection to 127.0.0.1:<port> could reach must belong to root or to
+`PKEXEC_UID`. On `Up` a stranger is refused; on `Ensure` the helper lowers the
+tunnel and says why, and the GUI then reports protection as dropped. An empty
+port is fine: that is the restart itself. Windows does the same against its TCP
+table and the pids of its own engines (`net/windows.rs`).
 
 ### Teardown
 
@@ -156,9 +180,10 @@ So the helper publishes resolvers that are only reachable through the tunnel:
   apply never overwrites the first backup, and the symlink is unlinked rather
   than written through, so resolved's own stub file is left alone.
 
-Defaults are `1.1.1.1` and `1.0.0.1`; override with
-`PROXYSVPN_DNS=9.9.9.9,149.112.112.112`. When `tunnel_prefs` lands from
-`feat/app-redesign`, that is what should feed this list.
+The default is `198.18.0.2`, the in-tunnel resolver the 0.3.1 xray config answers
+through `dns-out` — the same one macOS hands its system resolver (`sysdns.rs`) —
+so the DNS settings of the "Туннель" screen apply on Linux too. Override with
+`PROXYSVPN_DNS=9.9.9.9,149.112.112.112`.
 
 ## Layout of the platform code
 
@@ -227,22 +252,25 @@ Verified here:
 **Not** verified, and not verifiable without a Linux machine:
 
 * ~~that the crate links and the `.deb`/AppImage build~~ — done on the first green
-  CI run: `ProxysVPN_0.1.0_amd64.deb` (41 MB) and `ProxysVPN_0.1.0_amd64.AppImage`
-  (114 MB). Neither has been **launched**, which is the next line;
+  CI run of the 0.1.0 app: `ProxysVPN_0.1.0_amd64.deb` (41 MB) and
+  `ProxysVPN_0.1.0_amd64.AppImage` (114 MB). Neither has been **launched**, which is the next line;
 * that the app actually starts, shows a window and raises a tunnel. Nothing below
   this point has run on a Linux machine even once;
 * that `tun2socks -device tun://proxysvpn0` creates the device under the name we
   then configure;
 * `pkexec` behaviour in a real desktop session (Wayland and X11), with and
-  without our policy file, and inside an AppImage;
+  without our policy file;
 * ~~that the `.deb` installs the binary where the policy expects~~ — confirmed on
   the first CI build: `usr/bin/proxysvpn-desktop`, root:root 0755, and the
   sidecars beside it are root-owned too, so the helper's trust check passes;
 * whether `resolvectl domain '~.'` is enough on distros where NetworkManager
   manages DNS itself, and whether the `/etc/resolv.conf` fallback survives a
   NetworkManager rewrite (the supervisor re-applies it, but only every 5 s);
-* tray behaviour on desktops without an AppIndicator host (the window close is
-  allowed to quit there, instead of hiding into a tray that does not exist);
+* tray behaviour on desktops without a StatusNotifier host (stock GNOME): the
+  close button minimises there instead of hiding into an icon nobody can see
+  (`pvpn-platform` tray.rs asks the session bus), and a second launch shows the
+  running window (single-instance plugin) instead of starting a second core;
 * aarch64 Linux end to end; the matrix builds x86_64 only, since ARM runners are
   not reliably available;
-* the AppImage interior — it builds, but it was not unpacked on the build Mac.
+* the AppImage refusal (`ELEVATION_UNAVAILABLE` from statfs on a FUSE mount) —
+  reasoned from the kernel's FUSE access rule, never seen on a machine.

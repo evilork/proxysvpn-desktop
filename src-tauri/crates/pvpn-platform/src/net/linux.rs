@@ -35,7 +35,8 @@ use tokio::sync::Mutex;
 
 use crate::helper::proto::{self, Frame, Request, UpParams};
 use crate::helper::{DEV_ENV, HELPER_DEV_FLAG, HELPER_FLAG};
-use crate::net::TunPlan;
+use crate::net::linux_logic as logic;
+use crate::net::{IfCounters, PhysicalRoute, TunPlan};
 use crate::privilege;
 
 pub use crate::net::plan::linux::DEVICE;
@@ -140,11 +141,13 @@ fn spawn_command() -> Result<Command> {
         // just fork the helper.
         Command::new(&exe)
     } else {
+        // Typed, not text: the GUI tells "this machine cannot elevate" apart
+        // from "the person said no" by this type (ELEVATION_UNAVAILABLE).
         if let Some(reason) = privilege::elevation_blocker() {
-            return Err(anyhow!("{}", reason));
+            return Err(anyhow::Error::new(reason));
         }
-        let pkexec =
-            privilege::which("pkexec").ok_or_else(|| anyhow!("pkexec not found in PATH"))?;
+        let pkexec = privilege::which("pkexec")
+            .ok_or_else(|| anyhow::Error::new(privilege::ElevationUnavailable::NoPkexec))?;
         let mut c = Command::new(pkexec);
         c.arg(&exe);
         c
@@ -257,6 +260,63 @@ pub async fn up(plan: &TunPlan) -> Result<()> {
 
 pub async fn ensure(plan: &TunPlan) -> Result<()> {
     send(Request::Ensure(up_params(plan))).await.map(|_| ())
+}
+
+/// Move the live tunnel to another node. The helper knows which node it holds,
+/// so `_old` is not sent: the two sides must not disagree about it.
+pub async fn retarget(_old: Option<Ipv4Addr>, plan: &TunPlan) -> Result<()> {
+    send(Request::Retarget(up_params(plan))).await.map(|_| ())
+}
+
+// ------------------------------------------------------- read-only facts
+//
+// Answered by the GUI itself: `/proc/net/route`, `/proc/net/ipv6_route` and
+// `/sys/class/net` are world-readable, so none of this needs the helper, a
+// round trip over its pipe or the password.
+
+const PROC_NET_ROUTE: &str = "/proc/net/route";
+const PROC_NET_IPV6_ROUTE: &str = "/proc/net/ipv6_route";
+
+/// How the machine reaches the internet outside the tunnel. Read from the
+/// kernel's table rather than `ip route get`, which would answer with our own
+/// half-defaults once they are up.
+pub async fn physical_route() -> Result<PhysicalRoute> {
+    let text = std::fs::read_to_string(PROC_NET_ROUTE)
+        .with_context(|| format!("read {}", PROC_NET_ROUTE))?;
+    logic::parse_physical_default(&text)
+        .map(|route| PhysicalRoute::from(&route))
+        .ok_or_else(|| anyhow!("нет физического маршрута по умолчанию — проверьте подключение к сети"))
+}
+
+/// Byte counters of the tunnel device, `None` while it does not exist.
+pub fn device_counters() -> Option<IfCounters> {
+    if !logic::is_plain_iface_name(DEVICE) {
+        return None;
+    }
+    let dir = std::path::Path::new("/sys/class/net")
+        .join(DEVICE)
+        .join("statistics");
+    let read = |name: &str| {
+        std::fs::read_to_string(dir.join(name))
+            .ok()
+            .and_then(|text| logic::parse_counter(&text))
+    };
+    Some(IfCounters {
+        rx_bytes: read("rx_bytes")?,
+        tx_bytes: read("tx_bytes")?,
+    })
+}
+
+/// Does the machine have a way out at all — an IPv4 or IPv6 default route on
+/// something that is not a tunnel? Answers "your network is off" apart from
+/// "our service is broken" without sending a packet.
+pub fn has_usable_link() -> bool {
+    let v4 = std::fs::read_to_string(PROC_NET_ROUTE)
+        .map(|text| logic::parse_physical_default(&text).is_some())
+        .unwrap_or(false);
+    v4 || std::fs::read_to_string(PROC_NET_IPV6_ROUTE)
+        .map(|text| logic::parse_ipv6_physical_default(&text))
+        .unwrap_or(false)
 }
 
 /// Tear the tunnel down but keep the helper alive: a reconnect must not ask for

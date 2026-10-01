@@ -7,16 +7,20 @@ one run on real hardware before this ships to anybody.
 
 ## How the tunnel works
 
-Identical in shape to macOS — same engines, same chain, same split routing:
+The same core as macOS 0.3.1 (`src-tauri/src/lib.rs`): same engines, same chain,
+same split routing, same supervisor and repair ladder. xray is always the front
+of the chain, so the split-routing rules apply on Hysteria2 locations too:
 
 ```
-VLESS:  tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10808 (xray)     --vless--> node
-Hy2:    tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10809 (hysteria) --hy2---->  node
+VLESS:  tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10808 (xray) --vless--> node
+Hy2:    tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10808 (xray) --socks--> 127.0.0.1:10809 (hysteria) -> node
 ```
 
-The two are alternatives, not a chain: for a hy2 server `lib.rs` starts hysteria
-only and hands `tun::start` the hysteria port directly, so xray is not running
-at all and tun2socks dials hysteria.
+xray binds its sockets to the physical adapter (`sockopt.interface`, the adapter
+alias from `net::physical_route`), which keeps its `direct` outbound from looping
+back into the tunnel. The Windows side of the core is `src-tauri/src/tun_platform.rs`,
+shared with Linux; a location change moves only the node's host route
+(`net::retarget`), the adapter and the split defaults stay up.
 
 Startup order (`crates/pvpn-platform/src/net/local.rs`, shared with macOS):
 
@@ -57,23 +61,66 @@ running the WebView elevated too. A split helper (unprivileged GUI + small
 elevated service) is the right next step for both Windows and Linux; the `net`
 contract is narrow enough to move behind IPC without touching callers.
 
-**DNS is deliberately not redirected.** Nothing in this build answers DNS inside
-the tunnel: the xray config generated here has no `dns` section and no port-53
-rule, so pointing the adapter at 198.18.0.2 would break name resolution
-outright. The adapter is therefore left with no DNS server at all, which also
-stops the Windows resolver from querying *into* the tunnel and taking whatever
-comes back first. Names keep resolving through the physical adapter's servers —
-the same leak macOS has today. Closing it needs a resolver in the tunnel plus
-NRPT rules, and belongs with the xray `dns` work, not here.
+Links do not inherit that. The opener plugin would call ShellExecute from the
+elevated process, and a browser or Telegram that is not yet running would start
+as administrator. On Windows the window hands links to the core's
+`open_external_unelevated` instead, which gives them to the person's own
+Explorer (`%SystemRoot%\explorer.exe <url>`, pvpn-platform `shell.rs`): the
+running shell starts the default handler with normal rights. Only the opener
+plugin's four schemes pass, commas are encoded, and anything Explorer would
+read as a switch or a path is refused. Unverified on a real machine: that the
+hand-off to the running shell happens for URLs on every supported build.
+
+**DNS is deliberately not redirected (yet).** The 0.3.1 xray config does answer
+DNS inside the tunnel now (`198.18.0.2`, routed to `dns-out`; macOS points its
+system resolver there, Linux publishes it on the device), but Windows still
+leaves the adapter alone until that is tried on a real machine. The adapter is
+therefore left with no DNS server at all, which also stops the Windows resolver
+from querying *into* the tunnel and taking whatever comes back first. Names keep
+resolving through the physical adapter's servers, which is a leak; closing it
+means publishing `198.18.0.2` on the adapter plus NRPT rules.
+
+**Engines die with the app.** Each engine joins a kill-on-close job object at
+spawn (`pvpn_platform::process::tie_to_app`); the app holds its only handle, so a
+crash or "End task" takes xray, hysteria and tun2socks along. There is
+deliberately no `taskkill /IM` sweep: it would also stop another VPN client's
+`tun2socks.exe` or `xray.exe`.
 
 **Paths.** State lives in `%LOCALAPPDATA%\ProxysVPN` (hysteria config, route
-hint) and logs in `%LOCALAPPDATA%\ProxysVPN\logs\app.log`. Not `%PROGRAMDATA%`:
+hint, the subscription link, device id and preferences) and logs in
+`%LOCALAPPDATA%\ProxysVPN\logs\app.log`. Not `%PROGRAMDATA%`:
 the hysteria config holds the node password and the default ACL on ProgramData
 grants every local user read access.
 
 **No console windows.** Every child process is spawned with `CREATE_NO_WINDOW`
 (`pvpn_platform::process::no_window`); without it each engine start would flash
 or keep a console window.
+
+## Known gaps
+
+Not fixed in this branch, each for the reason given; none of them is in the
+0.3.1 macOS build.
+
+* **The elevated app writes into a folder the person's unelevated processes
+  control.** `%LOCALAPPDATA%\ProxysVPN` can be renamed away by any process of
+  the same user and replaced with a junction (to `\RPC Control`, plus an object
+  manager link per file name). The elevated app then deletes and overwrites
+  through it: the route hint and the hysteria config (`write_private_file`
+  unlinks first), and since the 0.3.1 merge every plain `fs::write` of the
+  network memory, the tunnel and notification settings, the subscription link,
+  the manifest cache and the device id. That is an unelevated-to-administrator
+  file write and delete, the same class PR #3 closed for `netsh.exe`. The fix is
+  a folder only administrators can change — `%ProgramData%\ProxysVPN` created
+  by the elevated process with a protected DACL for SYSTEM and Administrators,
+  checking ownership and reparse points of a folder that already exists (Users
+  may create folders in ProgramData) — or every write opened with
+  `FILE_FLAG_OPEN_REPARSE_POINT` and checked with `GetFinalPathNameByHandle`.
+  Either needs a Windows machine to get right; nothing of the Windows build has
+  shipped, so moving the folder needs no migration. Until then the honest
+  statement is: on Windows, malware already running as the person can use the
+  app to write as administrator.
+* **DNS and IPv6 go past the tunnel** (see above). The data notice and the
+  Tunnel screen say so on Windows (`src/platformCopy.ts`).
 
 ## Building
 

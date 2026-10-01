@@ -1,0 +1,6820 @@
+{
+  "generatedBy": "scripts/gen-notices.mjs",
+  "licenseTexts": [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "OFL-1.1",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib"
+  ],
+  "components": [
+    {
+      "kind": "engine",
+      "name": "Hysteria",
+      "version": null,
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/apernet/hysteria",
+      "platforms": [
+        "macos"
+      ],
+      "copyright": "Copyright 2023 Toby"
+    },
+    {
+      "kind": "engine",
+      "name": "libXray",
+      "version": "v26.9.9",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/XTLS/libXray/tree/50b95979f5db551bd273165cf469e5daaf791341",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2023-2025 XTLS"
+    },
+    {
+      "kind": "engine",
+      "name": "tun2socks",
+      "version": null,
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/xjasonlyu/tun2socks",
+      "platforms": [
+        "macos"
+      ],
+      "copyright": "Copyright (c) 2019 Jason Lyu"
+    },
+    {
+      "kind": "engine",
+      "name": "Xray-core",
+      "version": null,
+      "license": "MPL-2.0",
+      "licenseIds": [
+        "MPL-2.0"
+      ],
+      "source": "https://github.com/XTLS/Xray-core",
+      "platforms": [
+        "macos"
+      ]
+    },
+    {
+      "kind": "engine",
+      "name": "Xray-core",
+      "version": "v1.260327.1-0.20260908222543-52a412d9e2f5",
+      "license": "MPL-2.0",
+      "licenseIds": [
+        "MPL-2.0"
+      ],
+      "source": "https://github.com/XTLS/Xray-core/tree/52a412d9e2f5c2a5142b1b4e2ab3771dacb8b120",
+      "platforms": [
+        "ios"
+      ],
+      "changes": "https://github.com/evilork/proxysvpn-desktop/blob/main/scripts/libxray/xray-core-no-gpl.patch"
+    },
+    {
+      "kind": "font",
+      "name": "Rubik",
+      "version": null,
+      "license": "OFL-1.1",
+      "licenseIds": [
+        "OFL-1.1"
+      ],
+      "source": "https://github.com/googlefonts/rubik",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "copyright": "Copyright 2015 The Rubik Project Authors (https://github.com/googlefonts/rubik)"
+    },
+    {
+      "kind": "cargo",
+      "name": "adler2",
+      "version": "2.0.1",
+      "license": "0BSD OR Apache-2.0 OR MIT",
+      "licenseIds": [
+        "0BSD",
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/oyvindln/adler2",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Jonas Schievink",
+        "oyvindln"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "aho-corasick",
+      "version": "1.1.4",
+      "license": "MIT OR Unlicense",
+      "licenseIds": [
+        "MIT",
+        "Unlicense"
+      ],
+      "source": "https://github.com/BurntSushi/aho-corasick",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Andrew Gallant"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "alloc-no-stdlib",
+      "version": "3.0.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/dropbox/rust-alloc-no-stdlib",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Daniel Reiter Horn"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "alloc-stdlib",
+      "version": "0.3.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/dropbox/rust-alloc-no-stdlib",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Daniel Reiter Horn"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "anyhow",
+      "version": "1.0.102",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/anyhow",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "arboard",
+      "version": "3.6.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/1Password/arboard",
+      "platforms": [
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "atomic-waker",
+      "version": "1.1.2",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/smol-rs/atomic-waker",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Stjepan Glavina",
+        "Contributors to futures-rs"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "base64",
+      "version": "0.21.7",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/marshallpierce/rust-base64",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Alice Maz",
+        "Marshall Pierce"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "base64",
+      "version": "0.22.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/marshallpierce/rust-base64",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Marshall Pierce"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "base64ct",
+      "version": "1.8.3",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/RustCrypto/formats",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "RustCrypto Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "bit-set",
+      "version": "0.8.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/contain-rs/bit-set",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Alexis Beingessner"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "bit-vec",
+      "version": "0.8.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/contain-rs/bit-vec",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Alexis Beingessner"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "bitflags",
+      "version": "1.3.2",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/bitflags/bitflags",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rust Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "bitflags",
+      "version": "2.11.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/bitflags/bitflags",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rust Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "block-buffer",
+      "version": "0.10.4",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/RustCrypto/utils",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "RustCrypto Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "block2",
+      "version": "0.6.2",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Mads Marquart"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "brotli",
+      "version": "9.0.0",
+      "license": "BSD-3-Clause AND MIT",
+      "licenseIds": [
+        "BSD-3-Clause",
+        "MIT"
+      ],
+      "source": "https://github.com/dropbox/rust-brotli",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Daniel Reiter Horn",
+        "The Brotli Authors"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "brotli-decompressor",
+      "version": "6.0.1",
+      "license": "BSD-3-Clause OR MIT",
+      "licenseIds": [
+        "BSD-3-Clause",
+        "MIT"
+      ],
+      "source": "https://github.com/dropbox/rust-brotli-decompressor",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Daniel Reiter Horn",
+        "The Brotli Authors"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "bytemuck",
+      "version": "1.25.0",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/Lokathor/bytemuck",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Lokathor"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "byteorder",
+      "version": "1.5.0",
+      "license": "MIT OR Unlicense",
+      "licenseIds": [
+        "MIT",
+        "Unlicense"
+      ],
+      "source": "https://github.com/BurntSushi/byteorder",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Andrew Gallant"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "byteorder-lite",
+      "version": "0.1.0",
+      "license": "MIT OR Unlicense",
+      "licenseIds": [
+        "MIT",
+        "Unlicense"
+      ],
+      "source": "https://github.com/image-rs/byteorder-lite",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "bytes",
+      "version": "1.11.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/tokio-rs/bytes",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Carl Lerche",
+        "Sean McArthur"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "camino",
+      "version": "1.2.2",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/camino-rs/camino",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Without Boats",
+        "Ashley Williams",
+        "Steve Klabnik",
+        "Rain"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "cargo_metadata",
+      "version": "0.19.2",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/oli-obk/cargo_metadata",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Oliver Schneider"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "cargo-platform",
+      "version": "0.1.9",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/cargo",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "cfb",
+      "version": "0.14.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/mdsteele/rust-cfb",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Matthew D. Steele"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "cfg-if",
+      "version": "1.0.4",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/cfg-if",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Alex Crichton"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "chrono",
+      "version": "0.4.44",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/chronotope/chrono",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "const-oid",
+      "version": "0.9.6",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/RustCrypto/formats/tree/master/const-oid",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "RustCrypto Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "cookie",
+      "version": "0.18.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/SergioBenitez/cookie-rs",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sergio Benitez",
+        "Alex Crichton"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "core-foundation",
+      "version": "0.10.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/servo/core-foundation-rs",
+      "platforms": [
+        "macos"
+      ],
+      "authors": [
+        "The Servo Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "core-foundation-sys",
+      "version": "0.8.7",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/servo/core-foundation-rs",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Servo Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "core-graphics",
+      "version": "0.25.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/servo/core-foundation-rs",
+      "platforms": [
+        "macos"
+      ],
+      "authors": [
+        "The Servo Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "core-graphics-types",
+      "version": "0.2.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/servo/core-foundation-rs",
+      "platforms": [
+        "macos"
+      ],
+      "authors": [
+        "The Servo Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "cpufeatures",
+      "version": "0.2.17",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/RustCrypto/utils",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "RustCrypto Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "crc32fast",
+      "version": "1.5.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/srijs/rust-crc32fast",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sam Rijs",
+        "Alex Crichton"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "crossbeam-channel",
+      "version": "0.5.15",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/crossbeam-rs/crossbeam",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "crossbeam-utils",
+      "version": "0.8.21",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/crossbeam-rs/crossbeam",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "crypto-common",
+      "version": "0.1.7",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/RustCrypto/traits",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "RustCrypto Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "cssparser",
+      "version": "0.37.0",
+      "license": "MPL-2.0",
+      "licenseIds": [
+        "MPL-2.0"
+      ],
+      "source": "https://github.com/servo/rust-cssparser",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Simon Sapin"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "cssparser-macros",
+      "version": "0.7.1",
+      "license": "MPL-2.0",
+      "licenseIds": [
+        "MPL-2.0"
+      ],
+      "source": "https://github.com/servo/rust-cssparser",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Simon Sapin"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "ctor",
+      "version": "1.0.13",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/mmastrac/linktime",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Matt Mastracci"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "curve25519-dalek",
+      "version": "4.1.3",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/dalek-cryptography/curve25519-dalek/tree/main/curve25519-dalek",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Isis Lovecruft",
+        "Henry de Valence"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "darling",
+      "version": "0.23.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/TedDriggs/darling",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Ted Driggs"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "darling_core",
+      "version": "0.23.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/TedDriggs/darling",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Ted Driggs"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "darling_macro",
+      "version": "0.23.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/TedDriggs/darling",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Ted Driggs"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "der",
+      "version": "0.7.10",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/RustCrypto/formats/tree/master/der",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "RustCrypto Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "deranged",
+      "version": "0.5.8",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/jhpratt/deranged",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Jacob Pratt"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "derive_more",
+      "version": "2.1.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/JelteF/derive_more",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Jelte Fennema"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "derive_more-impl",
+      "version": "2.1.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/JelteF/derive_more",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Jelte Fennema"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "digest",
+      "version": "0.10.7",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/RustCrypto/traits",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "RustCrypto Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "dirs",
+      "version": "7.0.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://codeberg.org/dirs/dirs-rs",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Simon Ochsenreither"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "dirs-sys",
+      "version": "0.5.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dirs-dev/dirs-sys-rs",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Simon Ochsenreither"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "dispatch2",
+      "version": "0.3.1",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Mads Marquart",
+        "Mary"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "displaydoc",
+      "version": "0.2.5",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/yaahc/displaydoc",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Jane Lusby"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "dom_query",
+      "version": "0.28.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/niklak/dom_query",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "niklak",
+        "importcjj"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "dpi",
+      "version": "0.1.2",
+      "license": "Apache-2.0 AND MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-windowing/winit",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "dtoa",
+      "version": "1.0.11",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/dtoa",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "dtoa-short",
+      "version": "0.3.5",
+      "license": "MPL-2.0",
+      "licenseIds": [
+        "MPL-2.0"
+      ],
+      "source": "https://github.com/upsuper/dtoa-short",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Xidorn Quan"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "dunce",
+      "version": "1.0.5",
+      "license": "Apache-2.0 OR CC0-1.0 OR MIT-0",
+      "licenseIds": [
+        "Apache-2.0",
+        "CC0-1.0",
+        "MIT-0"
+      ],
+      "source": "https://gitlab.com/kornelski/dunce",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Kornel"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "dyn-clone",
+      "version": "1.0.20",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/dyn-clone",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "ed25519",
+      "version": "2.2.3",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/RustCrypto/signatures/tree/master/ed25519",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "RustCrypto Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "ed25519-dalek",
+      "version": "2.2.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/dalek-cryptography/curve25519-dalek/tree/main/ed25519-dalek",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "isis lovecruft",
+        "Tony Arcieri",
+        "Michael Rosenberg"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "embed_plist",
+      "version": "1.2.2",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/nvzqz/embed-plist-rs",
+      "platforms": [
+        "macos"
+      ],
+      "authors": [
+        "Nikolai Vazquez"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "equivalent",
+      "version": "1.0.2",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/indexmap-rs/equivalent",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "erased-serde",
+      "version": "0.4.10",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/erased-serde",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "errno",
+      "version": "0.3.14",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/lambda-fairy/rust-errno",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Chris Wong",
+        "Dan Gohman"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "fastrand",
+      "version": "2.4.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/smol-rs/fastrand",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Stjepan Glavina"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "fax",
+      "version": "0.2.7",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/pdf-rs/fax",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sebastian K"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "fdeflate",
+      "version": "0.3.7",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/image-rs/fdeflate",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The image-rs Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "flate2",
+      "version": "1.1.9",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/flate2-rs",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Alex Crichton",
+        "Josh Triplett"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "fnv",
+      "version": "1.0.7",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/servo/rust-fnv",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Alex Crichton"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "foldhash",
+      "version": "0.2.0",
+      "license": "Zlib",
+      "licenseIds": [
+        "Zlib"
+      ],
+      "source": "https://github.com/orlp/foldhash",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Orson Peters"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "foreign-types",
+      "version": "0.5.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/sfackler/foreign-types",
+      "platforms": [
+        "macos"
+      ],
+      "authors": [
+        "Steven Fackler"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "foreign-types-macros",
+      "version": "0.2.3",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/sfackler/foreign-types",
+      "platforms": [
+        "macos"
+      ],
+      "authors": [
+        "Steven Fackler"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "foreign-types-shared",
+      "version": "0.3.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/sfackler/foreign-types",
+      "platforms": [
+        "macos"
+      ],
+      "authors": [
+        "Steven Fackler"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "form_urlencoded",
+      "version": "1.2.2",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/servo/rust-url",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The rust-url developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "futures-channel",
+      "version": "0.3.32",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/futures-rs",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "futures-core",
+      "version": "0.3.32",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/futures-rs",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "futures-io",
+      "version": "0.3.32",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/futures-rs",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "futures-macro",
+      "version": "0.3.32",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/futures-rs",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "futures-sink",
+      "version": "0.3.32",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/futures-rs",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "futures-task",
+      "version": "0.3.32",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/futures-rs",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "futures-util",
+      "version": "0.3.32",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/futures-rs",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "generic-array",
+      "version": "0.14.7",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/fizyk20/generic-array",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Bartłomiej Kamiński",
+        "Aaron Trent"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "getrandom",
+      "version": "0.2.17",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-random/getrandom",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rand Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "getrandom",
+      "version": "0.3.4",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-random/getrandom",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rand Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "getrandom",
+      "version": "0.4.2",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-random/getrandom",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rand Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "glob",
+      "version": "0.3.3",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/glob",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rust Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "half",
+      "version": "2.7.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/VoidStarKat/half-rs",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Kathryn Long"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "hashbrown",
+      "version": "0.12.3",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/hashbrown",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Amanieu d'Antras"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "hashbrown",
+      "version": "0.17.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/hashbrown",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Amanieu d'Antras"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "heck",
+      "version": "0.5.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/withoutboats/heck",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "hex",
+      "version": "0.4.3",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/KokaKiwi/rust-hex",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "KokaKiwi"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "html5ever",
+      "version": "0.39.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/servo/html5ever",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The html5ever Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "http",
+      "version": "1.4.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/hyperium/http",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Alex Crichton",
+        "Carl Lerche",
+        "Sean McArthur"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "http-body",
+      "version": "1.0.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/hyperium/http-body",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Carl Lerche",
+        "Lucio Franco",
+        "Sean McArthur"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "http-body-util",
+      "version": "0.1.3",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/hyperium/http-body",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Carl Lerche",
+        "Lucio Franco",
+        "Sean McArthur"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "httparse",
+      "version": "1.10.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/seanmonstar/httparse",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sean McArthur"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "hyper",
+      "version": "1.9.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/hyperium/hyper",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sean McArthur"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "hyper-rustls",
+      "version": "0.27.9",
+      "license": "Apache-2.0 OR ISC OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "ISC",
+        "MIT"
+      ],
+      "source": "https://github.com/rustls/hyper-rustls",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "hyper-util",
+      "version": "0.1.20",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/hyperium/hyper-util",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sean McArthur"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "iana-time-zone",
+      "version": "0.1.65",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/strawlab/iana-time-zone",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Andrew Straw",
+        "René Kijewski",
+        "Ryan Lopopolo"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "ico",
+      "version": "0.5.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/mdsteele/rust-ico",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Matthew D. Steele"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "icu_collections",
+      "version": "2.2.0",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The ICU4X Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "icu_locale_core",
+      "version": "2.2.0",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The ICU4X Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "icu_normalizer",
+      "version": "2.2.0",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The ICU4X Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "icu_normalizer_data",
+      "version": "2.2.0",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The ICU4X Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "icu_properties",
+      "version": "2.2.0",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The ICU4X Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "icu_properties_data",
+      "version": "2.2.0",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The ICU4X Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "icu_provider",
+      "version": "2.2.0",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The ICU4X Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "ident_case",
+      "version": "1.0.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/TedDriggs/ident_case",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Ted Driggs"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "idna",
+      "version": "1.1.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/servo/rust-url",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The rust-url developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "idna_adapter",
+      "version": "1.2.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/hsivonen/idna_adapter",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The rust-url developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "image",
+      "version": "0.25.10",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/image-rs/image",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The image-rs Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "indexmap",
+      "version": "1.9.3",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/bluss/indexmap",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "indexmap",
+      "version": "2.14.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/indexmap-rs/indexmap",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "infer",
+      "version": "0.22.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/bojand/infer",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Bojan"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "ipnet",
+      "version": "2.12.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/krisprice/ipnet",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Kris Price"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "iri-string",
+      "version": "0.7.12",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/lo48576/iri-string",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "YOSHIOKA Takuma"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "itoa",
+      "version": "1.0.18",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/itoa",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "json-patch",
+      "version": "4.2.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/idubrov/json-patch",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Ivan Dubrov"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "jsonptr",
+      "version": "0.7.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/chanced/jsonptr",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "chance dinkins",
+        "André Sá de Mello",
+        "Oliver Wangler"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "keyboard-types",
+      "version": "0.8.3",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-windowing/keyboard-types",
+      "platforms": [
+        "macos"
+      ],
+      "authors": [
+        "Pyfisch"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "libc",
+      "version": "0.2.186",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/libc",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rust Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "litemap",
+      "version": "0.8.2",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The ICU4X Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "lock_api",
+      "version": "0.4.14",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/Amanieu/parking_lot",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Amanieu d'Antras"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "log",
+      "version": "0.4.29",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/log",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rust Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "lru-slab",
+      "version": "0.1.2",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/Ralith/lru-slab",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Benjamin Saunders"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "mac-notification-sys",
+      "version": "0.6.15",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/h4llow3En/mac-notification-sys",
+      "platforms": [
+        "macos"
+      ],
+      "authors": [
+        "Felix Döring",
+        "Hendrik Sollich"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "markup5ever",
+      "version": "0.39.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/servo/html5ever",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The html5ever Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "memchr",
+      "version": "2.8.0",
+      "license": "MIT OR Unlicense",
+      "licenseIds": [
+        "MIT",
+        "Unlicense"
+      ],
+      "source": "https://github.com/BurntSushi/memchr",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Andrew Gallant",
+        "bluss"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "mime",
+      "version": "0.3.17",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/hyperium/mime",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sean McArthur"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "miniz_oxide",
+      "version": "0.8.9",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Frommi",
+        "oyvindln",
+        "Rich Geldreich"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "mio",
+      "version": "1.2.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/tokio-rs/mio",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Carl Lerche",
+        "Thomas de Zeeuw",
+        "Tokio Contributors"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "moxcms",
+      "version": "0.8.1",
+      "license": "Apache-2.0 OR BSD-3-Clause",
+      "licenseIds": [
+        "Apache-2.0",
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/awxkee/moxcms",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Radzivon Bartoshyk"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "muda",
+      "version": "0.20.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tauri-apps/muda",
+      "platforms": [
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "new_debug_unreachable",
+      "version": "1.0.6",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/mbrubeck/rust-debug-unreachable",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Matt Brubeck",
+        "Jonathan Reem"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "notify-rust",
+      "version": "4.18.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/hoodie/notify-rust",
+      "platforms": [
+        "macos"
+      ],
+      "authors": [
+        "Hendrik Sollich"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "num-conv",
+      "version": "0.2.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/jhpratt/num-conv",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Jacob Pratt"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "num-traits",
+      "version": "0.2.19",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-num/num-traits",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rust Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2",
+      "version": "0.6.4",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Mads Marquart"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2-app-kit",
+      "version": "0.3.2",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2-cloud-kit",
+      "version": "0.3.2",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2-core-data",
+      "version": "0.3.2",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2-core-foundation",
+      "version": "0.3.2",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2-core-graphics",
+      "version": "0.3.2",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2-core-image",
+      "version": "0.3.2",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2-core-location",
+      "version": "0.3.2",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2-core-text",
+      "version": "0.3.2",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2-encode",
+      "version": "4.1.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Mads Marquart"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2-exception-helper",
+      "version": "0.1.1",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Mads Marquart"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2-foundation",
+      "version": "0.3.2",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2-io-surface",
+      "version": "0.3.2",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2-quartz-core",
+      "version": "0.3.2",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2-ui-kit",
+      "version": "0.3.2",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2-user-notifications",
+      "version": "0.3.2",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "objc2-web-kit",
+      "version": "0.3.2",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/madsmtm/objc2",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "once_cell",
+      "version": "1.21.4",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/matklad/once_cell",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Aleksey Kladov"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "open",
+      "version": "5.3.4",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/Byron/open-rs",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sebastian Thiel"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "option-ext",
+      "version": "0.2.0",
+      "license": "MPL-2.0",
+      "licenseIds": [
+        "MPL-2.0"
+      ],
+      "source": "https://github.com/soc/option-ext",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Simon Ochsenreither"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "parking_lot",
+      "version": "0.12.5",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/Amanieu/parking_lot",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Amanieu d'Antras"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "parking_lot_core",
+      "version": "0.9.12",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/Amanieu/parking_lot",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Amanieu d'Antras"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "pathdiff",
+      "version": "0.2.3",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/Manishearth/pathdiff",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Manish Goregaokar"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "percent-encoding",
+      "version": "2.3.2",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/servo/rust-url",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The rust-url developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "phf",
+      "version": "0.13.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/rust-phf/rust-phf",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Steven Fackler"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "phf_generator",
+      "version": "0.13.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/rust-phf/rust-phf",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Steven Fackler"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "phf_macros",
+      "version": "0.13.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/rust-phf/rust-phf",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Steven Fackler"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "phf_shared",
+      "version": "0.13.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/rust-phf/rust-phf",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Steven Fackler"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "pin-project-lite",
+      "version": "0.2.17",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/taiki-e/pin-project-lite",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "pkcs8",
+      "version": "0.10.2",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/RustCrypto/formats/tree/master/pkcs8",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "RustCrypto Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "plist",
+      "version": "1.8.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/ebarnard/rust-plist",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Ed Barnard"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "png",
+      "version": "0.17.16",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/image-rs/image-png",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The image-rs Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "png",
+      "version": "0.18.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/image-rs/image-png",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The image-rs Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "potential_utf",
+      "version": "0.1.5",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The ICU4X Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "powerfmt",
+      "version": "0.2.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/jhpratt/powerfmt",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Jacob Pratt"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "ppv-lite86",
+      "version": "0.2.21",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/cryptocorrosion/cryptocorrosion",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The CryptoCorrosion Contributors"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "precomputed-hash",
+      "version": "0.1.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/emilio/precomputed-hash",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Emilio Cobos Álvarez"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "proc-macro2",
+      "version": "1.0.106",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/proc-macro2",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay",
+        "Alex Crichton"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "pxfm",
+      "version": "0.1.29",
+      "license": "Apache-2.0 OR BSD-3-Clause",
+      "licenseIds": [
+        "Apache-2.0",
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/awxkee/pxfm",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Radzivon Bartoshyk"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "quick-error",
+      "version": "2.0.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tailhook/quick-error",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Paul Colomiets",
+        "Colin Kiegel"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "quick-xml",
+      "version": "0.38.4",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/tafia/quick-xml",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "quinn",
+      "version": "0.11.9",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/quinn-rs/quinn",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "quinn-proto",
+      "version": "0.11.14",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/quinn-rs/quinn",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "quinn-udp",
+      "version": "0.5.14",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/quinn-rs/quinn",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "quote",
+      "version": "1.0.45",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/quote",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "rand",
+      "version": "0.9.4",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-random/rand",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rand Project Developers",
+        "The Rust Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "rand_chacha",
+      "version": "0.9.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-random/rand",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rand Project Developers",
+        "The Rust Project Developers",
+        "The CryptoCorrosion Contributors"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "rand_core",
+      "version": "0.6.4",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-random/rand",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rand Project Developers",
+        "The Rust Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "rand_core",
+      "version": "0.9.5",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-random/rand",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rand Project Developers",
+        "The Rust Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "raw-window-handle",
+      "version": "0.6.2",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/rust-windowing/raw-window-handle",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Osspial"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "ref-cast",
+      "version": "1.0.25",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/ref-cast",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "ref-cast-impl",
+      "version": "1.0.25",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/ref-cast",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "regex",
+      "version": "1.12.3",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/regex",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rust Project Developers",
+        "Andrew Gallant"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "regex-automata",
+      "version": "0.4.14",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/regex",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rust Project Developers",
+        "Andrew Gallant"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "regex-syntax",
+      "version": "0.8.10",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/regex",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rust Project Developers",
+        "Andrew Gallant"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "reqwest",
+      "version": "0.12.28",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/seanmonstar/reqwest",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sean McArthur"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "reqwest",
+      "version": "0.13.2",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/seanmonstar/reqwest",
+      "platforms": [
+        "ios"
+      ],
+      "authors": [
+        "Sean McArthur"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "ring",
+      "version": "0.17.14",
+      "license": "Apache-2.0 AND ISC",
+      "licenseIds": [
+        "Apache-2.0",
+        "ISC"
+      ],
+      "source": "https://github.com/briansmith/ring",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "rustc-hash",
+      "version": "2.1.2",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/rustc-hash",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Rust Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "rustls",
+      "version": "0.23.39",
+      "license": "Apache-2.0 OR ISC OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "ISC",
+        "MIT"
+      ],
+      "source": "https://github.com/rustls/rustls",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "rustls-pki-types",
+      "version": "1.14.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rustls/pki-types",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "rustls-webpki",
+      "version": "0.103.13",
+      "license": "ISC",
+      "licenseIds": [
+        "ISC"
+      ],
+      "source": "https://github.com/rustls/webpki",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "ryu",
+      "version": "1.0.23",
+      "license": "Apache-2.0 OR BSL-1.0",
+      "licenseIds": [
+        "Apache-2.0",
+        "BSL-1.0"
+      ],
+      "source": "https://github.com/dtolnay/ryu",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "same-file",
+      "version": "1.0.6",
+      "license": "MIT OR Unlicense",
+      "licenseIds": [
+        "MIT",
+        "Unlicense"
+      ],
+      "source": "https://github.com/BurntSushi/same-file",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Andrew Gallant"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "schemars",
+      "version": "0.8.22",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/GREsau/schemars",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Graham Esau"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "schemars",
+      "version": "0.9.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/GREsau/schemars",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Graham Esau"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "schemars",
+      "version": "1.2.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/GREsau/schemars",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Graham Esau"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "schemars_derive",
+      "version": "0.8.22",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/GREsau/schemars",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Graham Esau"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "scopeguard",
+      "version": "1.2.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/bluss/scopeguard",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "bluss"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "selectors",
+      "version": "0.38.0",
+      "license": "MPL-2.0",
+      "licenseIds": [
+        "MPL-2.0"
+      ],
+      "source": "https://github.com/servo/stylo",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Servo Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "semver",
+      "version": "1.0.28",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/semver",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "serde",
+      "version": "1.0.228",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/serde-rs/serde",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Erick Tryzelaar",
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "serde_core",
+      "version": "1.0.228",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/serde-rs/serde",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Erick Tryzelaar",
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "serde_derive",
+      "version": "1.0.228",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/serde-rs/serde",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Erick Tryzelaar",
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "serde_derive_internals",
+      "version": "0.29.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/serde-rs/serde",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Erick Tryzelaar",
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "serde_json",
+      "version": "1.0.149",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/serde-rs/json",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Erick Tryzelaar",
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "serde_repr",
+      "version": "0.1.20",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/serde-repr",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "serde_spanned",
+      "version": "1.1.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/toml-rs/toml",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "serde_urlencoded",
+      "version": "0.7.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/nox/serde_urlencoded",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Anthony Ramine"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "serde_with",
+      "version": "3.18.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/jonasbb/serde_with",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Jonas Bushart",
+        "Marcin Kaźmierczak"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "serde_with_macros",
+      "version": "3.18.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/jonasbb/serde_with",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Jonas Bushart"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "serde-untagged",
+      "version": "0.1.9",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/serde-untagged",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "serialize-to-javascript",
+      "version": "0.1.2",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/chippers/serialize-to-javascript",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Chip Reed"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "serialize-to-javascript-impl",
+      "version": "0.1.2",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/chippers/serialize-to-javascript",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Chip Reed"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "servo_arc",
+      "version": "0.4.3",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/servo/stylo",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Servo Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "sha2",
+      "version": "0.10.9",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/RustCrypto/hashes",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "RustCrypto Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "signal-hook-registry",
+      "version": "1.4.8",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/vorner/signal-hook",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Michal 'vorner' Vaner",
+        "Masaki Hara"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "signature",
+      "version": "2.2.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/RustCrypto/traits/tree/master/signature",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "RustCrypto Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "simd-adler32",
+      "version": "0.3.9",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/mcountryman/simd-adler32",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Marvin Countryman"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "siphasher",
+      "version": "1.0.2",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/jedisct1/rust-siphash",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Frank Denis"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "slab",
+      "version": "0.4.12",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/tokio-rs/slab",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Carl Lerche"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "smallvec",
+      "version": "1.15.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/servo/rust-smallvec",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Servo Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "socket2",
+      "version": "0.6.3",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rust-lang/socket2",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Alex Crichton",
+        "Thomas de Zeeuw"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "spki",
+      "version": "0.7.3",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/RustCrypto/formats/tree/master/spki",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "RustCrypto Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "stable_deref_trait",
+      "version": "1.2.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/storyyeller/stable_deref_trait",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Robert Grosse"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "string_cache",
+      "version": "0.9.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/servo/string-cache",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The Servo Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "strsim",
+      "version": "0.11.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/rapidfuzz/strsim-rs",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Danny Guo",
+        "maxbachmann"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "subtle",
+      "version": "2.6.1",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/dalek-cryptography/subtle",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Isis Lovecruft",
+        "Henry de Valence"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "swift-rs",
+      "version": "1.0.8",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/Brendonovich/swift-rs",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The swift-rs contributors"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "syn",
+      "version": "2.0.117",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/syn",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "sync_wrapper",
+      "version": "1.0.2",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://github.com/Actyx/sync_wrapper",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Actyx AG"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "synstructure",
+      "version": "0.13.2",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/mystor/synstructure",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Nika Layzell"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tao",
+      "version": "0.37.1",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://github.com/tauri-apps/tao",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tauri Programme within The Commons Conservancy",
+        "The winit contributors"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tauri",
+      "version": "2.12.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tauri-apps/tauri",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tauri Programme within The Commons Conservancy"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tauri-codegen",
+      "version": "2.7.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tauri-apps/tauri",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tauri Programme within The Commons Conservancy"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tauri-macros",
+      "version": "2.7.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tauri-apps/tauri",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tauri Programme within The Commons Conservancy"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tauri-plugin-clipboard-manager",
+      "version": "2.4.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tauri-apps/plugins-workspace",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tauri Programme within The Commons Conservancy"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tauri-plugin-notification",
+      "version": "2.5.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tauri-apps/plugins-workspace",
+      "platforms": [
+        "macos"
+      ],
+      "authors": [
+        "Tauri Programme within The Commons Conservancy"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tauri-plugin-opener",
+      "version": "2.6.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tauri-apps/plugins-workspace",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tauri Programme within The Commons Conservancy"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tauri-runtime",
+      "version": "2.12.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tauri-apps/tauri",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tauri Programme within The Commons Conservancy"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tauri-runtime-wry",
+      "version": "2.12.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tauri-apps/tauri",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tauri Programme within The Commons Conservancy"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tauri-utils",
+      "version": "2.10.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tauri-apps/tauri",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tauri Programme within The Commons Conservancy"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tendril",
+      "version": "0.5.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/servo/html5ever",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Keegan McAllister",
+        "Simon Sapin",
+        "Chris Morgan"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "thiserror",
+      "version": "2.0.18",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/thiserror",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "thiserror-impl",
+      "version": "2.0.18",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/thiserror",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tiff",
+      "version": "0.11.3",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/image-rs/image-tiff",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The image-rs Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "time",
+      "version": "0.3.47",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/time-rs/time",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Jacob Pratt",
+        "Time contributors"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "time-core",
+      "version": "0.1.8",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/time-rs/time",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Jacob Pratt",
+        "Time contributors"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "time-macros",
+      "version": "0.2.27",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/time-rs/time",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Jacob Pratt",
+        "Time contributors"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tinystr",
+      "version": "0.8.3",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The ICU4X Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tinyvec",
+      "version": "1.11.0",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/Lokathor/tinyvec",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Lokathor"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tinyvec_macros",
+      "version": "0.1.1",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/Soveu/tinyvec_macros",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Soveu"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tokio",
+      "version": "1.52.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/tokio-rs/tokio",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tokio Contributors"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tokio-macros",
+      "version": "2.7.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/tokio-rs/tokio",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tokio Contributors"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tokio-rustls",
+      "version": "0.26.4",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/rustls/tokio-rustls",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tokio-util",
+      "version": "0.7.18",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/tokio-rs/tokio",
+      "platforms": [
+        "ios"
+      ],
+      "authors": [
+        "Tokio Contributors"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "toml",
+      "version": "0.9.12+spec-1.1.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/toml-rs/toml",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "toml_datetime",
+      "version": "0.7.5+spec-1.1.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/toml-rs/toml",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "toml_parser",
+      "version": "1.1.3+spec-1.1.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/toml-rs/toml",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "toml_writer",
+      "version": "1.1.2+spec-1.1.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/toml-rs/toml",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tower",
+      "version": "0.5.3",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/tower-rs/tower",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tower Maintainers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tower-http",
+      "version": "0.6.8",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/tower-rs/tower-http",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tower Maintainers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tower-layer",
+      "version": "0.3.3",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/tower-rs/tower",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tower Maintainers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tower-service",
+      "version": "0.3.3",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/tower-rs/tower",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tower Maintainers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tracing",
+      "version": "0.1.44",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/tokio-rs/tracing",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Eliza Weisman",
+        "Tokio Contributors"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tracing-attributes",
+      "version": "0.1.31",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/tokio-rs/tracing",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tokio Contributors",
+        "Eliza Weisman",
+        "David Barsky"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tracing-core",
+      "version": "0.1.36",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/tokio-rs/tracing",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tokio Contributors"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "tray-icon",
+      "version": "0.25.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tauri-apps/tray-icon",
+      "platforms": [
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "try-lock",
+      "version": "0.2.5",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/seanmonstar/try-lock",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sean McArthur"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "typeid",
+      "version": "1.0.3",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/typeid",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "typenum",
+      "version": "1.20.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/paholg/typenum",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Paho Lurie-Gregg",
+        "Andre Bogus"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "unicode-ident",
+      "version": "1.0.24",
+      "license": "(Apache-2.0 OR MIT) AND Unicode-3.0",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/dtolnay/unicode-ident",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "untrusted",
+      "version": "0.9.0",
+      "license": "ISC",
+      "licenseIds": [
+        "ISC"
+      ],
+      "source": "https://github.com/briansmith/untrusted",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Brian Smith"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "url",
+      "version": "2.5.8",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/servo/rust-url",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The rust-url developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "urlencoding",
+      "version": "2.1.3",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/kornelski/rust_urlencoding",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Kornel",
+        "Bertram Truong"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "urlpattern",
+      "version": "0.6.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/denoland/rust-urlpattern",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "the Deno authors",
+        "crowlKats"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "utf-8",
+      "version": "0.7.6",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/SimonSapin/rust-utf8",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Simon Sapin"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "utf8_iter",
+      "version": "1.0.4",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/hsivonen/utf8_iter",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Henri Sivonen"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "uuid",
+      "version": "1.23.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/uuid-rs/uuid",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Ashley Mannix",
+        "Dylan DPC",
+        "Hunar Roop Kahlon"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "walkdir",
+      "version": "2.5.0",
+      "license": "MIT OR Unlicense",
+      "licenseIds": [
+        "MIT",
+        "Unlicense"
+      ],
+      "source": "https://github.com/BurntSushi/walkdir",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Andrew Gallant"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "want",
+      "version": "0.3.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/seanmonstar/want",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sean McArthur"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "web_atoms",
+      "version": "0.2.4",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/servo/html5ever",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The html5ever Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "web-time",
+      "version": "1.1.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/daxpedda/web-time",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "webpki-roots",
+      "version": "1.0.7",
+      "license": "CDLA-Permissive-2.0",
+      "licenseIds": [
+        "CDLA-Permissive-2.0"
+      ],
+      "source": "https://github.com/rustls/webpki-roots",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "weezl",
+      "version": "0.1.12",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/image-rs/weezl",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The image-rs Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "window-vibrancy",
+      "version": "0.8.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tauri-apps/tauri-plugin-vibrancy",
+      "platforms": [
+        "macos"
+      ],
+      "authors": [
+        "Tauri Programme within The Commons Conservancy"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "winnow",
+      "version": "0.7.15",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/winnow-rs/winnow",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "winnow",
+      "version": "1.0.2",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/winnow-rs/winnow",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "writeable",
+      "version": "0.6.3",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The ICU4X Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "wry",
+      "version": "0.57.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tauri-apps/wry",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Tauri Programme within The Commons Conservancy"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "yoke",
+      "version": "0.8.2",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Manish Goregaokar"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "yoke-derive",
+      "version": "0.8.2",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Manish Goregaokar"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "zerocopy",
+      "version": "0.8.48",
+      "license": "Apache-2.0 OR BSD-2-Clause OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "BSD-2-Clause",
+        "MIT"
+      ],
+      "source": "https://github.com/google/zerocopy",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Joshua Liebow-Feeser",
+        "Jack Wrenn"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "zerocopy-derive",
+      "version": "0.8.48",
+      "license": "Apache-2.0 OR BSD-2-Clause OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "BSD-2-Clause",
+        "MIT"
+      ],
+      "source": "https://github.com/google/zerocopy",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Joshua Liebow-Feeser",
+        "Jack Wrenn"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "zerofrom",
+      "version": "0.1.7",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Manish Goregaokar"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "zerofrom-derive",
+      "version": "0.1.7",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Manish Goregaokar"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "zeroize",
+      "version": "1.8.2",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/RustCrypto/utils",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The RustCrypto Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "zerotrie",
+      "version": "0.2.4",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The ICU4X Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "zerovec",
+      "version": "0.11.6",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "The ICU4X Project Developers"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "zerovec-derive",
+      "version": "0.11.3",
+      "license": "Unicode-3.0",
+      "licenseIds": [
+        "Unicode-3.0"
+      ],
+      "source": "https://github.com/unicode-org/icu4x",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Manish Goregaokar"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "zmij",
+      "version": "1.0.21",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/dtolnay/zmij",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "David Tolnay"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "zune-core",
+      "version": "0.5.1",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/etemesi254/zune-image",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "zune-jpeg",
+      "version": "0.5.15",
+      "license": "Apache-2.0 OR MIT OR Zlib",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT",
+        "Zlib"
+      ],
+      "source": "https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "caleb"
+      ]
+    },
+    {
+      "kind": "go",
+      "name": "github.com/andybalholm/brotli",
+      "version": "v1.0.6",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/andybalholm/brotli/tree/v1.0.6",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/apernet/quic-go",
+      "version": "v0.61.1-0.20260806010916-184d081eef3e",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/apernet/quic-go/tree/v0.61.1-0.20260806010916-184d081eef3e",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2016 the quic-go authors & Google, Inc."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/cloudflare/circl",
+      "version": "v1.6.5",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/cloudflare/circl/tree/v1.6.5",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2019 Cloudflare. All rights reserved.\nCopyright (c) 2009 The Go Authors. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/ghodss/yaml",
+      "version": "v1.0.1-0.20220118164431-d8423dcdf344",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/ghodss/yaml/tree/v1.0.1-0.20220118164431-d8423dcdf344",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2014 Sam Ghods\nCopyright (c) 2012 The Go Authors. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/google/btree",
+      "version": "v1.1.2",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://github.com/google/btree/tree/v1.1.2",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "go",
+      "name": "github.com/google/gopacket",
+      "version": "v1.1.19",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/google/gopacket/tree/v1.1.19",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2012 Google, Inc. All rights reserved.\nCopyright (c) 2009-2011 Andreas Krennmair. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/google/uuid",
+      "version": "v1.6.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/google/uuid/tree/v1.6.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2009,2014 Google Inc. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/gorilla/websocket",
+      "version": "v1.5.3",
+      "license": "BSD-2-Clause",
+      "licenseIds": [
+        "BSD-2-Clause"
+      ],
+      "source": "https://github.com/gorilla/websocket/tree/v1.5.3",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2013 The Gorilla WebSocket Authors. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/huin/goupnp",
+      "version": "v1.2.0",
+      "license": "BSD-2-Clause",
+      "licenseIds": [
+        "BSD-2-Clause"
+      ],
+      "source": "https://github.com/huin/goupnp/tree/v1.2.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2013, John Beisley"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/jackpal/go-nat-pmp",
+      "version": "v1.0.2",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://github.com/jackpal/go-nat-pmp/tree/v1.0.2",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2013 John Howard Palevich"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/klauspost/compress",
+      "version": "v1.17.4",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://github.com/klauspost/compress/tree/v1.17.4",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2012 The Go Authors. All rights reserved.\nCopyright (c) 2019 Klaus Post. All rights reserved.\nCopyright 2016-2017 The New York Times Company\nCopyright (c) 2015 Klaus Post\nCopyright (c) 2011 The Snappy-Go Authors. All rights reserved.\nCopyright 2016 The filepathx Authors"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/klauspost/cpuid/v2",
+      "version": "v2.4.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/klauspost/cpuid/tree/v2.4.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2015 Klaus Post"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/koron/go-ssdp",
+      "version": "v0.0.4",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/koron/go-ssdp/tree/v0.0.4",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2016 MURAOKA Taro"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/libp2p/go-nat",
+      "version": "v1.0.1-0.20250821073202-01afc089f138",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://github.com/libp2p/go-nat/tree/v1.0.1-0.20250821073202-01afc089f138",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "go",
+      "name": "github.com/libp2p/go-netroute",
+      "version": "v0.2.1",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/libp2p/go-netroute/tree/v0.2.1",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2020 Will Scott. All rights reserved.\nCopyright (c) 2012 Google, Inc. All rights reserved.\nCopyright (c) 2009-2011 Andreas Krennmair. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/metacubex/age",
+      "version": "v0.0.0-20260603010618-28d156b4ea78",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/metacubex/age/tree/28d156b4ea78",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2019 The age Authors\nCopyright 2019 Google LLC\nCopyright 2022 Filippo Valsorda"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/metacubex/hkdf",
+      "version": "v0.1.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/metacubex/hkdf/tree/v0.1.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/metacubex/hpke",
+      "version": "v0.1.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/metacubex/hpke/tree/v0.1.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/metacubex/mlkem",
+      "version": "v0.1.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/metacubex/mlkem/tree/v0.1.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/miekg/dns",
+      "version": "v1.1.73",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/miekg/dns/tree/v1.1.73",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2009, The Go Authors. Extensions copyright (c) 2011, Miek Gieben."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/pelletier/go-toml",
+      "version": "v1.9.5",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://github.com/pelletier/go-toml/tree/v1.9.5",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2013 - 2021 Thomas Pelletier, Eric Anderton"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/pion/dtls/v3",
+      "version": "v3.1.5",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/pion/dtls/tree/v3.1.5",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2026 The Pion community"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/pion/logging",
+      "version": "v0.2.4",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/pion/logging/tree/v0.2.4",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2023 The Pion community"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/pion/stun/v3",
+      "version": "v3.1.7",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/pion/stun/tree/v3.1.7",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2026 The Pion community"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/pion/transport/v4",
+      "version": "v4.1.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/pion/transport/tree/v4.1.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2026 The Pion community"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/pires/go-proxyproto",
+      "version": "v0.15.0",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://github.com/pires/go-proxyproto/tree/v0.15.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2016 Paulo Pires"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/quic-go/qpack",
+      "version": "v0.6.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/quic-go/qpack/tree/v0.6.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2019 Marten Seemann"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/refraction-networking/utls",
+      "version": "v1.8.3-0.20260301010127-aa6edf4b11af",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/refraction-networking/utls/tree/v1.8.3-0.20260301010127-aa6edf4b11af",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2009 The Go Authors. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "github.com/robfig/cron/v3",
+      "version": "v3.0.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/robfig/cron/tree/v3.0.1",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (C) 2012 Rob Figueiredo"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/wlynxg/anet",
+      "version": "v0.0.5",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://github.com/wlynxg/anet/tree/v0.0.5",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2023, wlynxg"
+    },
+    {
+      "kind": "go",
+      "name": "github.com/xtls/reality",
+      "version": "v0.0.0-20260908062103-8cdf7bf9c7f0",
+      "license": "MPL-2.0",
+      "licenseIds": [
+        "MPL-2.0"
+      ],
+      "source": "https://github.com/xtls/reality/tree/8cdf7bf9c7f0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2023 RPRX. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "Go standard library and runtime",
+      "version": "go1.27.1",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://go.googlesource.com/go/+/refs/tags/go1.27.1",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "go4.org/netipx",
+      "version": "v0.0.0-20231129151722-fdeea329fbba",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/go4.org/netipx@v0.0.0-20231129151722-fdeea329fbba",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2020 The Inet.af AUTHORS. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "golang.org/x/crypto",
+      "version": "v0.57.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/golang.org/x/crypto@v0.57.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "golang.org/x/exp",
+      "version": "v0.0.0-20240506185415-9bf2ced13842",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/golang.org/x/exp@v0.0.0-20240506185415-9bf2ced13842",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2009 The Go Authors. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "golang.org/x/net",
+      "version": "v0.59.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/golang.org/x/net@v0.59.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "golang.org/x/sync",
+      "version": "v0.23.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/golang.org/x/sync@v0.23.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "golang.org/x/sys",
+      "version": "v0.48.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/golang.org/x/sys@v0.48.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "golang.org/x/text",
+      "version": "v0.42.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/golang.org/x/text@v0.42.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "golang.org/x/time",
+      "version": "v0.14.0",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/golang.org/x/time@v0.14.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2009 The Go Authors."
+    },
+    {
+      "kind": "go",
+      "name": "golang.zx2c4.com/wireguard",
+      "version": "v0.0.0-20250521234502-f333402bd9cb",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://pkg.go.dev/golang.zx2c4.com/wireguard@v0.0.0-20250521234502-f333402bd9cb",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "go",
+      "name": "google.golang.org/genproto/googleapis/rpc",
+      "version": "v0.0.0-20260526163538-3dc84a4a5aaa",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://pkg.go.dev/google.golang.org/genproto/googleapis/rpc@v0.0.0-20260526163538-3dc84a4a5aaa",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "go",
+      "name": "google.golang.org/grpc",
+      "version": "v1.83.2",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://pkg.go.dev/google.golang.org/grpc@v1.83.2",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2014 gRPC authors."
+    },
+    {
+      "kind": "go",
+      "name": "google.golang.org/protobuf",
+      "version": "v1.36.12",
+      "license": "BSD-3-Clause",
+      "licenseIds": [
+        "BSD-3-Clause"
+      ],
+      "source": "https://pkg.go.dev/google.golang.org/protobuf@v1.36.12",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2018 The Go Authors. All rights reserved."
+    },
+    {
+      "kind": "go",
+      "name": "gopkg.in/yaml.v2",
+      "version": "v2.4.0",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://pkg.go.dev/gopkg.in/yaml.v2@v2.4.0",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright 2011-2016 Canonical Ltd."
+    },
+    {
+      "kind": "go",
+      "name": "gvisor.dev/gvisor",
+      "version": "v0.0.0-20260122175437-89a5d21be8f0",
+      "license": "Apache-2.0",
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "source": "https://pkg.go.dev/gvisor.dev/gvisor@v0.0.0-20260122175437-89a5d21be8f0",
+      "platforms": [
+        "ios"
+      ]
+    },
+    {
+      "kind": "go",
+      "name": "lukechampine.com/blake3",
+      "version": "v1.4.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://pkg.go.dev/lukechampine.com/blake3@v1.4.1",
+      "platforms": [
+        "ios"
+      ],
+      "copyright": "Copyright (c) 2020 Luke Champine"
+    },
+    {
+      "kind": "npm",
+      "name": "@tauri-apps/api",
+      "version": "2.12.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tauri-apps/tauri",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "@tauri-apps/plugin-clipboard-manager",
+      "version": "2.4.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tauri-apps/plugins-workspace",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "@tauri-apps/plugin-opener",
+      "version": "2.6.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/tauri-apps/plugins-workspace",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "ansi-regex",
+      "version": "5.0.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/chalk/ansi-regex",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sindre Sorhus"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "ansi-styles",
+      "version": "4.3.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/chalk/ansi-styles",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sindre Sorhus"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "camelcase",
+      "version": "5.3.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/sindresorhus/camelcase",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sindre Sorhus"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "cliui",
+      "version": "6.0.0",
+      "license": "ISC",
+      "licenseIds": [
+        "ISC"
+      ],
+      "source": "https://github.com/yargs/cliui",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Ben Coe"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "color-convert",
+      "version": "2.0.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/Qix-/color-convert",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Heather Arthur"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "color-name",
+      "version": "1.1.4",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/colorjs/color-name",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "DY"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "decamelize",
+      "version": "1.2.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/sindresorhus/decamelize",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sindre Sorhus"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "dijkstrajs",
+      "version": "1.0.3",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/tcort/dijkstrajs",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "emoji-regex",
+      "version": "8.0.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/mathiasbynens/emoji-regex",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Mathias Bynens"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "find-up",
+      "version": "4.1.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/sindresorhus/find-up",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sindre Sorhus"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "get-caller-file",
+      "version": "2.0.5",
+      "license": "ISC",
+      "licenseIds": [
+        "ISC"
+      ],
+      "source": "https://github.com/stefanpenner/get-caller-file",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Stefan Penner"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "is-fullwidth-code-point",
+      "version": "3.0.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/sindresorhus/is-fullwidth-code-point",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sindre Sorhus"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "locate-path",
+      "version": "5.0.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/sindresorhus/locate-path",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sindre Sorhus"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "lucide-react",
+      "version": "1.11.0",
+      "license": "ISC",
+      "licenseIds": [
+        "ISC"
+      ],
+      "source": "https://github.com/lucide-icons/lucide",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Eric Fennis"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "p-limit",
+      "version": "2.3.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/sindresorhus/p-limit",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sindre Sorhus"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "p-locate",
+      "version": "4.1.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/sindresorhus/p-locate",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sindre Sorhus"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "p-try",
+      "version": "2.2.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/sindresorhus/p-try",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sindre Sorhus"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "path-exists",
+      "version": "4.0.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/sindresorhus/path-exists",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sindre Sorhus"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "pngjs",
+      "version": "5.0.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/lukeapage/pngjs",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "qrcode",
+      "version": "1.5.4",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/soldair/node-qrcode",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Ryan Day"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "react",
+      "version": "19.2.5",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/facebook/react",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "react-dom",
+      "version": "19.2.5",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/facebook/react",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "require-directory",
+      "version": "2.1.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/troygoode/node-require-directory",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Troy Goode"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "require-main-filename",
+      "version": "2.0.0",
+      "license": "ISC",
+      "licenseIds": [
+        "ISC"
+      ],
+      "source": "https://github.com/yargs/require-main-filename",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Ben Coe"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "scheduler",
+      "version": "0.27.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/facebook/react",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "set-blocking",
+      "version": "2.0.0",
+      "license": "ISC",
+      "licenseIds": [
+        "ISC"
+      ],
+      "source": "https://github.com/yargs/set-blocking",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Ben Coe"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "string-width",
+      "version": "4.2.3",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/sindresorhus/string-width",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sindre Sorhus"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "strip-ansi",
+      "version": "6.0.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/chalk/strip-ansi",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sindre Sorhus"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "which-module",
+      "version": "2.0.1",
+      "license": "ISC",
+      "licenseIds": [
+        "ISC"
+      ],
+      "source": "https://github.com/nexdrew/which-module",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "nexdrew"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "wrap-ansi",
+      "version": "6.2.0",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/chalk/wrap-ansi",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Sindre Sorhus"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "y18n",
+      "version": "4.0.3",
+      "license": "ISC",
+      "licenseIds": [
+        "ISC"
+      ],
+      "source": "https://github.com/yargs/y18n",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Ben Coe"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "yargs",
+      "version": "15.4.1",
+      "license": "MIT",
+      "licenseIds": [
+        "MIT"
+      ],
+      "source": "https://github.com/yargs/yargs",
+      "platforms": [
+        "ios",
+        "macos"
+      ]
+    },
+    {
+      "kind": "npm",
+      "name": "yargs-parser",
+      "version": "18.1.3",
+      "license": "ISC",
+      "licenseIds": [
+        "ISC"
+      ],
+      "source": "https://github.com/yargs/yargs-parser",
+      "platforms": [
+        "ios",
+        "macos"
+      ],
+      "authors": [
+        "Ben Coe"
+      ]
+    }
+  ]
+}

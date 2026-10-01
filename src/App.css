@@ -1,279 +1,1526 @@
+/* Rubik, the face the site uses (SIL OFL 1.1). Bundled, not fetched: the app
+   must look the same on a first run with no network, and a VPN client that
+   pulls a font from a third party on every launch is a beacon we do not need.
+   Variable 400-700 in two subsets - 51 KB for both. */
+@font-face {
+  font-family: "Rubik";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("./assets/fonts/rubik-cyrillic.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+@font-face {
+  font-family: "Rubik";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("./assets/fonts/rubik-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+2000-206F,
+    U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --nm-bg: #1a1d24;
-  --nm-surface: #222630;
-  --nm-text: #e4e6eb;
-  --nm-text-secondary: #9ca3af;
-  --nm-accent: #4ade80;
-  --nm-shadow-dark: #14171c;
-  --nm-shadow-light: #2a2f3a;
-}
-
-html, body, #root {
-  margin: 0;
-  padding: 0;
-  height: 100vh;
-  width: 100vw;
-  overflow: hidden;
-  background: var(--nm-bg);
-  color: var(--nm-text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  user-select: none;
-}
-
-.nm-raised {
-  background: var(--nm-surface);
-  border-radius: 16px;
-  box-shadow: 6px 6px 12px var(--nm-shadow-dark), -6px -6px 12px var(--nm-shadow-light);
-}
-.nm-pressed {
-  background: var(--nm-surface);
-  border-radius: 16px;
-  box-shadow: inset 4px 4px 8px var(--nm-shadow-dark), inset -4px -4px 8px var(--nm-shadow-light);
-}
-.nm-pressed-sm {
-  background: var(--nm-surface);
-  border-radius: 10px;
-  box-shadow: inset 2px 2px 4px var(--nm-shadow-dark), inset -2px -2px 4px var(--nm-shadow-light);
-}
-.nm-btn {
-  background: var(--nm-surface);
-  border: none;
-  border-radius: 12px;
-  box-shadow: 4px 4px 8px var(--nm-shadow-dark), -4px -4px 8px var(--nm-shadow-light);
-  transition: all 0.15s ease;
-  color: var(--nm-text);
-}
-.nm-btn:hover { transform: translateY(-1px); }
-.nm-btn:active { box-shadow: inset 2px 2px 4px var(--nm-shadow-dark), inset -2px -2px 4px var(--nm-shadow-light); transform: translateY(0); }
-.nm-btn-accent {
-  background: linear-gradient(145deg, #4ade80, #22c55e);
-  border: none;
-  border-radius: 12px;
-  color: #0d1117;
-  font-weight: 600;
-  box-shadow: 4px 4px 12px rgba(74, 222, 128, 0.3), -2px -2px 8px var(--nm-shadow-light);
-  transition: all 0.15s ease;
-}
-.nm-btn-accent:hover { transform: translateY(-1px); box-shadow: 6px 6px 16px rgba(74, 222, 128, 0.4), -2px -2px 8px var(--nm-shadow-light); }
-.nm-btn-accent:active { transform: translateY(0); box-shadow: inset 2px 2px 4px rgba(0,0,0,0.2); }
-.nm-btn-accent:disabled { opacity: 0.5; cursor: not-allowed; }
-
 /* ==========================================================================
-   ADDITIONS for light theme + LogViewer + ThemeToggle
-   APPEND this to the END of src/App.css (do not replace existing content).
+   ProxysVPN — flat, high-contrast.
+
+   Replaces the neumorphic surface. Soft-UI depends on a pair of low-contrast
+   shadows to say "this is a button", which is exactly what disappears for an
+   older person on a laptop screen in daylight, and what the system setting
+   "Increase contrast" removes on purpose. Here a control is a control because
+   of a fill, a border and a size, never because of a shadow.
+
+   Rules this file keeps:
+   • one accent, #4ade80, and never a second bright colour competing with it;
+   • every tap target is at least 44 pt;
+   • both themes follow the system unless the person chose one in [12];
+   • nothing moves for a person who asked the system for less motion.
    ========================================================================== */
 
-/* --- LIGHT THEME ---------------------------------------------------------- */
-/* Activated by setting `data-theme="light"` on <html>.                       */
-/* Defaults stay in :root (dark theme).                                       */
+:root {
+  /* iOS notch / home-indicator insets; 0 on desktop. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+
+  color-scheme: dark;
+
+  /* Dark is the default: this is a VPN client, it lives in a dark window. */
+  --bg: #0a0a0c;
+  --surface: #101014;
+  --surface-2: #18181f;
+  --line: #1d1d26;
+  --line-strong: #2b2b38;
+  --text: #e4e4f0;
+  /* Both grey levels are AA for body text (4.5:1) on EVERY surface they land
+     on, the lighter --surface and --surface-2 included, not only on --bg.
+     The old faint, #5c5c68, was 2.9:1 on --surface: the "не проверяли" line
+     in [8] and every section caption failed a contrast audit.
+       dim   #9898a5: 6.9 on --bg, 6.7 on --surface, 6.2 on --surface-2
+       faint #80808d: 5.1 on --bg, 4.9 on --surface, 4.5 on --surface-2
+     Dim moved up with faint so the two stay two different levels; the old
+     dim, #7a7a88, would now be darker than faint (and was 4.5:1 on --surface
+     itself). */
+  --text-dim: #9898a5;
+  --text-faint: #80808d;
+
+  --accent: #7ba8a0;
+  /* Green ON a surface needs more contrast than green AS a surface. */
+  --accent-text: #8fbeb5;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(123, 168, 160, 0.14);
+
+  --danger: #ff6b6b;
+  --danger-soft: rgba(255, 107, 107, 0.14);
+  --warn: #f6c453;
+
+  --radius: 14px;
+  --radius-lg: 20px;
+  --tap: 44px;
+
+  --font: "Rubik", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+
+  /* Type follows the system text size. Every size in this file is written
+     as `calc(N * var(--type-px))`: N is the size in px the design was drawn
+     at, and --type-px is one such pixel expressed in rem.
+
+     --type-base is how many px 1rem holds when the system text size is at
+     its default: 16 from the fixed root below, 17 on iOS/iPadOS, where the
+     root is the Dynamic Type body size (17 pt at the default "Large"). So at
+     the default size every screen is exactly the size it was drawn at on
+     every platform, and on iOS it grows with Settings → Display & Text Size.
+
+     Capped at twice the drawn size: the 200 % Apple asks for before an app
+     may claim Larger Text. The accessibility sizes go on to 53 pt, over
+     300 %, and there the pinned footers of [8] and [12] would leave a phone
+     one row of list to scroll; pinch-zoom, which index.html no longer
+     forbids, covers what is past the cap. Measured in iOS Simulator Safari:
+     root 17 / 23 / 28 / 53 px at Large / xxxL / AX1 / AX5 gives h1 26 / 35.2
+     / 42.8 / 52 px, and nothing runs off a 390 pt screen at any of them. */
+  --type-base: 16;
+  --type-px: min(calc(1rem / var(--type-base)), 2px);
+
+  /* Рельеф, на котором построен сайт: тень вниз-вправо цветом самой тёмной
+     поверхности. Диагональ 5/5 - подпись этого интерфейса, а не украшение,
+     та же стоит на каждой кнопке proksya.xyz.
+
+     Блика вверх-слева здесь больше НЕТ, и это осознанно. Форма тени - тот же
+     скруглённый прямоугольник элемента, просто сдвинутый; в углу, к которому
+     она смещена, размытие заливает квадрат СНАРУЖИ дуги, а границы у этого
+     квадрата - прямые края карточки. Получается плоский уголок с прямым
+     контуром, а не свет. У тёмной тени это лечится отрицательным разбросом
+     ровно в величину смещения: дуга тени ложится на дугу карточки и свет
+     гаснет вдоль кривой. У блика не лечится ничем: он белый и светлее фона,
+     так что любой его остаток в углу читается как скол. Белый уголок в левом
+     верхнем углу карточки - это был именно он. Убрать уголок и оставить блик
+     нельзя, это одно и то же пятно.
+
+     Приподнятость теперь несут два слоя одной тени: дальняя мягкая и
+     короткая контактная у самого края. Карточка и так светлее фона в обеих
+     темах - блик ей не нужен.
+
+     Блик как таковой жив - в --press и --gloss, где он ВНУТРИ элемента и
+     обрезан его же рамкой, так что вытечь наружу не может. */
+
+  --nm-dark: #050507;
+
+  --nm-light: #18181f;
+
+  --lift: 5px 5px 14px -5px var(--nm-dark), 1px 2px 4px -2px var(--nm-dark);
+
+  --lift-sm: 3px 3px 9px -3px var(--nm-dark), 1px 1px 3px -2px var(--nm-dark);
+
+  /* Pressing sinks the control: the same relief turned inward. */
+
+  --press: inset 3px 3px 7px var(--nm-dark), inset -3px -3px 7px var(--nm-light);
+
+  --gloss: inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  /* Шторка лежит поверх экрана, поэтому её тень своя, не рельефная. */
+  --sheet-shadow: 0 -12px 40px rgba(5, 5, 7, 0.65);
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  /* Kept for tailwind.config.js, which maps nm-* utilities onto these. */
+  --nm-bg: var(--bg);
+  --nm-surface: var(--surface);
+  --nm-text: var(--text);
+  --nm-text-secondary: var(--text-dim);
+  --nm-accent: var(--accent);
+}
+
+/* Светлая тема. ОДНО правило, а не два: `data-theme` теперь всегда проставлен
+   — prefs.ts сам разрешает «как в системе» в light или dark. Раньше эта
+   палитра существовала дважды: копия под `@media (prefers-color-scheme:
+   light)` и копия под `[data-theme="light"]`. Они разъехались — принудительной
+   светлой теме не достался смягчённый рельеф, и она брала его от тёмной: тень
+   #050507 и «блик» #18181f на почти белом фоне. Это и была чёрная рамка вокруг
+   каждой карточки в [12]. Палитра, которая существует в одном месте,
+   разъехаться не может. */
 :root[data-theme="light"] {
-  --nm-bg: #e6ebf2;
-  --nm-surface: #edf1f7;
-  --nm-text: #1f2937;
-  --nm-text-secondary: #6b7280;
-  --nm-accent: #16a34a;
-  --nm-shadow-dark: #c5cad4;
-  --nm-shadow-light: #ffffff;
+  color-scheme: light;
+  --bg: #f2f3f5;
+  --surface: #f7f8fa;
+  --surface-2: #eceef1;
+  --line: #e0e3e8;
+  --line-strong: #c8ccd3;
+  --text: #0a0a0c;
+  /* Same rule as dark, measured the other way round: on white-ish surfaces
+     the darkest background is the worst case.
+       dim   #4f5460: 6.8 on --bg, 7.1 on --surface, 6.5 on --surface-2
+       faint #666b76: 4.8 on --bg, 5.0 on --surface, 4.6 on --surface-2
+     The old faint, #868c98, was 3.0:1 on --bg. */
+  --text-dim: #4f5460;
+  --text-faint: #666b76;
+  --accent: #5b8a82;
+  /* #4ade80 as TEXT on white is unreadable; the darker green is the same
+     hue at a contrast a person can actually read. */
+  --accent-text: #3d6c64;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(91, 138, 130, 0.16);
+  --danger: #c92a2a;
+  --danger-soft: rgba(201, 42, 42, 0.1);
+  --warn: #b45309;
+
+  /* Рельеф на светлом фоне приходится делать мягче, чем на тёмном. Тень и
+     блик стоят по диагонали, и есть углы, которые не накрывает ни та, ни
+     другой: там проступает цвет тени. На тёмном это незаметно, а на светлом
+     читается грязным пятном в углу карточки. Лечится тем, что тень берётся
+     ближе к фону, а размытие крупнее - пятну неоткуда взяться. */
+  --nm-dark: #e4e7ec;
+  --nm-light: #ffffff;
+  --lift: 6px 6px 20px -6px var(--nm-dark), 1px 2px 5px -2px var(--nm-dark);
+  --lift-sm: 4px 4px 13px -4px var(--nm-dark), 1px 1px 3px -2px var(--nm-dark);
+  --press: inset 4px 4px 11px var(--nm-dark), inset -4px -4px 11px var(--nm-light);
+  --gloss: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  /* Та же причина: чёрная тень шторки на светлом фоне читается грязью. */
+  --sheet-shadow: 0 -14px 34px rgba(60, 68, 82, 0.16);
 }
 
-/* Smooth transition on theme switch */
-html, body, .nm-raised, .nm-pressed, .nm-pressed-sm, .nm-btn, .nm-btn-sm {
-  transition: background 0.25s ease, color 0.25s ease, box-shadow 0.25s ease;
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
 }
 
-/* --- COMPACT NEUMORPHIC BUTTON (used by ThemeToggle and LogViewer toggle) - */
-.nm-btn-sm {
-  background: var(--nm-surface);
-  border: none;
-  border-radius: 50%;
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 3px 3px 6px var(--nm-shadow-dark),
-              -3px -3px 6px var(--nm-shadow-light);
-  color: var(--nm-text-secondary);
+/* The root every rem hangs off. 16 px is the fallback, and the size the
+   whole design was drawn against. */
+html {
+  font-size: 16px;
+}
+
+/* iOS and iPadOS: the root becomes the Dynamic Type body size, so rem, and
+   with it --type-px, follows Settings → Display & Text Size.
+
+   `-webkit-touch-callout` is what keeps this off the Mac. WebKit there knows
+   -apple-system-body as well, but answers with the 13 pt macOS body size: the
+   desktop app would shrink by a fifth and still follow nothing. */
+@supports (font: -apple-system-body) and (-webkit-touch-callout: none) {
+  html {
+    font: -apple-system-body;
+    /* The shorthand resets these along with the size, and only the size is
+       wanted from it. */
+    font-family: var(--font);
+    line-height: 1.5;
+  }
+
+  :root {
+    --type-base: 17;
+  }
+
+  /* iOS zooms the page into any text field under 16 px the moment it takes
+     focus, and with zoom no longer forbidden nothing stops it. The domain
+     lists in "Свои правила" are 15 px. */
+  input,
+  textarea,
+  select {
+    font-size: max(16px, 1em);
+  }
+}
+
+body {
+  /* Text that sets no size of its own (radio rows, bare buttons) stays at the
+     16 px it always inherited, and scales along with the rest. */
+  font-size: calc(16 * var(--type-px));
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+button {
+  font: inherit;
+  color: inherit;
   cursor: pointer;
-  transition: all 0.12s ease;
-}
-.nm-btn-sm:hover {
-  color: var(--nm-text);
-}
-.nm-btn-sm:active {
-  box-shadow: inset 2px 2px 4px var(--nm-shadow-dark),
-              inset -2px -2px 4px var(--nm-shadow-light);
-}
-.nm-btn-sm:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
-/* --- THEME TOGGLE POSITION (top-right) ----------------------------------- */
-.theme-toggle {
-  position: fixed;
-  top: 12px;
-  right: 12px;
-  z-index: 50;
+/* Pinch-zoom is allowed now, and with it iOS would also zoom on a double
+   tap - which is what an impatient thumb does to the emblem or a button.
+   `manipulation` keeps pinch and drops the double-tap zoom. */
+button,
+label,
+summary,
+[role="button"] {
+  touch-action: manipulation;
 }
 
-/* --- LOG TOGGLE POSITION (bottom-right) ---------------------------------- */
-.log-toggle {
-  position: fixed;
-  bottom: 12px;
-  right: 12px;
-  z-index: 50;
-  opacity: 0.55;
-}
-.log-toggle:hover {
-  opacity: 1;
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
 }
 
-/* --- LOG MODAL ----------------------------------------------------------- */
-.log-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-  animation: fadeIn 0.15s ease;
-}
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
+/* --- Shell ---------------------------------------------------------------- */
 
-.log-modal {
+.app {
+  position: relative;
   width: 100%;
-  max-width: 720px;
-  max-height: 90vh;
+  max-width: 480px;
+  min-height: 100dvh;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
-  padding: 16px;
-  user-select: text;
+  padding: calc(var(--safe-top) + 10px) calc(var(--safe-right) + 16px)
+    calc(var(--safe-bottom) + 12px) calc(var(--safe-left) + 16px);
+  background: var(--bg);
+  overflow: hidden;
 }
-.log-modal-header {
+
+.topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  min-height: var(--tap);
+  flex: 0 0 auto;
 }
-.log-modal-title {
-  font-size: 14px;
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(15 * var(--type-px));
   font-weight: 600;
-  color: var(--nm-text);
+  letter-spacing: 0.01em;
 }
-.log-icon-btn {
-  background: transparent;
-  border: none;
-  color: var(--nm-text-secondary);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 6px;
+
+.brand-mark {
+  width: 20px;
+  height: auto;
+  display: block;
+}
+
+/* --- Typography ----------------------------------------------------------- */
+
+.h1 {
+  font-size: calc(26 * var(--type-px));
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+/* At twice the text size one word can be wider than a 320 pt screen
+   ("Подтвердить" at 52 px). It breaks rather than being cut off by the
+   window. `max-width` is what makes that work inside the centred flex column
+   of [2], where a heading is otherwise as wide as its longest word. Neither
+   changes anything while every word fits, which at the drawn size they do. */
+.h1,
+.h2 {
+  max-width: 100%;
+  overflow-wrap: break-word;
+}
+
+.h2 {
+  font-size: calc(19 * var(--type-px));
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.body {
+  font-size: calc(15 * var(--type-px));
+  line-height: 1.45;
+  margin: 0;
+}
+
+.dim {
+  color: var(--text-dim);
+}
+
+.faint {
+  color: var(--text-faint);
+}
+
+.small {
+  font-size: calc(13 * var(--type-px));
+  line-height: 1.4;
+}
+
+.caps {
+  font-size: calc(12 * var(--type-px));
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.accent {
+  color: var(--accent-text);
+}
+
+.danger {
+  color: var(--danger);
+}
+
+.nowrap-num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Buttons -------------------------------------------------------------- */
+
+.btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-}
-.log-icon-btn:hover {
-  color: var(--nm-text);
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 14px 24px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: calc(16 * var(--type-px));
+  font-weight: 500;
+  text-align: center;
+  box-shadow: var(--lift);
+  transition: box-shadow 0.16s ease, background 0.15s ease, color 0.15s ease;
 }
 
-.log-modal-actions {
+.btn:active:not(:disabled) {
+  /* Sinks instead of scaling: on a relief a shadow swap reads better than a
+     size change, and it does not nudge the neighbours. */
+  box-shadow: var(--press);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  box-shadow: none;
+  cursor: default;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+  box-shadow: var(--lift), var(--gloss);
+}
+
+.btn-primary:active:not(:disabled) {
+  box-shadow: var(--press);
+}
+
+.btn-outline {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.btn-quiet {
+  background: transparent;
+  color: var(--text-dim);
+  font-weight: 500;
+  font-size: calc(15 * var(--type-px));
+  min-height: var(--tap);
+  box-shadow: none;
+}
+
+.btn-quiet:active:not(:disabled) {
+  box-shadow: none;
+  color: var(--text);
+}
+
+.btn-quiet:hover {
+  color: var(--text);
+}
+
+.btn-danger {
+  background: transparent;
+  color: var(--danger);
+  box-shadow: none;
+}
+
+/* A quiet row that removes something still has to look like it removes
+   something; `.btn-quiet` would otherwise win on source order. */
+.btn-quiet.danger {
+  color: var(--danger);
+}
+
+.btn-row {
+  display: flex;
+  gap: 10px;
+}
+
+/* Secondary links (the sign-in screen's support and policy): side by side
+   while they fit, one under the other at large text sizes rather than each
+   name broken over lines. Still 44 pt targets. */
+.link-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
+  justify-content: center;
+  column-gap: 8px;
 }
-.log-action-btn {
-  width: auto !important;
-  height: auto !important;
-  border-radius: 8px !important;
-  padding: 6px 10px;
-  font-size: 11px;
+
+.link-row .btn {
+  width: auto;
+  padding: 10px 12px;
+  font-size: calc(13 * var(--type-px));
+}
+
+/* Last in a scrolling body: down at its bottom while there is room, right
+   after the content once it overflows (auto margins collapse to zero, see
+   .screen-body--center). */
+.link-row--end {
+  margin-top: auto;
+}
+
+/* An icon-only control still has to be a 44 pt target. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap);
+  height: var(--tap);
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.icon-btn:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* --- Main screen ---------------------------------------------------------- */
+
+.stage {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 8px 0 4px;
+  text-align: center;
+  min-height: 0;
+}
+
+/* ── Эмблема: главный и единственный орган управления ──────────────────── */
+
+.emblem-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 200px;
+  height: 200px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.emblem-btn:disabled {
+  cursor: default;
+}
+
+/* Подставка под маркой. Выключено - вдавлена, включено - поднята: тот же
+   рельеф, что на кнопках сайта, применённый к самому крупному элементу. */
+.emblem-plate {
+  display: grid;
+  place-items: center;
+  width: 154px;
+  height: 154px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--press);
+  transition: box-shadow 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.emblem-btn[data-state="on"] .emblem-plate,
+.emblem-btn[data-state="unconfirmed"] .emblem-plate {
+  box-shadow: var(--lift);
+}
+
+.emblem-btn:active:not(:disabled) .emblem-plate {
+  transform: scale(0.97);
+}
+
+/* Марка. Серая, пока туннель не поднят, и в полном цвете, как только через
+   него прошёл байт, - тот же факт, что несёт кольцо, во втором канале. */
+.emblem-art {
+  filter: grayscale(1) brightness(0.72);
+  opacity: 0.7;
+  transition: filter 520ms ease, opacity 520ms ease, transform 520ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.emblem-btn[data-state="on"] .emblem-art,
+.emblem-btn[data-state="unconfirmed"] .emblem-art {
+  filter: none;
+  opacity: 1;
+}
+
+/* Марка в момент включения слегка подаётся вперёд. Отскок выше единицы убран:
+   вместе с поворотом дужки он читался как подпрыгивание замка - два движения
+   разом, одно поверх другого. Подтверждение здесь несёт дужка, а масштаб лишь
+   поддерживает его. */
+.emblem-btn[data-state="on"] .emblem-art {
+  animation: emblem-settle 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes emblem-settle {
+  from { transform: translateY(var(--emblem-drop)) scale(0.975); }
+  to { transform: translateY(var(--emblem-drop)) scale(1); }
+}
+
+/* Марка и замок лежат друг на друге: база - картинка, замок - живой SVG. */
+.emblem-art {
+  position: relative;
+  display: block;
+  width: 104px;
+  /* Оптическая посадка в круге. Рамка марки центрирована точно - зазор сверху
+     и снизу совпадает до сотых, - но щит сужается книзу, и его масса лежит
+     выше середины рамки: центр тяжести отбитых пикселей стоит на 4.37 %
+     высоты ВЫШЕ геометрического центра. Глаз держится за массу, а не за
+     рамку, поэтому точно центрированный щит читается задранным.
+
+     Полный сдвиг на 4.37 % (4.8 px) уводит остриё слишком близко ко дну:
+     круг ведь тоже сужается книзу и часть перекоса съедает сам. Сошлись на
+     2.75 % - это 3 px при нынешнем размере; выбрано глазом из ряда 0 / 2.5 /
+     3 / 3.5 / 4.8, измерение задало только верхнюю границу.
+
+     Живёт переменной, потому что то же число нужно кадрам анимации: марка
+     при включении ещё и масштабируется, а transform один на всех. */
+  --emblem-drop: 2.75%;
+  transform: translateY(var(--emblem-drop));
+}
+
+
+.emblem-art .emblem-mark {
+  display: block;
+  width: 100%;
+}
+
+.lock-svg,
+.eye-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Дужка поворачивается вокруг основания левой ножки - той, что остаётся в
+   корпусе. Координаты в единицах холста эмблемы (1720x1804). */
+.lock-shackle {
+  transform-origin: 692px 1260px;
+  transition: transform 560ms cubic-bezier(0.34, 1.32, 0.52, 1);
+}
+
+.lock-shackle[data-open="true"] {
+  transform: rotate(-26deg);
+}
+
+/* Веко опускается вместе с дужкой замка и по той же кривой: закрытый глаз и
+   защёлкнутый замок - одно событие, а не два.
+
+   Нижняя граница у века - тот же контур, которым обрезана прорезь, поэтому в
+   покое оно стоит ровно НАД глазом и отсекается обрезкой целиком: открытый
+   глаз не стоит ничего. Закрывается сдвигом вниз на 270 единиц холста марки:
+   самая глубокая точка прорези - 847, край века над ней - 596, то есть 251
+   хватает впритык, а 270 закрывает с запасом. */
+.eye-lid {
+  transform: translateY(0);
+  transition: transform 560ms cubic-bezier(0.34, 1.32, 0.52, 1);
+}
+
+.eye-svg[data-closed="true"] .eye-lid {
+  /*
+   * 290, а не 270.
+   *
+   * При 270 кромка века вставала РОВНО на дно прорези - в худшем месте она
+   * перекрывала его на 4,9 единицы холста, то есть меньше чем на пиксель при
+   * обычном размере эмблемы. Два сглаженных края - кромка и обрезка - цеплялись
+   * друг за друга ступеньками, и по низу закрытого глаза шла рваная линия.
+   *
+   * Замерено, а не подобрано: отрисовка слоя поверх настоящей марки и попиксельное
+   * сравнение. Разница между 270 и 292 - ровно 586 пикселей в полосе 116x12 у
+   * нижней кромки, там самые зубцы и сидели. При 285, 292 и 310 картинка уже
+   * одинакова пиксель в пиксель: веко целиком за обрезкой, цепляться нечему.
+   *
+   * 290 - середина этого безопасного диапазона. Ход века длиннее на 7 %,
+   * на глаз незаметно.
+   */
+  transform: translateY(290px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .eye-lid {
+    transition-duration: 1ms;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lock-shackle {
+    transition-duration: 1ms;
+  }
+}
+
+.emblem-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.ring-arc {
+  transform-origin: 50% 50%;
+}
+
+/* Сплошное кольцо обводит марку один раз, когда защита встала. */
+.emblem-btn[data-state="on"] .ring-arc {
+  stroke-dasharray: 100;
+  animation: ring-draw 640ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes ring-draw {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
+
+.ring-arc.spinning {
+  animation: ring-spin 1.7s linear infinite;
+}
+
+@keyframes ring-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Ничего из этого не является смыслом - только его подтверждением, поэтому
+   при выключенной анимации всё сводится к смене состояния без движения. */
+@media (prefers-reduced-motion: reduce) {
+  .emblem-plate,
+  .emblem-art {
+    transition-duration: 1ms;
+  }
+
+  .emblem-btn[data-state="on"] .emblem-art,
+  .emblem-btn[data-state="on"] .ring-arc,
+  .ring-arc.spinning {
+    animation: none;
+  }
+
+  .ring-arc.spinning {
+    stroke-dasharray: 46 54;
+  }
+}
+
+.headline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  max-width: 320px;
+}
+
+/* The whole truth line is one 44 pt target that opens [3]. */
+.truthline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  min-height: var(--tap);
+  padding: 4px 12px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: calc(15 * var(--type-px));
+}
+
+/* On a 375 pt phone the line wraps; it must break BETWEEN the three facts,
+   never inside "38 мс" or "проверено только что". */
+.truthline > span {
+  white-space: nowrap;
+}
+
+.truthline:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.truthline .sep {
+  color: var(--text-faint);
+}
+
+.quiet-note {
+  /* One line held open even when empty, so the button above does not jump;
+     a line grows with the text, so the hold does too. */
+  min-height: calc(20 * var(--type-px));
+  font-size: calc(13 * var(--type-px));
+  color: var(--text-faint);
+}
+
+/* Thin bar shown while healing is still a whisper (8–45 s). */
+.whisper {
+  width: 168px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.whisper::after {
+  content: "";
+  display: block;
+  width: 40%;
+  height: 100%;
+  background: var(--accent);
+  animation: whisper-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes whisper-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+.footbar {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.footbar button {
+  flex: 1 1 0;
+  min-height: var(--tap);
+  border: none;
+  background: transparent;
+  border-radius: 12px;
+  color: var(--text-dim);
+  font-size: calc(14 * var(--type-px));
+  font-weight: 550;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   gap: 6px;
 }
-.log-action-btn span {
-  font-size: 11px;
-}
-.log-action-danger {
-  color: #ef4444;
+
+.footbar button:hover {
+  background: var(--surface);
+  color: var(--text);
 }
 
-.log-modal-body {
-  flex: 1;
-  overflow-y: auto;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-  font-size: 11px;
-  line-height: 1.4;
-  padding: 10px;
-  min-height: 280px;
-  max-height: 50vh;
-  color: var(--nm-text);
+/* --- Service bar ---------------------------------------------------------- */
+
+.servicebar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-top: 6px;
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: calc(13 * var(--type-px));
+  line-height: 1.35;
+  text-align: left;
 }
-.log-empty {
+
+.servicebar[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.servicebar button {
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-decoration: underline;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* --- Lists and rows ------------------------------------------------------- */
+
+.list {
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--lift);
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 12px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: calc(15 * var(--type-px));
+}
+
+.row + .row {
+  box-shadow: inset 0 1px 0 var(--line);
+}
+
+button.row:hover {
+  background: var(--surface-2);
+}
+
+.row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.row-title {
+  font-weight: 550;
+}
+
+.row-sub {
+  font-size: calc(13 * var(--type-px));
+  color: var(--text-dim);
+  line-height: 1.35;
+}
+
+.row-side {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: calc(14 * var(--type-px));
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.row-flag {
+  font-size: calc(22 * var(--type-px));
+  line-height: 1;
+  width: calc(28 * var(--type-px));
   text-align: center;
-  color: var(--nm-text-secondary);
-  padding: 40px 0;
-  font-family: -apple-system, sans-serif;
-  font-size: 12px;
-}
-.log-line {
-  white-space: pre-wrap;
-  word-break: break-all;
-  margin-bottom: 1px;
-}
-.log-time {
-  color: var(--nm-text-secondary);
-  opacity: 0.75;
-}
-.log-source {
-  color: #60a5fa;
-}
-:root[data-theme="light"] .log-source {
-  color: #2563eb;
-}
-.log-msg {
-  color: var(--nm-text);
-}
-.log-warn .log-msg {
-  color: #f59e0b;
-}
-.log-error .log-msg {
-  color: #ef4444;
 }
 
-.log-modal-footer {
-  margin-top: 10px;
-  font-size: 10px;
-  color: var(--nm-text-secondary);
-  text-align: center;
-}
-.log-modal-footer code {
-  background: var(--nm-shadow-dark);
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-family: ui-monospace, monospace;
+.row[aria-selected="true"] .row-title,
+.row[data-selected="true"] .row-title {
+  color: var(--accent-text);
 }
 
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 
-/* Floating version label — bottom-left corner, mirrors LogViewer button */
-.version-label {
+.section + .section {
+  margin-top: 18px;
+}
+
+.divider {
+  height: 1px;
+  background: var(--line);
+  border: none;
+  margin: 0;
+}
+
+/* --- Screens (full-window) and sheets ------------------------------------- */
+
+.screen {
   position: fixed;
-  bottom: 14px;
-  left: 14px;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  justify-content: center;
+  background: var(--bg);
+}
+
+.screen-inner {
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  padding: calc(var(--safe-top) + 6px) calc(var(--safe-right) + 16px)
+    calc(var(--safe-bottom) + 14px) calc(var(--safe-left) + 16px);
+  min-height: 0;
+}
+
+.screen-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--tap);
+  margin-bottom: 10px;
+}
+
+.screen-head .h2 {
+  flex: 1 1 auto;
+  /* Lets a title narrower than its longest word wrap it instead of pushing
+     the row past the edge; see .h1, .h2. */
+  min-width: 0;
+}
+
+/* Vertical centring for short screens. Auto margins, not
+   `justify-content: center`: with centring, content taller than the box has
+   its FIRST lines clipped and unreachable by scrolling. Auto margins collapse
+   to zero once the content fills the space, so long content still starts at
+   the top and scrolls normally. */
+.screen-body--center > :first-child {
+  margin-top: auto;
+}
+
+.screen-body--center > :last-child {
+  margin-bottom: auto;
+}
+
+.screen-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 12px;
+}
+
+/* A scrolling flex column shrinks its items to nothing when the content
+   overflows, and `.list` has `overflow: hidden`, which lets it collapse all
+   the way to zero height — that silently ate the first row of [5]. Items keep
+   their natural height; the one element that should grow says so inline. */
+.screen-body > *,
+.sheet-body > * {
+  flex: 0 0 auto;
+}
+
+.screen-foot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
   z-index: 50;
-  font-size: 10px;
-  color: var(--nm-text-secondary);
-  opacity: 0.55;
-  user-select: none;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: fade-in 0.16s ease-out;
+}
+
+.sheet {
+  width: 100%;
+  max-width: 480px;
+  max-height: 86dvh;
+  background: var(--surface);
+  box-shadow: var(--sheet-shadow);
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-lg);
+  padding: 8px 16px calc(var(--safe-bottom) + 16px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: sheet-up 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+  touch-action: none;
+}
+
+.sheet-grip {
+  width: 40px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-strong);
+  margin: 4px auto 2px;
+  flex: 0 0 auto;
+}
+
+.sheet-body {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0.4;
+  }
+}
+
+/* iPad and anything else that wide. 480 is a phone column: on an iPad it
+   left two thirds of the screen empty and the text no bigger for it. Below
+   the rules it overrides on purpose - same specificity, so order decides.
+   The desktop window is a fixed 480 wide and never gets here. */
+@media (min-width: 768px) {
+  .app,
+  .screen-inner,
+  .sheet {
+    max-width: 720px;
+  }
+}
+
+/* --- Small parts ---------------------------------------------------------- */
+
+/* Read by VoiceOver and friends, invisible on screen: the live lines in [4]
+   and [8] that say out loud what a tick or a cross says to the eye. Not
+   `display: none`, which would hide it from them too. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.segmented {
+  display: inline-flex;
+  /* At twice the text size "Как в системе · Светлое · Тёмное" is wider than
+     a phone. The options then wrap inside the control instead of running
+     off the right edge; at the drawn size they fit and nothing wraps. */
+  flex-wrap: wrap;
+  max-width: 100%;
+  padding: 3px;
+  gap: 3px;
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+/* Same moment, one level up: a row holding a label and a segmented control
+   puts the control on a line of its own once the two no longer fit side by
+   side, and lets it narrow to the row. Both only ever kick in on overflow. */
+.row:has(.segmented) {
+  flex-wrap: wrap;
+}
+
+.row:has(.segmented) > .row-side {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.segmented button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: calc(14 * var(--type-px));
+  font-weight: 550;
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.radio {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: transparent;
+  text-align: left;
+  color: var(--text);
+}
+
+.radio[aria-checked="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.radio-dot {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  display: grid;
+  place-items: center;
+}
+
+.radio[aria-checked="true"] .radio-dot {
+  border-color: var(--accent-text);
+}
+
+.radio[aria-checked="true"] .radio-dot::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent-text);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: calc(12 * var(--type-px));
+  font-weight: 550;
+}
+
+.qr-card {
+  /* Always white, in both themes: a dark QR code does not scan. */
+  background: #ffffff;
+  border-radius: var(--radius);
+  padding: 12px;
+  width: 244px;
+  height: 244px;
+  display: grid;
+  place-items: center;
+  /* Вниз отодвинут ТОЛЬКО код. Пробовали центрировать весь экран целиком -
+     тогда вместе с кодом уезжало и объяснение, а оно должно читаться сразу
+     под заголовком. */
+  margin: 28px auto 0;
+}
+
+.qr-card img {
+  width: 220px;
+  height: 220px;
+  image-rendering: pixelated;
+}
+
+/* Pair code on the sign-in screen: the quiet "enter a code" row and, once
+   opened, the field, its button and the refusal line. Centred like the QR
+   and no wider than a phone column: on an iPad eight characters do not need
+   the 720 px the column grows to. */
+.code-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 360px;
+  margin: 4px auto 0;
+}
+
+.code-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.code-field {
+  width: 100%;
+  min-height: 52px;
+  padding: 10px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--mono);
+  /* Above 16 px at every text size, so iOS never zooms into it. */
+  font-size: calc(22 * var(--type-px));
+  letter-spacing: 0.12em;
+  text-align: center;
+  /* The body forbids selection; a field someone pastes into must allow it,
+     or the long-press "Paste" never appears on iOS. */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.code-field::placeholder {
+  color: var(--text-faint);
+}
+
+.code-field[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.code-error {
+  margin: 0;
+  text-align: center;
+}
+
+.mono-box {
+  font-family: var(--mono);
+  font-size: calc(12 * var(--type-px));
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px;
+  overflow-y: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.check-grid {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--lift);
+  overflow: hidden;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 14px;
+  font-size: calc(14 * var(--type-px));
+}
+
+.check-row + .check-row {
+  box-shadow: inset 0 1px 0 var(--line);
+}
+
+.check-row .mark {
+  flex: 0 0 auto;
+  /* The glyph is text and grows with it; a fixed box would clip ✓ and ✕. */
+  width: calc(20 * var(--type-px));
+  text-align: center;
+  font-weight: 700;
+}
+
+.check-row[data-state="pass"] .mark {
+  color: var(--accent-text);
+}
+
+.check-row[data-state="fail"] .mark {
+  color: var(--danger);
+}
+
+.check-row[data-state="idle"],
+.check-row[data-state="pending"] {
+  color: var(--text-faint);
+}
+
+.verdict {
+  padding: 14px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border-left: 3px solid var(--accent);
+  font-size: calc(15 * var(--type-px));
+  line-height: 1.4;
+}
+
+.verdict[data-bad="true"] {
+  border-left-color: var(--danger);
+}
+
+.heal-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  font-size: calc(15 * var(--type-px));
+  color: var(--text-dim);
+}
+
+.heal-step[data-current="true"] {
+  color: var(--text);
+}
+
+.heal-step .mark {
+  width: calc(18 * var(--type-px));
+  text-align: center;
+  color: var(--accent-text);
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--safe-bottom) + 82px);
+  transform: translateX(-50%);
+  z-index: 60;
+  /* `max-content` alone lets a long line, or a short one at a large text
+     size, run past both edges of a phone. */
+  max-width: min(420px, calc(100vw - 32px));
+  width: max-content;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: calc(14 * var(--type-px));
+  text-align: center;
+  animation: fade-in 0.16s ease-out;
   pointer-events: none;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+.spinner {
+  display: inline-block;
+  vertical-align: -3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  animation: shield-spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+
+/* --- Demo strip. Development only: never rendered inside the app. --------- */
+
+.demo {
+  position: fixed;
+  left: 8px;
+  /* Clear of the bottom bar: the chip used to sit on top of "Страна" and eat
+     the tap. Only the chip itself takes pointer events, so the rest of the
+     strip can never block a real control. */
+  bottom: calc(var(--safe-bottom) + 76px);
+  z-index: 70;
+  font-size: calc(11 * var(--type-px));
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
+.demo summary,
+.demo-list {
+  pointer-events: auto;
+}
+
+.demo summary {
+  cursor: pointer;
+  padding: 3px 7px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  list-style: none;
+  background: var(--bg);
+  width: max-content;
+  /* Faint on purpose: it is scaffolding over someone else's screen. */
+  opacity: 0.5;
+}
+
+.demo summary:hover,
+.demo[open] summary {
+  opacity: 1;
+}
+
+.demo-list {
+  margin-top: 6px;
+  max-height: 60dvh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.demo-list button {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  text-align: left;
+  font-size: calc(11 * var(--type-px));
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+
+/* Показания живого взгляда. Читать их приходится с телефона, где нет консоли,
+   поэтому они здесь, а не в console.log. Только в разработке: вся полоса
+   рендерится лишь когда за окном нет ядра. */
+.demo-gaze {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: calc(11 * var(--type-px));
+  line-height: 1.35;
+  color: var(--text-dim);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.demo-gaze b {
+  color: var(--text);
+}
+
+.demo-list button[aria-pressed="true"] {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+/* --- Motion --------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  /* The arc and the whisper bar carry meaning, so they stay visible — they
+     simply stop moving. */
+  .shield-arc,
+  .spinner {
+    animation: none !important;
+  }
+
+  .whisper::after {
+    animation: none !important;
+    width: 100%;
+  }
 }

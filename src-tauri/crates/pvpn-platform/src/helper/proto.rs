@@ -47,6 +47,11 @@ pub enum Request {
     Up(UpParams),
     /// Re-assert routes and DNS (the 5 s supervisor tick).
     Ensure(UpParams),
+    /// Move the live tunnel to another node: pin the new node's address to the
+    /// physical link, then drop the old one. The device, the split defaults,
+    /// DNS and tun2socks stay as they are. Only valid while a tunnel is up, and
+    /// it can aim nothing `Up` could not: the same validation applies.
+    Retarget(UpParams),
     /// Tear the tunnel down but keep the helper running, so that the next
     /// connect does not ask for the password again.
     Down,
@@ -328,6 +333,7 @@ mod tests {
             Frame::Request { id: 1, req: Request::Hello },
             Frame::Request { id: 2, req: Request::Up(sample()) },
             Frame::Request { id: 3, req: Request::Ensure(sample()) },
+            Frame::Request { id: 6, req: Request::Retarget(sample()) },
             Frame::Request { id: 4, req: Request::Down },
             Frame::Request { id: 5, req: Request::Status },
             Frame::Response { id: 5, ok: true, error: None, engine_alive: true },

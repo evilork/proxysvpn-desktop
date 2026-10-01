@@ -34,18 +34,20 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use windows::core::HSTRING;
-use windows::Win32::Foundation::NO_ERROR;
+use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
 use windows::Win32::NetworkManagement::IpHelper::{
-    ConvertInterfaceAliasToLuid, ConvertInterfaceLuidToIndex, FreeMibTable, GetBestRoute2,
-    GetIpForwardTable2, GetIpInterfaceEntry, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
-    MIB_IPINTERFACE_ROW,
+    ConvertInterfaceAliasToLuid, ConvertInterfaceIndexToLuid, ConvertInterfaceLuidToAlias,
+    ConvertInterfaceLuidToIndex, FreeMibTable, GetBestRoute2, GetExtendedTcpTable, GetIfEntry2,
+    GetIpForwardTable2, GetIpInterfaceEntry, MIB_IF_ROW2, MIB_IPFORWARD_ROW2,
+    MIB_IPFORWARD_TABLE2, MIB_IPINTERFACE_ROW, MIB_TCP6ROW_OWNER_PID, MIB_TCP6TABLE_OWNER_PID,
+    MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER,
 };
-use windows::Win32::NetworkManagement::Ndis::NET_LUID_LH;
-use windows::Win32::Networking::WinSock::{AF_INET, SOCKADDR_INET};
+use windows::Win32::NetworkManagement::Ndis::{IF_MAX_STRING_SIZE, NET_LUID_LH};
+use windows::Win32::Networking::WinSock::{ADDRESS_FAMILY, AF_INET, AF_INET6, SOCKADDR_INET};
 
 use crate::log;
 use crate::net::plan::{self, windows as p, SPLIT_HIGH, SPLIT_LOW};
-use crate::net::PhysicalRoute;
+use crate::net::{IfCounters, PhysicalRoute};
 
 pub use plan::windows::DEVICE;
 
@@ -209,17 +211,218 @@ fn physical_default(exclude_index: Option<u32>) -> Result<PhysicalRoute> {
     })
 }
 
+/// The TCP listener table of one address family, with owning pids, as raw
+/// bytes. `None` when the table cannot be read.
+///
+/// Held in `u32`s so that the 4-byte-aligned structs it holds can be read in
+/// place. The two-call dance: ask for the size, allocate, ask again; a
+/// listener that appears in between makes the second call ask for more, so
+/// it is retried a few times.
+fn tcp_listener_table(family: ADDRESS_FAMILY) -> Option<Vec<u32>> {
+    let mut size = 0u32;
+    let mut buf: Vec<u32> = Vec::new();
+    for _ in 0..4 {
+        let words = (size as usize).div_ceil(std::mem::size_of::<u32>());
+        buf.resize(words, 0);
+        let table = if buf.is_empty() {
+            None
+        } else {
+            Some(buf.as_mut_ptr().cast::<core::ffi::c_void>())
+        };
+        // SAFETY: `table` is either null (size query) or a buffer of at least
+        // `size` bytes that lives across the call; `size` is a live u32.
+        let err = unsafe {
+            GetExtendedTcpTable(
+                table,
+                &mut size,
+                false,
+                u32::from(family.0),
+                TCP_TABLE_OWNER_PID_LISTENER,
+                0,
+            )
+        };
+        if err == NO_ERROR.0 && !buf.is_empty() {
+            return Some(buf);
+        }
+        if err != ERROR_INSUFFICIENT_BUFFER.0 && err != NO_ERROR.0 {
+            return None;
+        }
+    }
+    None
+}
+
+/// Read `count` rows of `R` that follow the table's entry count, bounded by
+/// the buffer: a short or inconsistent table yields what fits, never more.
+fn table_rows<T, R: Copy>(buf: &[u32], rows_offset: usize) -> Vec<R> {
+    let bytes = std::mem::size_of_val(buf);
+    let Some(&count) = buf.first() else {
+        return Vec::new();
+    };
+    let row_size = std::mem::size_of::<R>();
+    let fits = bytes.saturating_sub(rows_offset) / row_size.max(1);
+    let count = (count as usize).min(fits);
+    let base = buf.as_ptr().cast::<u8>();
+    debug_assert!(rows_offset <= std::mem::size_of::<T>());
+    (0..count)
+        .map(|i| {
+            // SAFETY: `rows_offset + (i + 1) * row_size <= bytes` by `fits`,
+            // so the read stays inside `buf`; `read_unaligned` makes no
+            // assumption about the row's alignment.
+            unsafe { std::ptr::read_unaligned(base.add(rows_offset + i * row_size).cast::<R>()) }
+        })
+        .collect()
+}
+
+/// A port as the TCP table stores it: network byte order in the low 16 bits.
+fn table_port(raw: u32) -> u16 {
+    u16::from_be((raw & 0xFFFF) as u16)
+}
+
+/// Pids of the processes listening where tun2socks connects (127.0.0.1:`port`),
+/// from both the IPv4 and the IPv6 table.
+fn loopback_listener_pids(port: u16) -> Vec<u32> {
+    let mut pids = Vec::new();
+    if let Some(buf) = tcp_listener_table(AF_INET) {
+        let offset = std::mem::offset_of!(MIB_TCPTABLE_OWNER_PID, table);
+        for row in table_rows::<MIB_TCPTABLE_OWNER_PID, MIB_TCPROW_OWNER_PID>(&buf, offset) {
+            let addr = Ipv4Addr::from(row.dwLocalAddr.to_ne_bytes());
+            if table_port(row.dwLocalPort) == port && crate::net::takes_loopback_v4(addr.into()) {
+                pids.push(row.dwOwningPid);
+            }
+        }
+    }
+    if let Some(buf) = tcp_listener_table(AF_INET6) {
+        let offset = std::mem::offset_of!(MIB_TCP6TABLE_OWNER_PID, table);
+        for row in table_rows::<MIB_TCP6TABLE_OWNER_PID, MIB_TCP6ROW_OWNER_PID>(&buf, offset) {
+            let addr = std::net::Ipv6Addr::from(row.ucLocalAddr);
+            if table_port(row.dwLocalPort) == port && crate::net::takes_loopback_v4(addr.into()) {
+                pids.push(row.dwOwningPid);
+            }
+        }
+    }
+    pids
+}
+
+/// A listener on the SOCKS port that is not one of our engines
+/// (`process::is_engine`), named by pid for the log. Nobody listening is not
+/// a stranger: that is an engine restarting.
+pub fn socks_port_stranger(port: u16) -> Option<String> {
+    loopback_listener_pids(port)
+        .into_iter()
+        .find(|&pid| !crate::process::is_engine(pid))
+        .map(|pid| format!("pid {pid}"))
+}
+
+/// The interface alias ("Ethernet", "Wi-Fi") of an interface index.
+///
+/// The alias is the name Go's `net.InterfaceByName` matches on Windows, which
+/// is how xray's `sockopt.interface` finds the adapter its sockets must leave
+/// through. `None` when the index has gone away in the meantime.
+fn interface_alias(index: u32) -> Option<String> {
+    let mut luid = NET_LUID_LH::default();
+    // SAFETY: `luid` is a live out-parameter for the duration of the call.
+    if unsafe { ConvertInterfaceIndexToLuid(index, &mut luid) } != NO_ERROR {
+        return None;
+    }
+    // IF_MAX_STRING_SIZE characters plus the terminating NUL.
+    let mut buf = [0u16; IF_MAX_STRING_SIZE as usize + 1];
+    // SAFETY: `luid` was filled in above; the call writes at most `buf.len()`
+    // UTF-16 units into `buf`, including the terminator.
+    if unsafe { ConvertInterfaceLuidToAlias(&luid, &mut buf) } != NO_ERROR {
+        return None;
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    let alias = String::from_utf16(&buf[..len]).ok()?;
+    if alias.is_empty() {
+        None
+    } else {
+        Some(alias)
+    }
+}
+
 // ----------------------------------------------------------------- contract
 
+/// The physical default, with the adapter's alias filled in so the GUI can
+/// bind the engine's sockets to it (xray `sockopt.interface`).
 pub async fn physical_route() -> Result<PhysicalRoute> {
     let ours = device_index().ok();
-    physical_default(ours)
+    let mut route = physical_default(ours)?;
+    route.if_name = route.if_index.and_then(interface_alias);
+    Ok(route)
+}
+
+/// Byte counters of the tunnel adapter, `None` while it does not exist.
+pub fn device_counters() -> Option<IfCounters> {
+    let alias = HSTRING::from(DEVICE);
+    let mut row = MIB_IF_ROW2::default();
+    // SAFETY: both arguments are valid for the duration of the call; the
+    // second one is the LUID field of a live, zero-initialised row.
+    if unsafe { ConvertInterfaceAliasToLuid(&alias, &mut row.InterfaceLuid) } != NO_ERROR {
+        return None;
+    }
+    // SAFETY: `row` is a live MIB_IF_ROW2 whose key (InterfaceLuid) is set,
+    // which is what GetIfEntry2 requires; it only writes into that struct.
+    if unsafe { GetIfEntry2(&mut row) } != NO_ERROR {
+        return None;
+    }
+    Some(IfCounters {
+        rx_bytes: row.InOctets,
+        tx_bytes: row.OutOctets,
+    })
+}
+
+/// Does the machine have a way out at all? An IPv4 default route on an adapter
+/// that is not ours is the same answer Windows' own "no internet" check starts
+/// from, and it needs no packet.
+pub fn has_usable_link() -> bool {
+    physical_default(device_index().ok()).is_ok()
+}
+
+/// Is there a /32 route to `dest` in the table, on any adapter?
+///
+/// Asked before the pre-install delete below so that the delete runs only
+/// when there is something to delete. Run blind, it failed on every connect
+/// and location change — there normally is no leftover — and each failure
+/// put a netsh command line naming the node into the log.
+fn host_route_present(dest: Ipv4Addr) -> bool {
+    let mut table: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
+    // SAFETY: `table` is an out-pointer that IP Helper allocates; it is freed
+    // with FreeMibTable below on every path that reaches it.
+    let err = unsafe { GetIpForwardTable2(AF_INET, &mut table) };
+    if err != NO_ERROR {
+        // Unknown: let the caller delete as before rather than add over a
+        // leftover and fail.
+        return true;
+    }
+    let wanted = u32::from_ne_bytes(dest.octets());
+    let mut found = false;
+    // SAFETY: the table is non-null (NO_ERROR) and NumEntries describes the
+    // length of the trailing Table array; nothing escapes the loop by pointer.
+    unsafe {
+        let entries = (*table).NumEntries as usize;
+        let rows = (*table).Table.as_ptr();
+        for i in 0..entries {
+            let row = &*rows.add(i);
+            if row.DestinationPrefix.PrefixLength == 32
+                && row.DestinationPrefix.Prefix.si_family == AF_INET
+                && row.DestinationPrefix.Prefix.Ipv4.sin_addr.S_un.S_addr == wanted
+            {
+                found = true;
+                break;
+            }
+        }
+        FreeMibTable(table as *const _);
+    }
+    found
 }
 
 pub async fn add_host_route(dest: Ipv4Addr, via: &PhysicalRoute) -> Result<()> {
     // Drop a leftover from an earlier run before installing ours, otherwise
-    // netsh refuses the duplicate prefix.
-    p::host_route_delete(dest).run_best_effort().await;
+    // netsh refuses the duplicate prefix. Only when there is one: see
+    // `host_route_present`.
+    if host_route_present(dest) {
+        p::host_route_delete(dest).run_best_effort().await;
+    }
     p::host_route_add(dest, via)?
         .run()
         .await
@@ -311,8 +514,17 @@ pub async fn device_down() {
     log::info("net", "device teardown is implicit on Windows (Wintun)");
 }
 
+/// Nothing to sweep, and deliberately so.
+///
+/// `taskkill /IM tun2socks.exe` stopped every process of that name on the
+/// machine — another VPN client's included, the same mistake the macOS app
+/// made with `pkill -x` until 28.09.2026. Our own engines cannot outlive us
+/// here: each one joins a kill-on-close job object at spawn
+/// (`process::tie_to_app`), so a crash or an "End task" takes them along, and
+/// a normal stop kills them by handle. The step stays in `TEARDOWN_ORDER` so
+/// the order is the same on every platform.
 pub async fn kill_stray(stem: &str) {
-    p::kill_stray(&p::image_name(stem)).run_best_effort().await;
+    log::info("net", &format!("no {} sweep on Windows: engines die with the app", stem));
 }
 
 /// Synchronous sweep for the exit path, where no runtime is available.
@@ -334,9 +546,8 @@ fn sync_cleanup_inner(stale_hosts: &[Ipv4Addr]) {
     for host in stale_hosts {
         run(p::host_route_delete(*host));
     }
-    for stem in crate::net::ENGINE_STEMS {
-        run(p::kill_stray(&p::image_name(stem)));
-    }
+    // No engine sweep by image name: see `kill_stray`. An engine of ours that
+    // existed when the previous run died went with it (job object).
     log::info("net", "cleanup done");
 }
 
@@ -416,14 +627,18 @@ impl Privileged for Windows {
     /// *opposite*: it clears the resolver list on the tunnel adapter.
     ///
     /// Windows queries every adapter that has a resolver configured, in
-    /// parallel, and takes the first answer. Publishing a resolver on the
-    /// tunnel would therefore send a copy of each lookup into the tunnel, where
-    /// the generated xray config has no `dns` section and nothing answers; the
-    /// race would show up as names that resolve only sometimes. With no
-    /// resolver on the adapter, lookups go out over the physical link and their
-    /// packets are proxied like all other traffic under 0.0.0.0/1 — the same
-    /// behaviour as macOS. NRPT, which would scope DNS to the tunnel properly,
-    /// belongs with the `dns` work in the config builder.
+    /// parallel, and takes the first answer, so publishing a resolver on the
+    /// tunnel alone would not keep lookups inside it. With no resolver on the
+    /// adapter, lookups go to the network's resolver: through the tunnel when
+    /// that resolver is a public address (0.0.0.0/1 and 128.0.0.0/1 cover it),
+    /// past it when it sits on the local network, whose route is more
+    /// specific. The tunnel is IPv4 only, so IPv6 traffic passes it as well.
+    ///
+    /// This is NOT what 0.3.1 does on macOS, where sysdns.rs points the
+    /// system at `subscription::TUNNEL_DNS` and xray answers it through
+    /// dns-out. The window says so on Windows (src/platformCopy.ts) until the
+    /// same is done here: TUNNEL_DNS on the adapter plus an NRPT rule for "."
+    /// so Windows asks nothing else, and IPv6 carried or blocked.
     async fn configure_dns(_servers: &[IpAddr]) -> Result<()> {
         Ok(())
     }
@@ -432,6 +647,10 @@ impl Privileged for Windows {
 
     async fn kill_stray(stem: &str) {
         kill_stray(stem).await
+    }
+
+    async fn socks_port_stranger(port: u16) -> Option<String> {
+        socks_port_stranger(port)
     }
 
 }
@@ -451,6 +670,10 @@ pub async fn up(plan: &TunPlan) -> Result<()> {
 
 pub async fn ensure(plan: &TunPlan) -> Result<()> {
     local::ensure::<Windows>(plan).await
+}
+
+pub async fn retarget(old: Option<Ipv4Addr>, plan: &TunPlan) -> Result<()> {
+    local::retarget::<Windows>(old, plan).await
 }
 
 pub async fn down(server_ip: Option<Ipv4Addr>) -> Result<()> {

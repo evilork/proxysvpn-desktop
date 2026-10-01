@@ -43,6 +43,14 @@ pub async fn spawn(bin: &Path, args: &[String]) -> Result<()> {
     no_window(&mut cmd);
 
     let mut child = cmd.spawn().context("spawn tun2socks")?;
+    // Windows: a crash of the app takes the engine with it (see
+    // `process::tie_to_app`); a no-op on macOS.
+    if let Err(e) = crate::process::tie_to_app(&child) {
+        log::warn(
+            "tun2socks",
+            &format!("not tied to the app's lifetime: {:#}", e),
+        );
+    }
 
     // Both streams are drained on their own tasks: a full pipe would otherwise
     // block tun2socks the moment it gets chatty.

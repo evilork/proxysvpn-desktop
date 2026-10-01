@@ -4,8 +4,49 @@ dist/
 
 # Rust / Tauri
 src-tauri/target/
-src-tauri/gen/
 src-tauri/Cargo.lock
+
+# The iOS project under src-tauri/gen is almost entirely generated - by
+# `tauri ios init`, by xcodegen out of project.yml, and by the build. Almost:
+# the PacketTunnel Swift files and VpnBridge.swift are written by hand,
+# project.yml is what xcodegen generates FROM, and without them
+# `scripts/setup-ios.sh` has nothing to work with on a fresh clone. So the
+# folder is ignored and those are excepted, rather than the whole thing being
+# dropped. Git cannot re-include a file inside an excluded directory, hence
+# the '!dir/' + 'dir/*' pair in front of every excepted file.
+src-tauri/gen/*
+!src-tauri/gen/apple/
+src-tauri/gen/apple/*
+!src-tauri/gen/apple/project.yml
+!src-tauri/gen/apple/ExportOptions.plist
+!src-tauri/gen/apple/PacketTunnel/
+src-tauri/gen/apple/PacketTunnel/*
+!src-tauri/gen/apple/PacketTunnel/PacketTunnelProvider.swift
+!src-tauri/gen/apple/PacketTunnel/Ipv6OnlyNetwork.swift
+!src-tauri/gen/apple/PacketTunnel/PrivacyInfo.xcprivacy
+!src-tauri/gen/apple/proxysvpn-desktop_iOS/
+src-tauri/gen/apple/proxysvpn-desktop_iOS/*
+!src-tauri/gen/apple/proxysvpn-desktop_iOS/PrivacyInfo.xcprivacy
+!src-tauri/gen/apple/proxysvpn-desktop_iOS/en.lproj/
+src-tauri/gen/apple/proxysvpn-desktop_iOS/en.lproj/*
+!src-tauri/gen/apple/proxysvpn-desktop_iOS/en.lproj/InfoPlist.strings
+!src-tauri/gen/apple/proxysvpn-desktop_iOS/ru.lproj/
+src-tauri/gen/apple/proxysvpn-desktop_iOS/ru.lproj/*
+!src-tauri/gen/apple/proxysvpn-desktop_iOS/ru.lproj/InfoPlist.strings
+!src-tauri/gen/apple/Sources/
+src-tauri/gen/apple/Sources/*
+!src-tauri/gen/apple/Sources/proxysvpn-desktop/
+src-tauri/gen/apple/Sources/proxysvpn-desktop/*
+!src-tauri/gen/apple/Sources/proxysvpn-desktop/VpnBridge.swift
+!src-tauri/gen/apple/Sources/proxysvpn-desktop/MotionBridge.swift
+# `tauri ios init` would otherwise put its own logo here on a fresh clone
+# (it only writes files that are missing).
+!src-tauri/gen/apple/Assets.xcassets/
+src-tauri/gen/apple/Assets.xcassets/*
+!src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/
+
+# Local dev certificate for testing on a phone (scripts/dev-cert.sh)
+.certs/
 
 # IDE
 .vscode/

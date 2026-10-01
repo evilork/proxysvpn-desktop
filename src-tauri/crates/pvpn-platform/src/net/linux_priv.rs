@@ -393,6 +393,24 @@ pub fn ensure(tunnel: &Tunnel) -> Result<()> {
     Ok(())
 }
 
+/// Move the tunnel to another node: the new host route goes in before the old
+/// one comes out, so the engine never has to reach a node through the tunnel
+/// itself. Everything else — device, split defaults, DNS, tun2socks — stays.
+/// On failure the old route is untouched and the tunnel still points at it.
+pub fn retarget(tunnel: &mut Tunnel, new_ip: Ipv4Addr) -> Result<()> {
+    if tunnel.server_ip == new_ip {
+        return Ok(());
+    }
+    let route = physical_default()?;
+    add_host_route(new_ip, &route)?;
+    del_host_route(tunnel.server_ip);
+    tunnel.server_ip = new_ip;
+    write_hint(new_ip);
+    // The addresses are not logged: node addresses are not public information.
+    log("info", "host route moved to the new node");
+    Ok(())
+}
+
 pub fn engine_alive(tunnel: &mut Tunnel) -> bool {
     matches!(tunnel.child.try_wait(), Ok(None))
 }
