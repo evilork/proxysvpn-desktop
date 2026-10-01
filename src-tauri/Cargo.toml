@@ -61,6 +61,12 @@ pvpn-platform = { path = "crates/pvpn-platform" }
 # SCDynamicStore: the system resolver pointed into the tunnel (src/sysdns.rs).
 core-foundation = "0.10"
 
+[target.'cfg(windows)'.dependencies]
+# The system CSPRNG for the device id, the network-memory salt and the race
+# password (src/entropy.rs): Windows has no /dev/urandom. Already in the tree
+# through rustls/ring, so this adds no new code to the build.
+getrandom = "0.3"
+
 [features]
 # App Store / TestFlight builds. tauri.ios.conf.json turns it on for every iOS
 # build; the direct DMG builds without it. It tags requests to the service

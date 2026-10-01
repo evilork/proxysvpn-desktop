@@ -576,17 +576,7 @@ pub(crate) fn sanitize_extra_hosts(raw_hosts: &[String]) -> Vec<String> {
 // are private to it. The ~20 duplicated lines are the price of that.
 
 fn dir_candidates() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    #[cfg(target_os = "macos")]
-    out.push(PathBuf::from("/Library/Application Support/ProxysVPN"));
-    if let Ok(home) = std::env::var("HOME") {
-        let mut base = PathBuf::from(home).join("Library/Application Support");
-        if cfg!(target_os = "macos") {
-            base = base.join("com.proxysvpn.desktop");
-        }
-        out.push(base);
-    }
-    out
+    crate::appdirs::state_dirs()
 }
 
 fn write_private(path: &Path, bytes: &[u8]) -> bool {

@@ -1877,12 +1877,12 @@ pub const RU_DIRECT_DOMAINS: &[&str] = &[
 pub const TUNNEL_DNS: &str = "198.18.0.2";
 
 /// Networks routed around the tunnel when the service told us nothing.
-#[cfg(any(target_os = "macos", target_os = "ios", test))]
+#[cfg(any(desktop, target_os = "ios", test))]
 const SEED_DIRECT_IPS: &[&str] = &["geoip:private", "geoip:ru"];
 
 /// Build the xray runtime config for a VLESS node, using the routing rules the
 /// service last sent.
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 pub fn build_xray_config(cfg: &VlessConfig) -> Value {
     build_xray_config_with_routing_and_prefs(cfg, last_routing().as_ref(), &crate::tunnel_prefs::load())
 }
@@ -1893,7 +1893,7 @@ pub fn build_xray_config(cfg: &VlessConfig) -> Value {
 /// empty domain list is NOT the same thing: that is the service's global
 /// profile, chosen for someone abroad, and it means everything goes through
 /// the tunnel on purpose.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(desktop, test))]
 // Exercised by the tests; no caller in the app itself yet.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn build_xray_config_with_routing(cfg: &VlessConfig, routing: Option<&RoutingRules>) -> Value {
@@ -1901,7 +1901,7 @@ pub fn build_xray_config_with_routing(cfg: &VlessConfig, routing: Option<&Routin
 }
 
 /// То же, но с настройками туннеля. Всё проверяемое живёт здесь.
-#[cfg(any(target_os = "macos", target_os = "ios", test))]
+#[cfg(any(desktop, target_os = "ios", test))]
 pub fn build_xray_config_with_routing_and_prefs(
     cfg: &VlessConfig,
     routing: Option<&RoutingRules>,
@@ -1914,7 +1914,7 @@ pub fn build_xray_config_with_routing_and_prefs(
 /// helper outbounds. Split from the VLESS part so the Apple engine
 /// (xray_apple.rs) runs Hysteria2 under the very same rules. `block_quic`:
 /// rule 1 below, for a `proxy` that cannot carry UDP.
-#[cfg(any(target_os = "macos", target_os = "ios", test))]
+#[cfg(any(desktop, target_os = "ios", test))]
 pub(crate) fn build_xray_config_around(
     proxy: Value,
     block_quic: bool,
@@ -2107,7 +2107,7 @@ pub(crate) fn build_xray_config_around(
 
 /// The node itself: VLESS + REALITY, over TCP (Vision) or XHTTP, tagged
 /// `proxy`. Shared with the Apple engine (xray_apple.rs).
-#[cfg(any(target_os = "macos", target_os = "ios", test))]
+#[cfg(any(desktop, target_os = "ios", test))]
 pub(crate) fn vless_outbound(cfg: &VlessConfig, prefs: &crate::tunnel_prefs::TunnelPrefs) -> Value {
     use serde_json::json;
 
@@ -2176,7 +2176,7 @@ pub(crate) fn vless_outbound(cfg: &VlessConfig, prefs: &crate::tunnel_prefs::Tun
 /// Вынесено отдельной функцией, потому что дробление вставляет ЛИШНИЙ
 /// исходящий и меняет настройки сокета у основного: собирать это вперемешку с
 /// маршрутизацией в одном литерале стало нечитаемо.
-#[cfg(any(target_os = "macos", target_os = "ios", test))]
+#[cfg(any(desktop, target_os = "ios", test))]
 fn build_outbounds(proxy: Value, prefs: &crate::tunnel_prefs::TunnelPrefs) -> Vec<Value> {
     use serde_json::json;
 

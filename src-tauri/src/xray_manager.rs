@@ -40,7 +40,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
-use pvpn_platform::{process as pprocess, triple};
+use pvpn_platform::process as pprocess;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -77,17 +77,11 @@ pub fn new_state() -> SharedXrayState {
 /// Locates the xray binary and the directory holding geoip.dat/geosite.dat.
 ///
 /// Both come from the same ordered directory list as every other sidecar
-/// (`crate::tun::sidecar_dirs`), so a bundle, a dev checkout and a Windows or
+/// (`crate::sidecars::dirs`), so a bundle, a dev checkout and a Windows or
 /// Linux install all resolve with one rule instead of three hand-written lists.
 pub fn xray_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), AppError> {
-    let dirs = crate::tun::sidecar_dirs(app);
-    let bin = triple::find_sidecar("xray", &dirs).map_err(|e| {
-        // The list of paths is a diagnostic, not a sentence for a person:
-        // it goes to the log, and the user sees the translated phrase for
-        // ENGINE_START_FAILED with one button.
-        crate::logger::log("error", "xray", &format!("{e:#}"));
-        AppError::new(ErrorCode::EngineStartFailed)
-    })?;
+    let dirs = crate::sidecars::dirs(app);
+    let bin = crate::sidecars::find(app, "xray", "xray")?;
 
     let assets = dirs
         .iter()
@@ -156,18 +150,16 @@ pub const RACE_TAG: &str = "race-b";
 ///
 /// The inbound forwards straight to another country for as long as the race
 /// lasts, on a fixed loopback port any local process can reach — `noauth`
-/// there would let anything on the machine ride it. Read straight off
-/// `/dev/urandom`, the same source `netmem::salt` uses, rather than pulling in
-/// a `rand` dependency for two short-lived tokens.
+/// there would let anything on the machine ride it. Drawn from the system
+/// CSPRNG through `entropy.rs`, the same source `netmem::salt` uses, rather
+/// than pulling in a `rand` dependency for two short-lived tokens.
 pub fn race_credentials() -> Result<(String, String), AppError> {
     Ok((random_hex_token(8)?, random_hex_token(16)?))
 }
 
 fn random_hex_token(bytes: usize) -> Result<String, AppError> {
-    use std::io::Read;
     let mut buf = vec![0u8; bytes];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut buf))
+    crate::entropy::fill(&mut buf)
         .map_err(|_| config_bug("could not read randomness for the race inbound's password"))?;
     Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
@@ -571,7 +563,7 @@ mod tests {
         assert!(build_race_config(&hy2, &placeholder_vless(), "en0", ("u", "p")).is_err());
     }
 
-    /// The password comes from `/dev/urandom`: different every call, and
+    /// The password comes from the system CSPRNG: different every call, and
     /// hex-only so it always survives a JSON string and a SOCKS5 sub-negotiation.
     #[test]
     fn race_credentials_are_random_hex_and_differ_every_time() {

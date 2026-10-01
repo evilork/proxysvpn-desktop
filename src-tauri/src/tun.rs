@@ -31,8 +31,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use pvpn_platform::{net, paths, privilege, triple};
-use tauri::Manager;
+use pvpn_platform::{net, paths, privilege};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -101,45 +100,8 @@ impl PhysicalRoute {
 // Binary and privileges
 // ───────────────────────────────────────────────────────────────────────────
 
-/// Directories a sidecar may live in, most specific first: next to the
-/// executable (how a bundle ships it), then Tauri's resource directory, then
-/// the repo layout used by `cargo tauri dev`. xray, hysteria and tun2socks all
-/// resolve through this one list.
-pub fn sidecar_dirs(app: &tauri::AppHandle) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = Vec::new();
-
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            dirs.push(dir.to_path_buf());
-            // In a macOS bundle the sidecars sit in Contents/MacOS next to the
-            // executable, while Tauri's own resources land in Contents/Resources.
-            if let Some(contents) = dir.parent() {
-                dirs.push(contents.join("Resources"));
-                dirs.push(contents.join("Resources").join("_up_").join("binaries"));
-            }
-        }
-    }
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        dirs.push(resource_dir.clone());
-        dirs.push(resource_dir.join("binaries"));
-        dirs.push(resource_dir.join("_up_").join("binaries"));
-    }
-    // Debug builds only. This reads an environment variable at *runtime*, so in
-    // a shipped build anyone who can set CARGO_MANIFEST_DIR in our environment
-    // could add a directory to the sidecar search — and on macOS and Windows
-    // the process that execs from it is root/administrator.
-    #[cfg(debug_assertions)]
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        dirs.push(PathBuf::from(manifest_dir).join("binaries"));
-    }
-    dirs
-}
-
 pub fn tun2socks_path(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
-    triple::find_sidecar("tun2socks", &sidecar_dirs(app)).map_err(|e| {
-        crate::logger::log("error", "tun", &format!("{e:#}"));
-        AppError::new(ErrorCode::EngineStartFailed)
-    })
+    crate::sidecars::find(app, "tun2socks", "tun")
 }
 
 /// May this process reconfigure interfaces and routes? Root on macOS (the

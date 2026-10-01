@@ -54,6 +54,7 @@ pub fn fingerprint(
 /// Read the gateway's hardware address out of `arp -n <ip>` output:
 /// "? (192.168.1.1) at a4:2b:b0:12:34:56 on en0 ifscope [ethernet]".
 /// `(incomplete)` and anything unparseable give `None`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn parse_arp_mac(output: &str) -> Option<String> {
     let after = output.split(" at ").nth(1)?;
     let mac = after.split_whitespace().next()?;
@@ -124,17 +125,7 @@ impl NetworkMemory {
 // ── Storage: beside the subscription link, same two-location rule ─────────
 
 fn dir_candidates() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    #[cfg(target_os = "macos")]
-    out.push(PathBuf::from("/Library/Application Support/ProxysVPN"));
-    if let Ok(home) = std::env::var("HOME") {
-        let mut base = PathBuf::from(home).join("Library/Application Support");
-        if cfg!(target_os = "macos") {
-            base = base.join("com.proxysvpn.desktop");
-        }
-        out.push(base);
-    }
-    out
+    crate::appdirs::state_dirs()
 }
 
 fn write_private(path: &std::path::Path, bytes: &[u8]) -> bool {
@@ -164,8 +155,7 @@ pub fn salt() -> Option<Vec<u8>> {
         }
     }
     let mut fresh = [0u8; 16];
-    use std::io::Read;
-    std::fs::File::open("/dev/urandom").ok()?.read_exact(&mut fresh).ok()?;
+    crate::entropy::fill(&mut fresh).ok()?;
     for dir in dir_candidates() {
         if write_private(&dir.join("netmem-salt"), &fresh) {
             return Some(fresh.to_vec());
@@ -198,22 +188,57 @@ pub fn store(mem: &NetworkMemory) -> bool {
         .any(|dir| write_private(&dir.join("network-memory.json"), text.as_bytes()))
 }
 
-/// The current network's id, read before the tunnel comes up (macOS).
-#[cfg(target_os = "macos")]
+/// The current network's id, read before the tunnel comes up (desktop).
+#[cfg(desktop)]
 pub async fn current_network() -> Option<String> {
     let route = crate::tun::physical_default().await.ok()?;
     let mac = match route.gateway.as_deref() {
-        Some(gw) => {
-            let out = tokio::process::Command::new("/usr/sbin/arp")
-                .args(["-n", gw])
-                .output()
-                .await
-                .ok()?;
-            parse_arp_mac(&String::from_utf8_lossy(&out.stdout))
-        }
+        Some(gw) => gateway_mac(gw).await,
         None => None,
     };
     fingerprint(&salt()?, &route.interface, mac.as_deref(), route.gateway.as_deref())
+}
+
+/// The router's hardware address, from the ARP cache.
+#[cfg(target_os = "macos")]
+async fn gateway_mac(gateway: &str) -> Option<String> {
+    let out = tokio::process::Command::new("/usr/sbin/arp")
+        .args(["-n", gateway])
+        .output()
+        .await
+        .ok()?;
+    parse_arp_mac(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Linux keeps the ARP cache in a world-readable kernel table.
+#[cfg(target_os = "linux")]
+async fn gateway_mac(gateway: &str) -> Option<String> {
+    let text = std::fs::read_to_string("/proc/net/arp").ok()?;
+    parse_proc_arp_mac(&text, gateway)
+}
+
+/// Windows: no cheap unprivileged read without another API binding, so the
+/// gateway's address stands in for its hardware one — the same fallback a
+/// cellular link without a gateway MAC gets on macOS.
+#[cfg(target_os = "windows")]
+async fn gateway_mac(_gateway: &str) -> Option<String> {
+    None
+}
+
+/// The hardware address `gateway` has in `/proc/net/arp`: columns IP address,
+/// HW type, Flags, HW address, Mask, Device. An incomplete entry (flags 0x0,
+/// address all zeroes) is no address at all.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_proc_arp_mac(text: &str, gateway: &str) -> Option<String> {
+    text.lines().skip(1).find_map(|line| {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 6 || cols[0] != gateway {
+            return None;
+        }
+        let mac = cols[3];
+        let complete = cols[2] != "0x0" && mac != "00:00:00:00:00:00";
+        complete.then(|| mac.to_ascii_lowercase())
+    })
 }
 
 #[cfg(test)]
@@ -254,6 +279,22 @@ mod tests {
         assert_eq!(parse_arp_mac("? (192.168.1.1) at 0:1b:2c:3:4:5 on en0 [ethernet]").as_deref(), Some("0:1b:2c:3:4:5"));
         assert_eq!(parse_arp_mac("? (192.168.1.1) at (incomplete) on en0 ifscope [ethernet]"), None);
         assert_eq!(parse_arp_mac("192.168.1.1 (192.168.1.1) -- no entry"), None);
+    }
+
+    #[test]
+    fn the_linux_arp_table_is_read_and_incomplete_entries_are_not() {
+        let table = "\
+IP address       HW type     Flags       HW address            Mask     Device
+192.168.1.1      0x1         0x2         A4:2B:B0:12:34:56     *        enp0s3
+10.0.0.1         0x1         0x0         00:00:00:00:00:00     *        wlan0
+";
+        assert_eq!(
+            parse_proc_arp_mac(table, "192.168.1.1").as_deref(),
+            Some("a4:2b:b0:12:34:56")
+        );
+        assert_eq!(parse_proc_arp_mac(table, "10.0.0.1"), None);
+        assert_eq!(parse_proc_arp_mac(table, "172.16.0.1"), None);
+        assert_eq!(parse_proc_arp_mac("", "192.168.1.1"), None);
     }
 
     #[test]

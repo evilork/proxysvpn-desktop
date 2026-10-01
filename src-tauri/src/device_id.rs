@@ -39,6 +39,8 @@
 // move with the euid, so that is the primary home for the id; the per-user path
 // is only the fallback for a non-root run (`cargo tauri dev`), and it is
 // promoted to the shared path as soon as a privileged run can write there.
+// The list itself lives in appdirs.rs, shared with every other store; Windows
+// and Linux have one per-user location there and no second euid to reconcile.
 //
 // Module note: this file is declared from `subscription.rs` with `#[path]`
 // because `lib.rs` is owned elsewhere. Promote it to a plain `mod device_id;`
@@ -51,11 +53,6 @@ use std::sync::OnceLock;
 
 /// File name in every candidate directory.
 const FILE_NAME: &str = "device-id";
-
-/// Bundle identifier, mirrored from `tauri.conf.json`. Only used to name the
-/// per-user fallback directory, so a drift here costs a new id at worst — and
-/// the shared path, which is the one that matters, does not use it.
-const BUNDLE_ID: &str = "com.proxysvpn.desktop";
 
 /// Readable by everyone on purpose.
 ///
@@ -115,6 +112,10 @@ fn platform_name() -> &'static str {
         "macOS"
     } else if cfg!(target_os = "ios") {
         "iOS"
+    } else if cfg!(target_os = "windows") {
+        "Windows"
+    } else if cfg!(target_os = "linux") {
+        "Linux"
     } else {
         // Nothing else is shipped today; naming the target beats lying.
         std::env::consts::OS
@@ -127,25 +128,13 @@ fn platform_name() -> &'static str {
 /// per-user one and the euid the app happened to start with cannot change who
 /// we are.
 fn candidate_paths() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-
-    // macOS only: the sandbox on iOS makes every path per-app already, and
-    // there is no second euid to worry about there.
-    #[cfg(target_os = "macos")]
-    out.push(PathBuf::from("/Library/Application Support/ProxysVPN").join(FILE_NAME));
-
-    if let Ok(home) = std::env::var("HOME") {
-        let mut base = PathBuf::from(home).join("Library/Application Support");
-        // On iOS the container is already private to the app, so a second
-        // level named after the bundle would only add noise; on macOS the home
-        // directory is shared with everything else the person runs.
-        if cfg!(target_os = "macos") {
-            base = base.join(BUNDLE_ID);
-        }
-        out.push(base.join(FILE_NAME));
-    }
-
-    out
+    // The shared system folder first on macOS (two euids, one id), the app's
+    // own container on iOS, the per-user data folder on Windows and Linux —
+    // see appdirs.rs for why each.
+    crate::appdirs::state_dirs()
+        .into_iter()
+        .map(|dir| dir.join(FILE_NAME))
+        .collect()
 }
 
 fn load_or_create() -> Option<String> {
@@ -236,25 +225,12 @@ fn is_valid_id(s: &str) -> bool {
         && s.chars().any(|c| c.is_ascii_hexdigit())
 }
 
-/// A version 4 UUID from the system CSPRNG.
-///
-/// `/dev/urandom` rather than a crate: adding a dependency is a change to
-/// `Cargo.toml`, which this change does not own, and on macOS and iOS the
-/// device is always present and never blocks.
+/// A version 4 UUID from the system CSPRNG (`entropy.rs`: `/dev/urandom` on
+/// macOS, iOS and Linux, the system RNG on Windows).
 fn new_uuid_v4() -> Option<String> {
     let mut bytes = [0u8; 16];
-    let mut file = fs::File::open("/dev/urandom").ok()?;
-    // `read` may return fewer bytes than asked for; 16 from urandom in one go
-    // is the normal case, but a short read must not silently produce zeros.
-    let mut filled = 0usize;
-    while filled < bytes.len() {
-        match file.read(&mut bytes[filled..]) {
-            Ok(0) => return None,
-            Ok(n) => filled += n,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => return None,
-        }
-    }
+    // A short read must not silently produce zeros: `fill` fails instead.
+    crate::entropy::fill(&mut bytes).ok()?;
 
     // RFC 4122: version 4 in the high nibble of byte 6, variant 10 in byte 8.
     bytes[6] = (bytes[6] & 0x0f) | 0x40;

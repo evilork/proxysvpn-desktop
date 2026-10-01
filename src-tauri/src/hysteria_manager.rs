@@ -18,7 +18,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use pvpn_platform::{paths, process as pprocess, triple};
+use pvpn_platform::{paths, process as pprocess};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -56,15 +56,10 @@ pub fn new_state() -> SharedHysteriaState {
 }
 
 /// The hysteria sidecar, found by the same ordered directory list as every
-/// other sidecar (`crate::tun::sidecar_dirs`) and named by the platform
-/// layer's one rule (`hysteria`, `hysteria-<triple>`, `.exe` on Windows).
+/// other sidecar (`crate::sidecars`) and named by the platform layer's one
+/// rule (`hysteria`, `hysteria-<triple>`, `.exe` on Windows).
 pub fn hysteria_path(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
-    triple::find_sidecar("hysteria", &crate::tun::sidecar_dirs(app)).map_err(|e| {
-        // The list of paths is a diagnostic for the log; the person sees the
-        // translated phrase for ENGINE_START_FAILED.
-        crate::logger::log("error", "hysteria", &format!("{e:#}"));
-        AppError::new(ErrorCode::EngineStartFailed)
-    })
+    crate::sidecars::find(app, "hysteria", "hysteria")
 }
 
 /// Build the hysteria client YAML config.

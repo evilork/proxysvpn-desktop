@@ -22,6 +22,9 @@
 //           (root; see tun.rs). Paths, sidecar lookup, elevation and the
 //           privileged-file rules come from the pvpn-platform crate, which
 //           also carries the Windows and Linux backends.
+//   Windows, Linux — the same engines and the same core; the tunnel itself
+//           goes through the platform layer (tun_platform.rs): elevated
+//           in-process on Windows, a pkexec root helper on Linux.
 //   iOS   — the tunnel lives in a Network Extension driven through
 //           NETunnelProviderManager (ios_vpn.rs).
 // The command set and the event set are IDENTICAL on both, because the same
@@ -32,7 +35,9 @@
 // block, and the repair ladder once deadlocked on exactly that (see `climb`).
 #![warn(clippy::significant_drop_in_scrutinee)]
 
+mod appdirs;
 mod consent;
+mod entropy;
 mod errors;
 mod events;
 mod logger;
@@ -47,15 +52,30 @@ mod subscription;
 mod tunnel_prefs;
 mod notify_prefs;
 
-#[cfg(target_os = "macos")]
+// The engines and the tunnel, on every desktop. macOS keeps its own tunnel
+// (tun.rs: routes, utun, the system resolver); Windows and Linux drive theirs
+// through the platform layer (tun_platform.rs), imported under the same name so
+// the core cannot tell which one it is talking to. The same goes for the
+// engine pid file: a record on macOS and Linux, a job object on Windows.
+#[cfg(desktop)]
 mod hysteria_manager;
-#[cfg(target_os = "macos")]
+#[cfg(all(desktop, unix))]
 mod pidfile;
+#[cfg(target_os = "windows")]
+mod pidfile_windows;
+#[cfg(target_os = "windows")]
+use pidfile_windows as pidfile;
+#[cfg(desktop)]
+mod sidecars;
 #[cfg(target_os = "macos")]
 mod sysdns;
 #[cfg(target_os = "macos")]
 mod tun;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod tun_platform;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use tun_platform as tun;
+#[cfg(desktop)]
 mod xray_manager;
 
 #[cfg(target_os = "ios")]
@@ -81,11 +101,13 @@ use probe::{ProbeGate, ProbeReason, ProbeVerdict, TunnelMeter};
 use subscription::{fetch_subscription, ServerConfig};
 use tunnel_prefs::TransportPref;
 
+#[cfg(desktop)]
+use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 #[cfg(target_os = "macos")]
-use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
-#[cfg(target_os = "macos")]
+use tauri::menu::Submenu;
+#[cfg(desktop)]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 use tauri::WindowEvent;
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -98,7 +120,7 @@ const SUPERVISOR_TICK: Duration = Duration::from_secs(2);
 
 /// How often the routing table is inspected. Slower than the tick because
 /// each pass costs two or three processes.
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 const ROUTE_CHECK_EVERY: Duration = Duration::from_secs(5);
 
 /// Pause before the first probe of a fresh tunnel (design M1). Long enough for
@@ -677,11 +699,11 @@ struct Core {
     /// умолчанию до первого вызова - то же, что и умолчание окна.
     ui_lang_en: std::sync::atomic::AtomicBool,
 
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     xray: xray_manager::SharedXrayState,
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     hysteria: hysteria_manager::SharedHysteriaState,
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     tun: tun::SharedTunState,
 }
 
@@ -708,11 +730,11 @@ impl Core {
             operation: Mutex::new(()),
             window_focused: std::sync::atomic::AtomicBool::new(true),
             ui_lang_en: std::sync::atomic::AtomicBool::new(false),
-            #[cfg(target_os = "macos")]
+            #[cfg(desktop)]
             xray: xray_manager::new_state(),
-            #[cfg(target_os = "macos")]
+            #[cfg(desktop)]
             hysteria: hysteria_manager::new_state(),
-            #[cfg(target_os = "macos")]
+            #[cfg(desktop)]
             tun: tun::new_state(),
         })
     }
@@ -774,9 +796,9 @@ impl Core {
             (s.state_payload(), drop_notice, restore_notice)
         };
         let _ = self.app.emit(EV_STATE, payload);
-        #[cfg(target_os = "macos")]
+        #[cfg(desktop)]
         self.refresh_tray(phase).await;
-        #[cfg(target_os = "macos")]
+        #[cfg(desktop)]
         {
             if drop_notice {
                 self.notify_protection(false).await;
@@ -855,17 +877,10 @@ impl Core {
 // ───────────────────────────────────────────────────────────────────────────
 
 fn link_paths() -> Vec<std::path::PathBuf> {
-    let mut out = Vec::new();
-    #[cfg(target_os = "macos")]
-    out.push(std::path::PathBuf::from("/Library/Application Support/ProxysVPN").join("sub-link"));
-    if let Ok(home) = std::env::var("HOME") {
-        let mut base = std::path::PathBuf::from(home).join("Library/Application Support");
-        if cfg!(target_os = "macos") {
-            base = base.join("com.proxysvpn.desktop");
-        }
-        out.push(base.join("sub-link"));
-    }
-    out
+    appdirs::state_dirs()
+        .into_iter()
+        .map(|dir| dir.join("sub-link"))
+        .collect()
 }
 
 fn load_link() -> Option<String> {
@@ -1339,7 +1354,7 @@ impl Session {
 // Engines — the one place the platforms differ
 // ───────────────────────────────────────────────────────────────────────────
 
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 impl Core {
     /// Bring up the chain for `server`, leaving tun2socks alone if it already
     /// runs. That last part is the soft location change: the device, its
@@ -1576,9 +1591,9 @@ impl Core {
 
         self.set_step(VpnStep::PickingServer).await;
         // Сеть узнаём ДО подъёма туннеля, по роутеру (netmem.rs).
-        #[cfg(target_os = "macos")]
+        #[cfg(desktop)]
         let network = netmem::current_network().await;
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(desktop))]
         let network: Option<String> = None;
         let index = {
             let mut s = self.session.lock().await;
@@ -1614,19 +1629,19 @@ impl Core {
             // macOS — on iOS `partner` is always `None` below, so this whole
             // decision is gated the same way rather than referencing that
             // module where it does not exist.
-            #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
-            let partner = if cfg!(target_os = "macos") && !pinned && !known {
+            #[cfg_attr(not(desktop), allow(unused_variables))]
+            let partner = if cfg!(desktop) && !pinned && !known {
                 s.race_partner(index)
             } else {
                 None
             };
             s.pending_race = None;
             s.race_credentials = None;
-            #[cfg(target_os = "macos")]
+            #[cfg(desktop)]
             if let Some(partner_index) = partner {
                 // The race inbound needs its own password (defence in
                 // depth): it forwards straight to another country for as
-                // long as the race lasts. Failing to mint one — /dev/urandom
+                // long as the race lasts. Failing to mint one — the system RNG
                 // unreadable — cancels the race rather than running it
                 // unauthenticated.
                 match xray_manager::race_credentials() {
@@ -1663,7 +1678,7 @@ impl Core {
         // `race_credentials` only matters on macOS, where a race can actually
         // be pending; on iOS `pending_race` is never set (see above), so it
         // stays `None` and would otherwise be an unused-variable warning.
-        #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+        #[cfg_attr(not(desktop), allow(unused_variables))]
         let (race_partner, race_credentials) = {
             let s = self.session.lock().await;
             (
@@ -1727,7 +1742,7 @@ impl Core {
             tokio::time::sleep(WARM_SECOND_RACER_AFTER).await;
             ("туннель, вторая попытка", probe::warm_through_tunnel(warm_host, warm_ip, warm_port, WARM_BUDGET).await.is_some())
         });
-        #[cfg(target_os = "macos")]
+        #[cfg(desktop)]
         racers.spawn(async move {
             ("движок", probe::warm_through_socks(tun::SOCKS_PORT, warm_host, warm_ip, warm_port, WARM_BUDGET, None).await)
         });
@@ -1735,9 +1750,9 @@ impl Core {
         // answers first, the session moves to it below. Authenticated: this
         // inbound forwards straight to another country while the race lasts,
         // so the warm-up has to prove it is us before xray forwards anything.
-        #[cfg(target_os = "macos")]
+        #[cfg(desktop)]
         let racing = race_partner.is_some() && race_credentials.is_some();
-        #[cfg(target_os = "macos")]
+        #[cfg(desktop)]
         if let Some(creds) = &race_credentials {
             if race_partner.is_some() {
                 let auth = Some((creds.user.clone(), creds.pass.clone()));
@@ -1757,7 +1772,7 @@ impl Core {
                 });
             }
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(desktop))]
         let racing = false;
         let mut winner: Option<&'static str> = None;
         while let Some(done) = racers.join_next().await {
@@ -1800,7 +1815,7 @@ impl Core {
 
         // Резолвер через узел - в фоне: первое имя, которое спросит человек,
         // не должно платить за холодный DoH, но и щит этого ждать не должен.
-        #[cfg(target_os = "macos")]
+        #[cfg(desktop)]
         if warm_ip.is_some() {
             tauri::async_runtime::spawn(async move {
                 let started = Instant::now();
@@ -2250,7 +2265,7 @@ impl Core {
     }
 
     /// Platform correction for a verdict built from interface counters.
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     async fn interpret(&self, verdict: ProbeVerdict) -> ProbeVerdict {
         verdict
     }
@@ -2286,7 +2301,7 @@ impl Core {
 
     async fn supervise(self: Arc<Self>, generation: u64) {
         let mut last_tick = Instant::now();
-        #[cfg(target_os = "macos")]
+        #[cfg(desktop)]
         let mut last_routes = Instant::now();
         let mut had_link = probe::has_usable_link();
         loop {
@@ -2354,7 +2369,7 @@ impl Core {
             // Route maintenance spawns two or three processes, so it keeps
             // the five-second cadence the old watchdog ran at rather than the
             // two-second one the free passive counters can afford.
-            #[cfg(target_os = "macos")]
+            #[cfg(desktop)]
             if last_routes.elapsed() >= ROUTE_CHECK_EVERY {
                 last_routes = Instant::now();
                 if self.mend_routes(generation).await {
@@ -2481,7 +2496,7 @@ impl Core {
     /// machine changed how it reaches the internet.
     ///
     /// Returns true when it did something that makes this tick's probe moot.
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     async fn mend_routes(self: &Arc<Self>, generation: u64) -> bool {
         let repair = tun::ensure_routes(&self.tun).await;
         if repair.is_clean() {
@@ -2545,7 +2560,7 @@ impl Core {
             .await;
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     async fn restart_dead(self: &Arc<Self>, generation: u64) -> Result<(), AppError> {
         let dead = self.dead_engine().await;
         match dead {
@@ -2775,7 +2790,7 @@ impl Core {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     async fn tunnel_is_up(&self) -> bool {
         tun::is_running(&self.tun).await
     }
@@ -3350,6 +3365,10 @@ async fn app_info(core: tauri::State<'_, Arc<Core>>) -> Cmd<AppInfo> {
             "macos"
         } else if cfg!(target_os = "ios") {
             "ios"
+        } else if cfg!(target_os = "windows") {
+            "windows"
+        } else if cfg!(target_os = "linux") {
+            "linux"
         } else {
             "other"
         },
@@ -3984,7 +4003,25 @@ fn device_name() -> String {
         }
         "Mac".to_string()
     }
-    #[cfg(not(target_os = "macos"))]
+    // The name the person gave the machine; never the user name, which the
+    // same environment also carries.
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var("COMPUTERNAME")
+            .ok()
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "Windows PC".to_string())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/sys/kernel/hostname")
+            .ok()
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "Linux".to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         "iPhone".to_string()
     }
@@ -4002,14 +4039,16 @@ fn device_name() -> String {
 /// every process on the Mac with those names, so launching or quitting
 /// ProxysVPN also killed another VPN client's engine. Every engine is spawned
 /// through `pidfile::Engine`, which is why there is no list of names here to
-/// keep in step any more.
-#[cfg(target_os = "macos")]
+/// keep in step any more. Linux reads the same file from the user's data
+/// folder; on Windows nothing of ours can outlive us (pidfile_windows.rs) and
+/// only the routes are left to clean.
+#[cfg(desktop)]
 fn sync_cleanup() {
     pidfile::reap_all();
     tun::purge_stale_routes();
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(desktop, unix))]
 fn install_signal_handlers() {
     tauri::async_runtime::spawn(async {
         use tokio::signal::unix::{signal, SignalKind};
@@ -4033,6 +4072,31 @@ fn install_signal_handlers() {
     });
 }
 
+/// Leaves the routing table clean when the process is asked to die outside the
+/// normal UI path. Windows has no signals: Ctrl+C is the only equivalent a GUI
+/// process can observe, and a logoff or shutdown ends us without a usable
+/// notification. That case is covered elsewhere — every Windows route is
+/// written with `store=active`, so it does not survive a reboot, the Wintun
+/// adapter dies with tun2socks and takes its routes along, the engines die with
+/// the app (job object), and the host route left behind by a logoff is cleared
+/// from the route hint on the next start.
+#[cfg(target_os = "windows")]
+fn install_signal_handlers() {
+    tauri::async_runtime::spawn(async {
+        if tokio::signal::ctrl_c().await.is_err() {
+            return;
+        }
+        sync_cleanup();
+        std::process::exit(0);
+    });
+}
+
+/// macOS application menu.
+///
+/// Only macOS: `hide_others` / `show_all` are Cocoa concepts, and on Windows
+/// and Linux `set_menu` would draw a menu bar inside the 480x720 fixed window,
+/// which is not part of the design. Copy and paste still work there through
+/// the WebView's own accelerators.
 #[cfg(target_os = "macos")]
 fn build_menu(handle: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let app_submenu = Submenu::with_items(
@@ -4083,24 +4147,24 @@ fn build_menu(handle: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 // window. Everything the WINDOW says still arrives as a code. When the tray
 // gains more languages it will be by asking the window for these five labels,
 // not by growing a dictionary here.
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 const TRAY_STATE_OFF: &str = "Защита выключена";
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 const TRAY_STATE_WORKING: &str = "Подключаем…";
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 const TRAY_STATE_ON: &str = "Защищено";
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 const TRAY_STATE_UNCONFIRMED: &str = "Подтвердить не удалось";
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 const TRAY_STATE_FAILED: &str = "Не проходит";
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 const TRAY_SHOW: &str = "Открыть окно";
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 const TRAY_DISCONNECT: &str = "Выключить защиту";
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 const TRAY_QUIT: &str = "Выйти";
 
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 fn tray_state_text(phase: VpnPhase) -> &'static str {
     match phase {
         VpnPhase::Off => TRAY_STATE_OFF,
@@ -4111,7 +4175,7 @@ fn tray_state_text(phase: VpnPhase) -> &'static str {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 impl Core {
     /// First line of the tray menu is always the state (design [13]).
     async fn refresh_tray(&self, phase: VpnPhase) {
@@ -4167,12 +4231,12 @@ impl Core {
 }
 
 /// The tray's state line, so it can be rewritten as the phase changes.
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 struct TrayItems {
     state: Mutex<Option<MenuItem<tauri::Wry>>>,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(desktop)]
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let state_item = MenuItem::with_id(app, "state", TRAY_STATE_OFF, false, None::<&str>)?;
     let show_item = MenuItem::with_id(app, "show", TRAY_SHOW, true, None::<&str>)?;
@@ -4263,7 +4327,7 @@ pub fn run() {
     #[cfg(desktop)]
     pvpn_platform::log::set_sink(logger::log);
 
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     sync_cleanup();
 
     // ОДИН setup на всё приложение. Их было два, и это молча ломало macOS
@@ -4296,19 +4360,33 @@ pub fn run() {
             {
                 let menu = build_menu(app.handle())?;
                 app.set_menu(menu)?;
-                build_tray(app.handle())?;
-                install_signal_handlers();
             }
+            #[cfg(target_os = "macos")]
+            build_tray(app.handle())?;
+            // Windows and Linux: a missing tray is not a reason to refuse to
+            // start. A Linux desktop without an AppIndicator host has none to
+            // offer, and the window then closes for real instead of hiding
+            // (see CloseRequested below).
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            if let Err(err) = build_tray(app.handle()) {
+                logger::log("error", "app", &format!("no tray icon: {err}"));
+            }
+            #[cfg(desktop)]
+            install_signal_handlers();
 
             Ok(())
         });
 
-    #[cfg(target_os = "macos")]
+    #[cfg(desktop)]
     let builder = builder
         .on_window_event(|window, event| match event {
-            WindowEvent::CloseRequested { api, .. } => {
-                // Red-X / Cmd+W hides to the tray; the VPN keeps running.
-                // Tray → Выйти, or Cmd+Q, stops everything.
+            // Red-X / Cmd+W hides to the tray; the VPN keeps running.
+            // Tray → Выйти, or Cmd+Q, stops everything. Without a tray (a
+            // Linux desktop with no AppIndicator host) a hidden window could
+            // never be brought back, so it closes instead.
+            WindowEvent::CloseRequested { api, .. }
+                if window.app_handle().tray_by_id("main-tray").is_some() =>
+            {
                 api.prevent_close();
                 let _ = window.hide();
             }
@@ -4366,7 +4444,7 @@ pub fn run() {
 
     app.run(|_handle, event| {
         if let RunEvent::Exit = event {
-            #[cfg(target_os = "macos")]
+            #[cfg(desktop)]
             sync_cleanup();
         }
     });

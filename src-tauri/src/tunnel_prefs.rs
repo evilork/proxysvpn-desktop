@@ -331,19 +331,10 @@ pub fn parse_custom_rules(direct_raw: &str, proxy_raw: &str) -> CustomRules {
 }
 
 fn paths() -> Vec<std::path::PathBuf> {
-    let mut out = Vec::new();
-    #[cfg(target_os = "macos")]
-    out.push(
-        std::path::PathBuf::from("/Library/Application Support/ProxysVPN").join("tunnel-prefs.json"),
-    );
-    if let Ok(home) = std::env::var("HOME") {
-        let mut base = std::path::PathBuf::from(home).join("Library/Application Support");
-        if cfg!(target_os = "macos") {
-            base = base.join("com.proxysvpn.desktop");
-        }
-        out.push(base.join("tunnel-prefs.json"));
-    }
-    out
+    crate::appdirs::state_dirs()
+        .into_iter()
+        .map(|dir| dir.join("tunnel-prefs.json"))
+        .collect()
 }
 
 /// Прочитать настройки. Любая беда - значения по умолчанию.

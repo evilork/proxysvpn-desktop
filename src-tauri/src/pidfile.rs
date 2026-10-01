@@ -27,6 +27,14 @@
 // is only believed when it is a plain file owned by our own effective user and
 // writable by nobody else: a root process that kills whatever a user-writable
 // file names would be a gift to anyone else on the Mac.
+//
+// ── Linux ─────────────────────────────────────────────────────────────────
+// The same file and the same rules, in the per-user data folder (appdirs.rs):
+// the GUI is unprivileged there and spawns xray and hysteria as the user, and
+// the kernel names a process's image through /proc/<pid>/exe instead of
+// proc_pidpath. tun2socks never goes through this file on Linux: it belongs to
+// the root helper, which owns and stops it (pvpn-platform, net/linux_priv.rs).
+// Windows has its own, simpler answer (pidfile_windows.rs).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
@@ -154,19 +162,11 @@ fn lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Same two locations as `netmem.rs`, in the same order: the launcher starts
-/// us as root with two different `HOME`s depending on the path it takes, and
-/// the system folder is the one both of them see.
+/// Same locations as `netmem.rs`, in the same order (appdirs.rs): on macOS
+/// the launcher starts us as root with two different `HOME`s depending on the
+/// path it takes, and the system folder is the one both of them see.
 fn dir_candidates() -> Vec<PathBuf> {
-    let mut out = vec![PathBuf::from("/Library/Application Support/ProxysVPN")];
-    if let Ok(home) = std::env::var("HOME") {
-        out.push(
-            PathBuf::from(home)
-                .join("Library/Application Support")
-                .join("com.proxysvpn.desktop"),
-        );
-    }
-    out
+    crate::appdirs::state_dirs()
 }
 
 /// `engine.pids`, wherever it lives. Tests point it at a temp folder.
@@ -453,6 +453,7 @@ fn still_ours(entry: &Entry, own_dir: &Path) -> bool {
 
 /// The executable a live process runs, as the kernel reports it; `None` for
 /// a pid that does not exist, a zombie, or one we may not inspect.
+#[cfg(target_os = "macos")]
 fn exe_of(pid: u32) -> Option<PathBuf> {
     use std::os::unix::ffi::OsStringExt;
 
@@ -466,6 +467,16 @@ fn exe_of(pid: u32) -> Option<PathBuf> {
     let written = usize::try_from(written).ok().filter(|n| *n > 0)?;
     buf.truncate(written);
     Some(PathBuf::from(std::ffi::OsString::from_vec(buf)))
+}
+
+/// Linux: the kernel's own link to the image. A zombie has none, and a process
+/// of another user cannot be read — both answer `None`, which `judge` reads as
+/// "gone", exactly like proc_pidpath on macOS. Every engine this file records
+/// on Linux belongs to the GUI's own user.
+#[cfg(target_os = "linux")]
+fn exe_of(pid: u32) -> Option<PathBuf> {
+    let raw = signal_pid(pid)?;
+    std::fs::read_link(format!("/proc/{raw}/exe")).ok()
 }
 
 enum Sent {

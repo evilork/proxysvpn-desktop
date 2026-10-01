@@ -115,9 +115,13 @@ pub const ATTEMPT_TIMEOUT: Duration = Duration::from_millis(2500);
 /// already proof it is not our answer.
 const MAX_BODY_BYTES: usize = 8 * 1024;
 
-/// The tunnel device. Must stay equal to `tun::TUN_NAME` (tun.rs:13); it is
-/// duplicated rather than imported because this module also builds for iOS,
-/// where tun.rs does not exist.
+/// The tunnel device: the platform layer's name for it on every desktop
+/// (`utun225` on macOS, `ProxysVPN` on Windows, `proxysvpn0` on Linux), which
+/// is also `tun::TUN_NAME`. iOS has neither tun.rs nor the platform layer, and
+/// keeps the macOS name it always had.
+#[cfg(desktop)]
+pub const TUN_IFACE: &str = pvpn_platform::net::DEVICE;
+#[cfg(not(desktop))]
 pub const TUN_IFACE: &str = "utun225";
 
 /// How much traffic counts as "something actually left / came back".
@@ -551,6 +555,8 @@ pub fn has_usable_link() -> bool {
 ///
 /// 169.254/16 is what macOS assigns when DHCP never answered: the interface is
 /// up, the network is not. Loopback proves nothing either.
+// Read by the Apple interface walk (`sys` below) and by the tests.
+#[cfg_attr(not(any(target_vendor = "apple", test)), allow(dead_code))]
 pub fn is_usable_ipv4(o: [u8; 4]) -> bool {
     !(o[0] == 127 || (o[0] == 169 && o[1] == 254) || o == [0, 0, 0, 0])
 }
@@ -558,6 +564,8 @@ pub fn is_usable_ipv4(o: [u8; 4]) -> bool {
 /// An IPv6 address that means the same.
 ///
 /// fe80::/10 is link-local (no router), ::1 is loopback, :: is unspecified.
+// Read by the Apple interface walk (`sys` below) and by the tests.
+#[cfg_attr(not(any(target_vendor = "apple", test)), allow(dead_code))]
 pub fn is_usable_ipv6(o: [u8; 16]) -> bool {
     if o == [0u8; 16] {
         return false;
@@ -571,6 +579,8 @@ pub fn is_usable_ipv6(o: [u8; 16]) -> bool {
 /// Interfaces that carry tunnels rather than connect us to the world. An
 /// answer built on these would be circular: the tunnel cannot prove the
 /// internet exists.
+// Read by the Apple interface walk (`sys` below) and by the tests.
+#[cfg_attr(not(any(target_vendor = "apple", test)), allow(dead_code))]
 fn is_tunnel_iface(name: &str) -> bool {
     name.starts_with("utun")
         || name.starts_with("ipsec")
@@ -1413,13 +1423,52 @@ mod sys {
     }
 }
 
-#[cfg(not(target_vendor = "apple"))]
+/// Windows and Linux: the platform layer reads the counters (GetIfEntry2,
+/// /sys/class/net) and the link state (the routing table) for us.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 mod sys {
     use super::RawCounters;
 
-    /// The app ships for macOS and iOS only. This exists so the module still
-    /// compiles elsewhere (CI, a Linux dev box) rather than failing to build
-    /// the tests that matter.
+    /// Counters of the tunnel device; any other interface is not asked about
+    /// on these platforms and answers `None`.
+    pub fn read_counters(iface: &str) -> Option<RawCounters> {
+        if iface != pvpn_platform::net::DEVICE {
+            return None;
+        }
+        let counters = pvpn_platform::net::device_counters()?;
+        Some(RawCounters {
+            rx_bytes: low_32(counters.rx_bytes),
+            tx_bytes: low_32(counters.tx_bytes),
+        })
+    }
+
+    /// The low 32 bits, on purpose. `TunnelMeter` folds wrapping 32-bit
+    /// samples into a 64-bit total (the macOS kernel only has 32-bit ones), and
+    /// the low half of a 64-bit counter wraps exactly like a 32-bit one does.
+    fn low_32(value: u64) -> u32 {
+        (value & u64::from(u32::MAX)) as u32
+    }
+
+    pub fn has_usable_link() -> bool {
+        pvpn_platform::net::has_usable_link()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn the_low_half_wraps_like_a_32_bit_counter() {
+            assert_eq!(super::low_32(5), 5);
+            assert_eq!(super::low_32(u64::from(u32::MAX) + 6), 5);
+        }
+    }
+}
+
+#[cfg(not(any(target_vendor = "apple", target_os = "windows", target_os = "linux")))]
+mod sys {
+    use super::RawCounters;
+
+    /// No shipped platform lands here. This exists so the module still
+    /// compiles elsewhere rather than failing to build the tests that matter.
     pub fn read_counters(_iface: &str) -> Option<RawCounters> {
         None
     }

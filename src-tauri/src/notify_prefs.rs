@@ -28,17 +28,10 @@ impl Default for NotifyPrefs {
 }
 
 fn paths() -> Vec<std::path::PathBuf> {
-    let mut out = Vec::new();
-    #[cfg(target_os = "macos")]
-    out.push(std::path::PathBuf::from("/Library/Application Support/ProxysVPN").join("notify-prefs.json"));
-    if let Ok(home) = std::env::var("HOME") {
-        let mut base = std::path::PathBuf::from(home).join("Library/Application Support");
-        if cfg!(target_os = "macos") {
-            base = base.join("com.proxysvpn.desktop");
-        }
-        out.push(base.join("notify-prefs.json"));
-    }
-    out
+    crate::appdirs::state_dirs()
+        .into_iter()
+        .map(|dir| dir.join("notify-prefs.json"))
+        .collect()
 }
 
 /// Прочитать настройку. Любая беда - значение по умолчанию (включено): то же
