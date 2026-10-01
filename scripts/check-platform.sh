@@ -15,14 +15,19 @@
 # What this does NOT prove: that the full app links, that `netsh` and `ip`
 # accept every argument spelling, that tun2socks really names its adapter the
 # way we expect, or that pkexec behaves in a live desktop session. Only CI on
-# windows-latest / ubuntu-22.04 and a run on real hardware can.
+# windows-latest / windows-11-arm / ubuntu-22.04 and a run on real hardware
+# can.
 #
 # Usage: scripts/check-platform.sh
 
 set -euo pipefail
 cd "$(dirname "$0")/../src-tauri"
 
-TARGETS=(x86_64-pc-windows-msvc x86_64-unknown-linux-gnu)
+# aarch64-pc-windows-msvc since the arm64 installer (02.10.2026). It is the
+# same code, but the windows crate picks some definitions per CPU, so the x64
+# check does not vouch for it; here it takes seconds, on the Arm runner a full
+# build.
+TARGETS=(x86_64-pc-windows-msvc aarch64-pc-windows-msvc x86_64-unknown-linux-gnu)
 
 echo "== host build (macOS) =============================================="
 cargo clippy --workspace --all-targets -- -D warnings
