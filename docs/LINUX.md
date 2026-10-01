@@ -92,10 +92,11 @@ The polkit action is `com.proxysvpn.desktop.helper`
 everything still works with a generic prompt. That is what happens in the
 AppImage, which cannot install a policy file.
 
-The action's `exec.path` is `/usr/bin/ProxysVPN`, which is where Tauri should put
-a binary named after `productName`. Confirm on the first CI run — the workflow
-prints `dpkg --contents` — and fix that one line if the bundler names it
-differently.
+The action's `exec.path` is `/usr/bin/proxysvpn-desktop`. Note that this is the
+**Cargo package name**, not `productName`: Tauri uses productName only for the
+`.desktop` entry and `/usr/lib/ProxysVPN`. Verified by unpacking the `.deb` from
+the first CI build, so the dialog gets our wording rather than the generic
+fallback.
 
 The helper refuses to exec a sidecar that is group- or world-writable, or that is
 neither root-owned nor sitting in its own directory; `PROXYSVPN_HELPER_DEV=1`
@@ -202,7 +203,9 @@ Verified here:
   then configure;
 * `pkexec` behaviour in a real desktop session (Wayland and X11), with and
   without our policy file, and inside an AppImage;
-* that `/usr/bin/ProxysVPN` is the path the `.deb` really installs;
+* ~~that the `.deb` installs the binary where the policy expects~~ — confirmed on
+  the first CI build: `usr/bin/proxysvpn-desktop`, root:root 0755, and the
+  sidecars beside it are root-owned too, so the helper's trust check passes;
 * whether `resolvectl domain '~.'` is enough on distros where NetworkManager
   manages DNS itself, and whether the `/etc/resolv.conf` fallback survives a
   NetworkManager rewrite (the supervisor re-applies it, but only every 5 s);

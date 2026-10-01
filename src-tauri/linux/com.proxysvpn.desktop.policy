@@ -11,11 +11,17 @@
   org.freedesktop.policykit.exec action (a generic prompt) when no action
   matches the program path, which is what happens in the AppImage and in dev.
 
-  The exec.path below must be the installed path of the main binary. Tauri names
-  it after productName, so with productName "ProxysVPN" the .deb installs
-  /usr/bin/ProxysVPN. Confirm with `dpkg -c proxysvpn_*.deb | grep usr/bin` on
-  the first CI build and correct this line if the bundler ever changes the name;
-  a mismatch costs the nice message, nothing else.
+  The exec.path below must be the installed path of the main binary. It is
+  /usr/bin/proxysvpn-desktop: Tauri names the binary after the Cargo package
+  (`name = "proxysvpn-desktop"`), not after productName — productName only names
+  the .desktop entry and /usr/lib/ProxysVPN. Verified against the first CI build
+  by unpacking the .deb:
+
+    usr/bin/proxysvpn-desktop                     (root:root 0755)
+    usr/share/applications/ProxysVPN.desktop      Exec=proxysvpn-desktop
+
+  If the package name ever changes, correct this line; a mismatch costs the nice
+  message and nothing else, because pkexec then falls back to the generic action.
 -->
 <policyconfig>
   <vendor>ProxysVPN</vendor>
@@ -31,7 +37,7 @@
       <allow_inactive>auth_admin</allow_inactive>
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
-    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/ProxysVPN</annotate>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/proxysvpn-desktop</annotate>
     <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
   </action>
 </policyconfig>
