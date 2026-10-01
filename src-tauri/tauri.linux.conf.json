@@ -12,7 +12,6 @@
           "pkexec | policykit-1",
           "libayatana-appindicator3-1 | libappindicator3-1"
         ],
-        "recommends": ["systemd-resolved"],
         "files": {
           "/usr/share/polkit-1/actions/com.proxysvpn.desktop.policy": "linux/com.proxysvpn.desktop.policy"
         }
