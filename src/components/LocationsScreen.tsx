@@ -66,6 +66,8 @@ export default function LocationsScreen({
   const [refreshing, setRefreshing] = useState(true);
   const [staleAt, setStaleAt] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  /** This opening's latency round is back, so a number's age is worth saying. */
+  const [measured, setMeasured] = useState(false);
 
   // The list is fetched once per opening, never on a timer: the subscription
   // has a request budget and this screen is not allowed to eat it.
@@ -112,6 +114,9 @@ export default function LocationsScreen({
       .catch(() => {
         // Замер - украшение: без него список остаётся со словами и полностью
         // рабочим. Ошибку показывать не за что.
+      })
+      .finally(() => {
+        if (alive) setMeasured(true);
       });
     return () => {
       alive = false;
@@ -160,7 +165,9 @@ export default function LocationsScreen({
   const rttText = (entry: LocationEntry) => {
     if (entry.rttMs === undefined) return t(QUALITY_KEY[entry.quality]);
     const now = Date.now();
-    const at = rttMeasuredAtToShow(entry, now);
+    // Until this opening's round is back, every cached number looks old and
+    // would flash "measured N minutes ago" for the second the round takes.
+    const at = measured ? rttMeasuredAtToShow(entry, now) : null;
     return at === null
       ? t("loc.ms", { ms: entry.rttMs })
       : t("loc.msAged", { ms: entry.rttMs, ago: formatAge(t, at, now) });
