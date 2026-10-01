@@ -279,7 +279,14 @@ async fn describe_handshake_failure(link: &mut Link, cause: anyhow::Error) -> an
 
     let code = match link.child.try_wait() {
         Ok(Some(status)) => status.code(),
-        _ => None,
+        // The pipe closes a moment before the process can be reaped; without
+        // its code a failed setup would read as an unknown failure.
+        Ok(None) => tokio::time::timeout(Duration::from_millis(500), link.child.wait())
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .and_then(|status| status.code()),
+        Err(_) => None,
     };
     if code.is_some() {
         // pkexec(1) exits 127 both for "not authorized" and for "could not
