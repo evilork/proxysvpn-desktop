@@ -42,15 +42,21 @@ everyone. Without it the app starts and says so instead of failing silently.
 
 ## How the tunnel is put together
 
-Same chain as macOS:
+The same core as macOS 0.3.1 (`src-tauri/src/lib.rs`, with the tunnel in
+`src-tauri/src/tun_platform.rs`), so the same chain — xray is always the front,
+and the split-routing rules apply on Hysteria2 locations too:
 
 ```
-VLESS:  tun2socks(proxysvpn0) -> socks5 127.0.0.1:10808 (xray)     --vless--> node
-Hy2:    tun2socks(proxysvpn0) -> socks5 127.0.0.1:10809 (hysteria) --hy2---->  node
+VLESS:  tun2socks(proxysvpn0) -> socks5 127.0.0.1:10808 (xray) --vless--> node
+Hy2:    tun2socks(proxysvpn0) -> socks5 127.0.0.1:10808 (xray) --socks--> 127.0.0.1:10809 (hysteria) -> node
 ```
 
-The two are alternatives, not a chain: a hy2 server starts hysteria only, and
-tun2socks dials it directly.
+xray and hysteria run as the user, in the GUI; only tun2socks runs in the root
+helper. xray binds its sockets to the physical interface (`sockopt.interface`,
+`SO_BINDTODEVICE`, allowed unprivileged on an unbound socket since Linux 5.7),
+read from `/proc/net/route` by the GUI itself. A location change sends the
+helper `Retarget`, which pins the new node's address before it drops the old
+one; the device, the split defaults and DNS stay up.
 
 and the same routing shape:
 
@@ -156,9 +162,10 @@ So the helper publishes resolvers that are only reachable through the tunnel:
   apply never overwrites the first backup, and the symlink is unlinked rather
   than written through, so resolved's own stub file is left alone.
 
-Defaults are `1.1.1.1` and `1.0.0.1`; override with
-`PROXYSVPN_DNS=9.9.9.9,149.112.112.112`. When `tunnel_prefs` lands from
-`feat/app-redesign`, that is what should feed this list.
+The default is `198.18.0.2`, the in-tunnel resolver the 0.3.1 xray config answers
+through `dns-out` — the same one macOS hands its system resolver (`sysdns.rs`) —
+so the DNS settings of the "Туннель" screen apply on Linux too. Override with
+`PROXYSVPN_DNS=9.9.9.9,149.112.112.112`.
 
 ## Layout of the platform code
 
@@ -227,8 +234,8 @@ Verified here:
 **Not** verified, and not verifiable without a Linux machine:
 
 * ~~that the crate links and the `.deb`/AppImage build~~ — done on the first green
-  CI run: `ProxysVPN_0.1.0_amd64.deb` (41 MB) and `ProxysVPN_0.1.0_amd64.AppImage`
-  (114 MB). Neither has been **launched**, which is the next line;
+  CI run of the 0.1.0 app: `ProxysVPN_0.1.0_amd64.deb` (41 MB) and
+  `ProxysVPN_0.1.0_amd64.AppImage` (114 MB). Neither has been **launched**, which is the next line;
 * that the app actually starts, shows a window and raises a tunnel. Nothing below
   this point has run on a Linux machine even once;
 * that `tun2socks -device tun://proxysvpn0` creates the device under the name we

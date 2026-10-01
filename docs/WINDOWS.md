@@ -7,16 +7,20 @@ one run on real hardware before this ships to anybody.
 
 ## How the tunnel works
 
-Identical in shape to macOS — same engines, same chain, same split routing:
+The same core as macOS 0.3.1 (`src-tauri/src/lib.rs`): same engines, same chain,
+same split routing, same supervisor and repair ladder. xray is always the front
+of the chain, so the split-routing rules apply on Hysteria2 locations too:
 
 ```
-VLESS:  tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10808 (xray)     --vless--> node
-Hy2:    tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10809 (hysteria) --hy2---->  node
+VLESS:  tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10808 (xray) --vless--> node
+Hy2:    tun2socks(Wintun "ProxysVPN") -> socks5 127.0.0.1:10808 (xray) --socks--> 127.0.0.1:10809 (hysteria) -> node
 ```
 
-The two are alternatives, not a chain: for a hy2 server `lib.rs` starts hysteria
-only and hands `tun::start` the hysteria port directly, so xray is not running
-at all and tun2socks dials hysteria.
+xray binds its sockets to the physical adapter (`sockopt.interface`, the adapter
+alias from `net::physical_route`), which keeps its `direct` outbound from looping
+back into the tunnel. The Windows side of the core is `src-tauri/src/tun_platform.rs`,
+shared with Linux; a location change moves only the node's host route
+(`net::retarget`), the adapter and the split defaults stay up.
 
 Startup order (`crates/pvpn-platform/src/net/local.rs`, shared with macOS):
 
@@ -57,17 +61,24 @@ running the WebView elevated too. A split helper (unprivileged GUI + small
 elevated service) is the right next step for both Windows and Linux; the `net`
 contract is narrow enough to move behind IPC without touching callers.
 
-**DNS is deliberately not redirected.** Nothing in this build answers DNS inside
-the tunnel: the xray config generated here has no `dns` section and no port-53
-rule, so pointing the adapter at 198.18.0.2 would break name resolution
-outright. The adapter is therefore left with no DNS server at all, which also
-stops the Windows resolver from querying *into* the tunnel and taking whatever
-comes back first. Names keep resolving through the physical adapter's servers —
-the same leak macOS has today. Closing it needs a resolver in the tunnel plus
-NRPT rules, and belongs with the xray `dns` work, not here.
+**DNS is deliberately not redirected (yet).** The 0.3.1 xray config does answer
+DNS inside the tunnel now (`198.18.0.2`, routed to `dns-out`; macOS points its
+system resolver there, Linux publishes it on the device), but Windows still
+leaves the adapter alone until that is tried on a real machine. The adapter is
+therefore left with no DNS server at all, which also stops the Windows resolver
+from querying *into* the tunnel and taking whatever comes back first. Names keep
+resolving through the physical adapter's servers, which is a leak; closing it
+means publishing `198.18.0.2` on the adapter plus NRPT rules.
+
+**Engines die with the app.** Each engine joins a kill-on-close job object at
+spawn (`pvpn_platform::process::tie_to_app`); the app holds its only handle, so a
+crash or "End task" takes xray, hysteria and tun2socks along. There is
+deliberately no `taskkill /IM` sweep: it would also stop another VPN client's
+`tun2socks.exe` or `xray.exe`.
 
 **Paths.** State lives in `%LOCALAPPDATA%\ProxysVPN` (hysteria config, route
-hint) and logs in `%LOCALAPPDATA%\ProxysVPN\logs\app.log`. Not `%PROGRAMDATA%`:
+hint, the subscription link, device id and preferences) and logs in
+`%LOCALAPPDATA%\ProxysVPN\logs\app.log`. Not `%PROGRAMDATA%`:
 the hysteria config holds the node password and the default ACL on ProgramData
 grants every local user read access.
 

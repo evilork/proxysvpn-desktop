@@ -32,16 +32,16 @@ sha256. Прогон печатает его сам: в логе задания 
 with checksums**. Сверить после распаковки:
 
 ```bash
-shasum -a 256 ProxysVPN_0.1.0_aarch64.dmg          # macOS
-certutil -hashfile ProxysVPN_0.1.0_x64-setup.exe SHA256   # Windows
-sha256sum ProxysVPN_0.1.0_amd64.deb                # Linux
+shasum -a 256 ProxysVPN_0.3.1_aarch64.dmg          # macOS
+certutil -hashfile ProxysVPN_0.3.1_x64-setup.exe SHA256   # Windows
+sha256sum ProxysVPN_0.3.1_amd64.deb                # Linux
 ```
 
 ## 3. macOS (Apple Silicon)
 
 ```bash
 # после распаковки артефакта
-open ProxysVPN_0.1.0_aarch64.dmg          # смонтировать образ
+open ProxysVPN_0.3.1_aarch64.dmg          # смонтировать образ
 # перетащить ProxysVPN.app в «Программы», образ размонтировать
 xattr -cr /Applications/ProxysVPN.app     # снять карантин: сборка без подписи Apple
 open /Applications/ProxysVPN.app
@@ -67,14 +67,14 @@ Windows 11 содержит WebView2 изначально. На Windows 10 ус�
 `.deb` (Ubuntu/Debian, рекомендуется — ставит зависимости сам):
 
 ```bash
-sudo apt install ./ProxysVPN_0.1.0_amd64.deb
+sudo apt install ./ProxysVPN_0.3.1_amd64.deb
 ```
 
 AppImage (любой дистрибутив, ничего не ставится в систему):
 
 ```bash
-chmod +x ProxysVPN_0.1.0_amd64.AppImage
-./ProxysVPN_0.1.0_amd64.AppImage
+chmod +x ProxysVPN_0.3.1_amd64.AppImage
+./ProxysVPN_0.3.1_amd64.AppImage
 ```
 
 Замечания:
