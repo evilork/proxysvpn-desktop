@@ -370,8 +370,17 @@ pub async fn device_down() {
     log::info("net", "device teardown is implicit on Windows (Wintun)");
 }
 
+/// Nothing to sweep, and deliberately so.
+///
+/// `taskkill /IM tun2socks.exe` stopped every process of that name on the
+/// machine — another VPN client's included, the same mistake the macOS app
+/// made with `pkill -x` until 28.09.2026. Our own engines cannot outlive us
+/// here: each one joins a kill-on-close job object at spawn
+/// (`process::tie_to_app`), so a crash or an "End task" takes them along, and
+/// a normal stop kills them by handle. The step stays in `TEARDOWN_ORDER` so
+/// the order is the same on every platform.
 pub async fn kill_stray(stem: &str) {
-    p::kill_stray(&p::image_name(stem)).run_best_effort().await;
+    log::info("net", &format!("no {} sweep on Windows: engines die with the app", stem));
 }
 
 /// Synchronous sweep for the exit path, where no runtime is available.
@@ -393,9 +402,8 @@ fn sync_cleanup_inner(stale_hosts: &[Ipv4Addr]) {
     for host in stale_hosts {
         run(p::host_route_delete(*host));
     }
-    for stem in crate::net::ENGINE_STEMS {
-        run(p::kill_stray(&p::image_name(stem)));
-    }
+    // No engine sweep by image name: see `kill_stray`. An engine of ours that
+    // existed when the previous run died went with it (job object).
     log::info("net", "cleanup done");
 }
 
