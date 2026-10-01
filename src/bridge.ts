@@ -176,7 +176,7 @@ export interface SubState {
 
 export interface AppInfo {
   version: string;
-  platform: "macos" | "ios" | "other";
+  platform: "macos" | "ios" | "windows" | "linux" | "other";
   /** The host that works for THIS person — the ladder already picked it. */
   cabinetUrl: string;
   botUrl: string;

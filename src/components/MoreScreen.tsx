@@ -18,13 +18,14 @@
 //
 // "Свои правила" opens its own screen (RulesScreen) rather than living here:
 // two multi-line lists need more room than a row. "Уведомления" fits here
-// on macOS - one switch, persisted on the Rust side (notify_prefs.rs) because
-// Rust, not this window, is what decides whether to actually show one.
+// on the desktop (macOS, Windows, Linux) - one switch, persisted on the Rust
+// side (notify_prefs.rs) because Rust, not this window, is what decides
+// whether to actually show one. The hint names macOS only where it is macOS.
 //
 // This same window ships to iOS too (same `frontendDist`), and there nothing
 // ever consults that preference: `Core::notify_protection`, the only code
-// that would fire a system notification, is `#[cfg(target_os = "macos")]`
-// end to end (lib.rs), and PacketTunnelProvider.swift says outright that iOS
+// that would fire a system notification, is `#[cfg(desktop)]` end to end
+// (lib.rs), and PacketTunnelProvider.swift says outright that iOS
 // reflects state through `NEVPNStatus` alone, no local notifications. A
 // toggle nobody can feel is the same anti-pattern as launch-at-login above,
 // so it is hidden on iOS for the same reason, not shown-and-disabled.
@@ -251,7 +252,9 @@ export default function MoreScreen({
           <label className="row">
             <span className="row-main">
               <span className="row-title">{t("more.notify")}</span>
-              <span className="row-sub">{t("more.notifyHint")}</span>
+              <span className="row-sub">
+                {t(info?.platform === "macos" ? "more.notifyHint" : "more.notifyHintSystem")}
+              </span>
             </span>
             <span className="row-side">
               <input

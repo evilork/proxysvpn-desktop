@@ -35,11 +35,14 @@ type Platform = AppInfo["platform"];
 
 /**
  * Which engine's resolvers to name. Before `app_info` answers, the build
- * decides: every App Store build today is iOS, the direct build is macOS.
+ * decides: every App Store build today is iOS, the direct build is a desktop
+ * one (macOS, Windows or Linux), and all three run the same xray config.
  */
 function dnsKey(platform: Platform | undefined): MsgKey {
   if (platform === "ios") return "notice.dns.apple";
-  if (platform === "macos") return "notice.dns.desktop";
+  if (platform === "macos" || platform === "windows" || platform === "linux") {
+    return "notice.dns.desktop";
+  }
   return IS_APPSTORE ? "notice.dns.apple" : "notice.dns.desktop";
 }
 
