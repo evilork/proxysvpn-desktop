@@ -162,8 +162,18 @@ jobs:
         if: runner.os != 'macOS'
         run: npx tauri build --bundles ${{ matrix.bundles }}
 
-      - name: List bundle output
-        run: find src-tauri/target/release/bundle -maxdepth 2 -type f -print
+      - name: List bundle output with checksums
+        # The checksums go into the log on purpose: nothing here is signed, so a
+        # sha256 printed by the very run that produced the file is the only way
+        # for whoever downloads the artifact to tell they got that build.
+        # SmartScreen cannot help them and neither can we, until there is a
+        # code-signing certificate.
+        run: |
+          find src-tauri/target/release/bundle -maxdepth 2 -type f -print
+          echo "--- sha256 ---"
+          find src-tauri/target/release/bundle -maxdepth 2 -type f \
+            \( -name '*.dmg' -o -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' \) \
+            -exec shasum -a 256 {} +
 
       - name: Upload installers
         uses: actions/upload-artifact@v4

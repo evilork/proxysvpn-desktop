@@ -27,6 +27,16 @@ Windows x86_64, Linux x86_64. Ничего не подписывается и н
 
 GitHub отдаёт артефакт одним zip-архивом — распаковать перед установкой.
 
+Подписи кода у сборок нет, поэтому единственная проверка «это тот самый файл» —
+sha256. Прогон печатает его сам: в логе задания есть шаг **List bundle output
+with checksums**. Сверить после распаковки:
+
+```bash
+shasum -a 256 ProxysVPN_0.1.0_aarch64.dmg          # macOS
+certutil -hashfile ProxysVPN_0.1.0_x64-setup.exe SHA256   # Windows
+sha256sum ProxysVPN_0.1.0_amd64.deb                # Linux
+```
+
 ## 3. macOS (Apple Silicon)
 
 ```bash
