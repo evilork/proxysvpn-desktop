@@ -16,16 +16,29 @@
 // Pure on purpose, with no build-time input: node --test imports it as is.
 
 /** Languages of proxysvpn.com (frontend/src/i18n/langs.ts). */
+// With its extension: node --test runs this file as is, without a bundler.
+import { APP_VIEW_QUERY } from "./legal.ts";
+
 const SITE_LANGS = ["ru", "en", "zh", "es", "tr", "ar", "ja", "de", "fr", "ko"] as const;
 
 /** Pages an App Store build may open on proxysvpn.com, in every language. */
 const SITE_PAGES = ["privacy", "terms", "support"] as const;
 
-const PROXYSVPN_PATHS: ReadonlySet<string> = new Set<string>([
+/**
+ * The legal pages, each in its app view: path AND its one query, as the
+ * server spells them. The plain page carries the site's header, whose link
+ * home leads to the prices, so `/privacy` alone is NOT allowed — only
+ * `/privacy?src=app`.
+ */
+const LEGAL_PATHS: readonly string[] = [
   ...SITE_PAGES.map((page) => `/${page}`),
   ...SITE_LANGS.flatMap((lang) => SITE_PAGES.map((page) => `/${lang}/${page}`)),
+].map((path) => `${path}${APP_VIEW_QUERY}`);
+
+const PROXYSVPN_PATHS: ReadonlySet<string> = new Set<string>([
+  ...LEGAL_PATHS,
   // Account deletion (guideline 5.1.1(v)). The one cabinet page allowed: it
-  // deletes, it does not sell.
+  // deletes, it does not sell. It has no app view, so no query.
   "/dashboard/account/delete",
 ]);
 
@@ -99,9 +112,11 @@ export function isAllowedExternal(url: string, isAppstore: boolean): boolean {
   if (parsed.username !== "" || parsed.password !== "") return false;
   // The parser drops an explicit :443, so any port left here is not the default.
   if (parsed.port !== "") return false;
-  // A query or a fragment can turn an allowed page into a redirect to one that
-  // is not (`/support?next=/pay`); none of the allowed pages needs either.
-  if (parsed.search !== "" || parsed.hash !== "") return false;
+  // A fragment, or any query other than the app view's, can turn an allowed
+  // page into a redirect to one that is not (`/support?next=/pay`). The query
+  // is not dropped here but compared as part of the path below, so an address
+  // is allowed only in the one spelling the list holds.
+  if (parsed.hash !== "") return false;
 
   const host = normalHost(parsed.hostname);
   if (host === "" || isIpLiteral(host)) return false;
@@ -109,5 +124,5 @@ export function isAllowedExternal(url: string, isAppstore: boolean): boolean {
   if (!paths) return false;
 
   const path = normalPath(parsed.pathname);
-  return path !== null && paths.has(path);
+  return path !== null && paths.has(`${path}${parsed.search}`);
 }

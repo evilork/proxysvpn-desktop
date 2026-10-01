@@ -3,8 +3,8 @@
 // node --test tests/legal.test.ts (Node >= 23.6 strips the types).
 //
 // The addresses are spelled out literally on purpose: a builder that drifts
-// (a stray `?lang=`, a missing /en/, another host) must fail here, not in App
-// Review. Each one must also pass the App Store allowlist, both as the real
+// (a stray `?lang=`, a lost `?src=app`, a missing /en/, another host) must
+// fail here, not in App Review. Each one must also pass the App Store allowlist, both as the real
 // function answers and against the rules restated below.
 
 import assert from "node:assert/strict";
@@ -13,6 +13,7 @@ import { test } from "node:test";
 import { isAllowedExternal } from "../src/externalUrl.ts";
 import {
   ACCOUNT_DELETE_URL,
+  APP_VIEW_QUERY,
   privacyUrl,
   supportUrl,
   termsUrl,
@@ -20,31 +21,32 @@ import {
 
 const EXPECTED = {
   ru: {
-    privacy: "https://proxysvpn.com/privacy",
-    terms: "https://proxysvpn.com/terms",
-    support: "https://proxysvpn.com/support",
+    privacy: "https://proxysvpn.com/privacy?src=app",
+    terms: "https://proxysvpn.com/terms?src=app",
+    support: "https://proxysvpn.com/support?src=app",
   },
   en: {
-    privacy: "https://proxysvpn.com/en/privacy",
-    terms: "https://proxysvpn.com/en/terms",
-    support: "https://proxysvpn.com/en/support",
+    privacy: "https://proxysvpn.com/en/privacy?src=app",
+    terms: "https://proxysvpn.com/en/terms?src=app",
+    support: "https://proxysvpn.com/en/support?src=app",
   },
 } as const;
 
 /**
  * The App Store rules of src/externalUrl.ts, restated as literal
- * expectations: https, no user or password, default port, no query, no
- * fragment, exactly this host and exactly one of these paths.
+ * expectations: https, no user or password, default port, no fragment,
+ * exactly this host and exactly one of these paths with exactly its query —
+ * `?src=app` (the site's app view) on a legal page, none on account deletion.
  */
 const APPSTORE_HOST = "proxysvpn.com";
-const APPSTORE_PATHS = new Set([
-  "/privacy",
-  "/terms",
-  "/support",
-  "/en/privacy",
-  "/en/terms",
-  "/en/support",
-  "/dashboard/account/delete",
+const APPSTORE_PAGES = new Map([
+  ["/privacy", "?src=app"],
+  ["/terms", "?src=app"],
+  ["/support", "?src=app"],
+  ["/en/privacy", "?src=app"],
+  ["/en/terms", "?src=app"],
+  ["/en/support", "?src=app"],
+  ["/dashboard/account/delete", ""],
 ]);
 
 function passesRestatedRules(url: string): boolean {
@@ -54,10 +56,9 @@ function passesRestatedRules(url: string): boolean {
     parsed.username === "" &&
     parsed.password === "" &&
     parsed.port === "" &&
-    parsed.search === "" &&
     parsed.hash === "" &&
     parsed.hostname === APPSTORE_HOST &&
-    APPSTORE_PATHS.has(parsed.pathname)
+    APPSTORE_PAGES.get(parsed.pathname) === parsed.search
   );
 }
 
@@ -88,9 +89,10 @@ test("account deletion is the one cabinet page, spelled exactly", () => {
   assert.equal(ACCOUNT_DELETE_URL, "https://proxysvpn.com/dashboard/account/delete");
 });
 
-test("no address carries a query or a fragment", () => {
+test("every legal page asks for the app view, and nothing carries a fragment", () => {
   for (const url of everyUrl()) {
-    assert.ok(!url.includes("?"), url);
+    const expected = url === ACCOUNT_DELETE_URL ? "" : APP_VIEW_QUERY;
+    assert.equal(new URL(url).search, expected, url);
     assert.ok(!url.includes("#"), url);
   }
 });

@@ -9,15 +9,18 @@ import { isAllowedExternal } from "../src/externalUrl.ts";
 
 const SITE_LANGS = ["ru", "en", "zh", "es", "tr", "ar", "ja", "de", "fr", "ko"];
 
+/** The site's app view of a legal page: no header, no way to the prices. */
+const APP = "?src=app";
+
 const ALLOWED_IN_APPSTORE = [
-  "https://proxysvpn.com/privacy",
-  "https://proxysvpn.com/terms",
-  "https://proxysvpn.com/support",
-  "https://www.proxysvpn.com/privacy",
+  `https://proxysvpn.com/privacy${APP}`,
+  `https://proxysvpn.com/terms${APP}`,
+  `https://proxysvpn.com/support${APP}`,
+  `https://www.proxysvpn.com/privacy${APP}`,
   ...SITE_LANGS.flatMap((lang) => [
-    `https://proxysvpn.com/${lang}/privacy`,
-    `https://proxysvpn.com/${lang}/terms`,
-    `https://proxysvpn.com/${lang}/support`,
+    `https://proxysvpn.com/${lang}/privacy${APP}`,
+    `https://proxysvpn.com/${lang}/terms${APP}`,
+    `https://proxysvpn.com/${lang}/support${APP}`,
   ]),
   "https://proxysvpn.com/dashboard/account/delete",
   "https://wata.fast/",
@@ -26,15 +29,24 @@ const ALLOWED_IN_APPSTORE = [
   "https://wata.fast/terms",
   "https://wata.fast/support",
   // Spellings of an allowed address.
-  "https://PROXYSVPN.COM/privacy",
-  "https://proxysvpn.com./privacy",
-  "https://proxysvpn.com:443/privacy",
-  "https://proxysvpn.com/privacy/",
+  `https://PROXYSVPN.COM/privacy${APP}`,
+  `https://proxysvpn.com./privacy${APP}`,
+  `https://proxysvpn.com:443/privacy${APP}`,
+  `https://proxysvpn.com/privacy/${APP}`,
   // The bundled support pages App.tsx falls back to.
-  "https://proxysvpn.com/en/support",
+  `https://proxysvpn.com/en/support${APP}`,
 ];
 
 const BLOCKED_IN_APPSTORE = [
+  // A legal page without the app view: that one carries the site's header,
+  // whose link home leads to the prices. Only the `?src=app` spelling opens.
+  "https://proxysvpn.com/privacy",
+  "https://proxysvpn.com/en/terms",
+  "https://proxysvpn.com/support",
+  // Any other query, and the app view's query on a page that has no app view.
+  "https://proxysvpn.com/support?next=/pay",
+  "https://proxysvpn.com/privacy?src=app&next=/pay",
+  "https://proxysvpn.com/dashboard/account/delete?src=app",
   // The cabinet and anything that sells.
   "https://proxysvpn.com/",
   "https://proxysvpn.com/dashboard",

@@ -28,10 +28,18 @@ export const NO_ACTIVITY_LOGS_CONFIRMED = false;
 
 const SITE = "https://proxysvpn.com";
 
+/**
+ * The query that asks the site for a legal page's app view: no header, no way
+ * to the prices, no analytics. Exactly this spelling — the site and the store
+ * allowlist (src/externalUrl.ts) compare it as a whole.
+ */
+export const APP_VIEW_QUERY = "?src=app";
+
 type LegalPage = "privacy" | "terms" | "support";
 
 function pageUrl(page: LegalPage, lang: Lang): string {
-  return lang === "ru" ? `${SITE}/${page}` : `${SITE}/en/${page}`;
+  const path = lang === "ru" ? `/${page}` : `/en/${page}`;
+  return `${SITE}${path}${APP_VIEW_QUERY}`;
 }
 
 /** Privacy policy. */
