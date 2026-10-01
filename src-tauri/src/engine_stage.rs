@@ -48,6 +48,15 @@
 // the app keep separate engines (pidfile.rs tells them apart by folder) and a
 // relaunch of the same copy after a crash finds — and stops — what the crash
 // left running.
+//
+// Nothing piles up there. Each launch clears its own folder of everything
+// this bundle does not ship (the `.<name>.<pid>.tmp` of a copy a power cut
+// interrupted, an engine or geo file a newer release dropped — sidecars.rs
+// would still find those), and removes the folders of other copies that are
+// gone: each folder holds a `bundle-path` record of the bundle it serves,
+// and a folder whose bundle no longer exists (the DMG, ~/Downloads after
+// "Move to Applications", an App Translocation path) and that no running
+// engine uses is about 94 MB of root-owned debris.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -59,6 +68,11 @@ use sha2::{Digest, Sha256};
 /// the folder below it; the state stores already live one level up.
 const STAGE_PARENT: &str = "/Library/Application Support/ProxysVPN";
 const STAGE_DIR_NAME: &str = "engines";
+
+/// The file in each staged folder that names the bundle folder it serves.
+const SOURCE_RECORD: &str = "bundle-path";
+/// A `bundle-path` is one path; anything longer is not ours.
+const SOURCE_RECORD_MAX: u64 = 4096;
 
 /// The three engines, staged under their bundle names.
 const ENGINES: [&str; 3] = ["xray", "tun2socks", "hysteria"];
@@ -135,7 +149,22 @@ pub fn prepare() {
                 Path::new(STAGE_PARENT).join(STAGE_DIR_NAME),
                 home.clone(),
             ];
-            stage(&source_dirs(&own), &parents, 0).map(|staged| (home, staged))
+            let staged = stage(&source_dirs(&own), &parents, 0)?;
+            if let Err(e) = write_source_record(&home, &own) {
+                // Only the clean-up of a later launch reads it; the engines
+                // themselves are in place.
+                crate::logger::log("warn", "engine", &format!("bundle-path not recorded: {e}"));
+            }
+            let engines = Path::new(STAGE_PARENT).join(STAGE_DIR_NAME);
+            let removed = prune_siblings(&engines, &home, &crate::pidfile::live_engine_dirs());
+            if removed > 0 {
+                crate::logger::log(
+                    "info",
+                    "engine",
+                    &format!("removed {removed} engine folder(s) of app copies that are gone"),
+                );
+            }
+            Ok((home, staged))
         });
     let result = match outcome {
         Ok((home, staged)) => {
@@ -143,8 +172,8 @@ pub fn prepare() {
                 "info",
                 "engine",
                 &format!(
-                    "engine files in the root-owned folder: {} copied, {} already up to date",
-                    staged.copied, staged.unchanged
+                    "engine files in the root-owned folder: {} copied, {} already up to date, {} leftovers removed",
+                    staged.copied, staged.unchanged, staged.removed
                 ),
             );
             Ok(home)
@@ -168,6 +197,9 @@ struct Staged {
     copied: usize,
     /// Files whose staged copy already held exactly the bundle's bytes.
     unchanged: usize,
+    /// Leftovers removed from the folder first: temp files of an interrupted
+    /// copy, and engines or geo files this bundle no longer ships.
+    removed: usize,
 }
 
 /// Create (if missing) and check each folder in `chain`, then copy every
@@ -196,7 +228,13 @@ fn stage(sources: &[PathBuf], chain: &[PathBuf], owner: u32) -> Result<Staged, S
         return Err("no engine found in the bundle".to_string());
     }
 
-    let mut staged = Staged { copied: 0, unchanged: 0 };
+    // First, so a full disk gets the space back before the copy needs it,
+    // and so nothing this bundle does not ship is ever found in `home`.
+    let mut keep: Vec<&str> = plan.iter().map(|(_, name, _)| *name).collect();
+    keep.push(SOURCE_RECORD);
+    let removed = prune_home(home, &keep)?;
+
+    let mut staged = Staged { copied: 0, unchanged: 0, removed };
     for (src, name, mode) in plan {
         match copy_private(&src, &home.join(name), mode, owner).map_err(|e| format!("{name}: {e}"))? {
             CopyOutcome::Copied => staged.copied += 1,
@@ -204,6 +242,120 @@ fn stage(sources: &[PathBuf], chain: &[PathBuf], owner: u32) -> Result<Staged, S
         }
     }
     Ok(staged)
+}
+
+/// Remove every entry of `home` whose name is not in `keep`. Fails at the
+/// first one that cannot be removed: a stale engine left in place would be
+/// found and run.
+fn prune_home(home: &Path, keep: &[&str]) -> Result<usize, String> {
+    let entries = std::fs::read_dir(home).map_err(|e| format!("list {}: {e}", home.display()))?;
+    let mut removed = 0usize;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("list {}: {e}", home.display()))?;
+        let name = entry.file_name();
+        if name.to_str().is_some_and(|n| keep.contains(&n)) {
+            continue;
+        }
+        let path = entry.path();
+        remove_entry(&path).map_err(|e| format!("remove {}: {e}", path.display()))?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
+/// A file or link is unlinked, a folder removed with what it holds; links
+/// are never followed (std's remove_dir_all does not follow them either).
+fn remove_entry(path: &Path) -> io::Result<()> {
+    if std::fs::symlink_metadata(path)?.file_type().is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    }
+}
+
+/// Write `home/bundle-path`: the folder of the bundle these engines came
+/// from, so a later launch can tell when that copy of the app is gone.
+fn write_source_record(home: &Path, own: &Path) -> io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let tmp = home.join(format!(".{SOURCE_RECORD}.{}.tmp", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    let result = (|| -> io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&tmp)?;
+        file.write_all(own.as_os_str().as_bytes())?;
+        std::fs::rename(&tmp, home.join(SOURCE_RECORD))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+/// The bundle folder `dir/bundle-path` names, if it reads as one and really
+/// belongs to `dir` (its id is `dir`'s own name).
+fn read_source_record(dir: &Path) -> Option<PathBuf> {
+    use std::io::Read;
+    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(dir.join(SOURCE_RECORD))
+        .ok()?;
+    if !file.metadata().ok()?.file_type().is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(SOURCE_RECORD_MAX + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.is_empty() || bytes.len() as u64 > SOURCE_RECORD_MAX {
+        return None;
+    }
+    let source = PathBuf::from(std::ffi::OsString::from_vec(bytes));
+    if !source.is_absolute() || home_for(&source).file_name() != dir.file_name() {
+        return None;
+    }
+    Some(source)
+}
+
+/// Remove the staged folders of other copies of the app that are gone: no
+/// `bundle-path` naming a bundle folder that still exists, and no engine in
+/// `busy` running from them. Stray files and links in `engines` go too.
+/// `home` (this copy's own folder) is never touched. Best effort: a folder
+/// that cannot be removed is logged and left. Returns how many went.
+fn prune_siblings(engines: &Path, home: &Path, busy: &[PathBuf]) -> usize {
+    let Ok(entries) = std::fs::read_dir(engines) else {
+        return 0;
+    };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path == home || busy.iter().any(|dir| dir == &path) {
+            continue;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.file_type().is_dir() && read_source_record(&path).is_some_and(|source| source.is_dir()) {
+            continue;
+        }
+        match remove_entry(&path) {
+            Ok(()) => removed += 1,
+            Err(e) => crate::logger::log(
+                "warn",
+                "engine",
+                &format!("could not remove {}: {e}", path.display()),
+            ),
+        }
+    }
+    removed
 }
 
 fn first_present(dirs: &[PathBuf], names: &[String]) -> Option<PathBuf> {
@@ -561,7 +713,7 @@ mod tests {
         // Nothing can be created in the folder any more.
         std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o555)).expect("chmod");
         let again = stage(&source_dirs(&own), &chain, me()).expect("second launch");
-        assert_eq!(again, Staged { copied: 0, unchanged: ENGINES.len() + ASSETS.len() });
+        assert_eq!(again, Staged { copied: 0, unchanged: ENGINES.len() + ASSETS.len(), removed: 0 });
         assert_eq!(std::fs::metadata(home.join("xray")).expect("meta").ino(), inode);
 
         // A changed engine does need a copy, and that one fails closed.
@@ -618,6 +770,80 @@ mod tests {
         stage(&source_dirs(&own), std::slice::from_ref(&home), me()).expect("staged");
         assert_eq!(std::fs::read(&victim).expect("victim"), b"keep");
         assert!(!std::fs::symlink_metadata(home.join("xray")).expect("meta").file_type().is_symlink());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The temp file of a copy a power cut interrupted, and an engine or geo
+    /// file this bundle no longer ships, are removed before staging, so
+    /// sidecars.rs can never find them; the bundle-path record stays.
+    #[test]
+    fn leftovers_in_the_staged_folder_are_removed() {
+        let base = temp_dir("leftovers");
+        let own = bundle(&base);
+        let resources = own.parent().expect("contents").join("Resources/binaries");
+        // The bundle's own folders only: a debug build's source_dirs also
+        // reaches into src-tauri/binaries, which still has geosite.dat.
+        let sources = [own.clone(), resources.clone()];
+        let home = base.join("stage");
+        let chain = [home.clone()];
+        stage(&sources, &chain, me()).expect("first launch");
+        write_source_record(&home, &own).expect("record");
+
+        std::fs::write(home.join(".xray.99999.tmp"), b"half a copy").expect("debris");
+        std::fs::create_dir(home.join("stray-folder")).expect("folder");
+        std::fs::remove_file(resources.join("geosite.dat")).expect("a release that stops shipping geosite.dat");
+
+        let again = stage(&sources, &chain, me()).expect("second launch");
+        assert_eq!(again.removed, 3, "{again:?}");
+        assert!(!home.join(".xray.99999.tmp").exists());
+        assert!(!home.join("stray-folder").exists());
+        assert!(!home.join("geosite.dat").exists(), "a file the bundle dropped is not found any more");
+        assert!(home.join("geoip.dat").exists());
+        assert!(home.join(SOURCE_RECORD).exists());
+        assert_eq!(read_source_record(&home), None, "a test folder is not named after its bundle");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Folders of copies that are gone go; a copy that still exists, a
+    /// folder an engine runs from, and our own folder stay.
+    #[test]
+    fn folders_of_app_copies_that_are_gone_are_removed() {
+        let base = temp_dir("siblings");
+        let engines = base.join("engines");
+        std::fs::create_dir(&engines).expect("engines");
+
+        // Each folder carries its real id, so the record is believed.
+        let staged_for = |bundle: &Path| -> PathBuf {
+            let id = home_for(bundle).file_name().map(PathBuf::from).expect("id");
+            let dir = engines.join(id);
+            std::fs::create_dir(&dir).expect("folder");
+            std::fs::write(dir.join("xray"), b"engine").expect("engine");
+            write_source_record(&dir, bundle).expect("record");
+            dir
+        };
+        let present = base.join("Applications/ProxysVPN.app/Contents/MacOS");
+        std::fs::create_dir_all(&present).expect("installed copy");
+        let mine = staged_for(&base.join("mine/ProxysVPN.app/Contents/MacOS"));
+        let installed = staged_for(&present);
+        let downloads = staged_for(&base.join("Downloads/ProxysVPN.app/Contents/MacOS"));
+        let translocated = staged_for(&base.join("AppTranslocation/X/d/ProxysVPN.app/Contents/MacOS"));
+        let running = staged_for(&base.join("Volumes/ProxysVPN/ProxysVPN.app/Contents/MacOS"));
+        let unrecorded = engines.join("00000000000000aa");
+        std::fs::create_dir(&unrecorded).expect("folder without a record");
+        let forged = engines.join("00000000000000bb");
+        std::fs::create_dir(&forged).expect("folder");
+        write_source_record(&forged, &present).expect("a record that names another folder's bundle");
+        let stray = engines.join("stray");
+        std::fs::write(&stray, b"x").expect("stray file");
+
+        let removed = prune_siblings(&engines, &mine, std::slice::from_ref(&running));
+        assert_eq!(removed, 5);
+        assert!(mine.exists(), "our own folder is never touched");
+        assert!(installed.exists(), "a copy that still exists keeps its engines");
+        assert!(running.exists(), "an engine still runs from it");
+        for gone in [&downloads, &translocated, &unrecorded, &forged, &stray] {
+            assert!(!gone.exists(), "{}", gone.display());
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 
