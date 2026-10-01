@@ -102,6 +102,8 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    // Only the unix tests below use it.
+    #[cfg(unix)]
     fn scratch(tag: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
