@@ -49,24 +49,40 @@ impl Argv {
         cmd
     }
 
-    /// Runs the command, discarding output, and fails on a non-zero exit.
+    /// Runs the command and fails on a non-zero exit.
     ///
     /// The error text is deliberately identical to the pre-split `run_cmd` in
-    /// tun.rs: some of these strings reach the user through connect errors.
+    /// tun.rs: some of these strings reach the user through connect errors,
+    /// and `raise_error` classifies them by words. What the command itself
+    /// printed goes to the log as a line of its own instead: a Russian netsh
+    /// message can contain «шлюз», which would misclassify the failure.
+    /// Without that line, a failed `netsh … set address` on a Windows VM
+    /// (02.10.2026) left nothing to go on but "exit code: 1".
     pub async fn run(&self) -> Result<()> {
-        let status = self
+        self.run_noting("warn").await
+    }
+
+    async fn run_noting(&self, said_level: &str) -> Result<()> {
+        let out = self
             .command()
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
             .await
             .with_context(|| format!("spawn {} {:?}", self.program, self.args))?;
-        if !status.success() {
+        if !out.status.success() {
+            let said = summarize(
+                &format!("{} {}", console_text(&out.stderr), console_text(&out.stdout)),
+                SAID_MAX_CHARS,
+            );
+            if !said.is_empty() {
+                crate::log::log(said_level, "net", &format!("{} said: {}", self.short_name(), said));
+            }
             return Err(anyhow!(
                 "{} {:?} failed: {}",
                 self.program,
                 self.args,
-                status
+                out.status
             ));
         }
         Ok(())
@@ -75,9 +91,15 @@ impl Argv {
     /// Runs the command ignoring failures — for teardown steps where "already
     /// gone" and "removed" are the same outcome.
     pub async fn run_best_effort(&self) {
-        if let Err(e) = self.run().await {
+        if let Err(e) = self.run_noting("info").await {
             crate::log::log("info", "net", &format!("ignored: {}", e));
         }
+    }
+
+    /// The program's file name without folders or `.exe`, for log lines.
+    fn short_name(&self) -> &str {
+        let name = self.program.rsplit(['/', '\\']).next().unwrap_or(&self.program);
+        name.strip_suffix(".exe").unwrap_or(name)
     }
 
     pub async fn output(&self) -> Result<Output> {
@@ -99,6 +121,58 @@ impl Argv {
     /// True when the command exited 0 — used for existence probes.
     pub async fn succeeds(&self) -> bool {
         matches!(self.output().await, Ok(o) if o.status.success())
+    }
+}
+
+/// How much of a failed command's own words a log line keeps.
+const SAID_MAX_CHARS: usize = 240;
+
+/// Whitespace collapsed to single spaces and the result cut to `max` chars:
+/// netsh pads its messages with blank lines and CRLFs.
+fn summarize(text: &str, max: usize) -> String {
+    let joined = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    match joined.char_indices().nth(max) {
+        Some((cut, _)) => format!("{}…", &joined[..cut]),
+        None => joined,
+    }
+}
+
+/// A child's output as text. Console programs on Windows (netsh, route)
+/// write in the OEM code page — CP866 on a Russian system — so bytes that
+/// are not UTF-8 are decoded from it there; elsewhere they are lossy UTF-8.
+fn console_text(bytes: &[u8]) -> String {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_string();
+    }
+    #[cfg(windows)]
+    {
+        if let Some(text) = oem::decode(bytes) {
+            return text;
+        }
+    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+#[cfg(windows)]
+mod oem {
+    use windows::Win32::Globalization::{MultiByteToWideChar, CP_OEMCP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS};
+
+    /// `bytes` decoded from the console's OEM code page, or `None` if the
+    /// system would not convert them.
+    pub fn decode(bytes: &[u8]) -> Option<String> {
+        if bytes.is_empty() {
+            return Some(String::new());
+        }
+        // SAFETY: a null output buffer asks only for the required length.
+        let len = unsafe { MultiByteToWideChar(CP_OEMCP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0), bytes, None) };
+        let len = usize::try_from(len).ok().filter(|n| *n > 0)?;
+        let mut wide = vec![0u16; len];
+        // SAFETY: `wide` holds exactly the length the first call reported.
+        let written =
+            unsafe { MultiByteToWideChar(CP_OEMCP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0), bytes, Some(&mut wide)) };
+        let written = usize::try_from(written).ok().filter(|n| *n > 0)?;
+        wide.truncate(written);
+        Some(String::from_utf16_lossy(&wide))
     }
 }
 
@@ -335,6 +409,36 @@ mod tests {
     fn kill_grace_is_a_short_wait_not_a_hang() {
         assert!(KILL_GRACE >= std::time::Duration::from_millis(100));
         assert!(KILL_GRACE <= std::time::Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn a_failed_command_is_summarized_on_one_short_line() {
+        let netsh = "\r\n\r\nThe filename, directory name, or volume label syntax is incorrect.\r\n\r\n";
+        assert_eq!(
+            summarize(netsh, SAID_MAX_CHARS),
+            "The filename, directory name, or volume label syntax is incorrect."
+        );
+        assert_eq!(summarize("  \r\n ", SAID_MAX_CHARS), "");
+        let long = "я".repeat(300);
+        let cut = summarize(&long, 10);
+        assert_eq!(cut.chars().count(), 11, "ten chars and an ellipsis, cut on a char boundary");
+        assert!(cut.ends_with('…'));
+    }
+
+    #[test]
+    fn console_text_keeps_utf8_and_never_fails_on_other_bytes() {
+        assert_eq!(console_text("Ошибка".as_bytes()), "Ошибка");
+        // CP866 «Ошибка»: not UTF-8. On Windows the OEM page decodes it; on
+        // the CI hosts it must at least not panic or vanish.
+        let cp866 = [0x8E, 0xE8, 0xA8, 0xA1, 0xAA, 0xA0];
+        assert!(!console_text(&cp866).is_empty());
+    }
+
+    #[test]
+    fn log_lines_name_the_program_not_its_folder() {
+        assert_eq!(Argv::new(r"C:\WINDOWS\System32\netsh.exe", ["x"]).short_name(), "netsh");
+        assert_eq!(Argv::new("/sbin/route", ["-n"]).short_name(), "route");
+        assert_eq!(Argv::new("ip", ["r"]).short_name(), "ip");
     }
 
     /// The failure text embeds `{:?}` of the argument vector. Pinning it keeps
