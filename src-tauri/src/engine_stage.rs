@@ -38,6 +38,12 @@
 // back to the bundle would let anyone who can make the copy fail (a FIFO in
 // place of xray is enough) choose what root runs a moment later.
 //
+// Causes a relaunch would not cure are kept out of that path: a staged file
+// that already holds exactly the bundle's bytes is left as it is (so a full
+// disk or an unwritable folder does not lock out a copy that is complete),
+// and a root-owned folder of the chain that is merely group- or world-
+// writable (umask 002 when 0.3.1 created it) is tightened, not refused.
+//
 // <id of this copy> is derived from the bundle's own folder, so two copies of
 // the app keep separate engines (pidfile.rs tells them apart by folder) and a
 // relaunch of the same copy after a crash finds — and stops — what the crash
@@ -129,11 +135,18 @@ pub fn prepare() {
                 Path::new(STAGE_PARENT).join(STAGE_DIR_NAME),
                 home.clone(),
             ];
-            stage(&source_dirs(&own), &parents, 0).map(|count| (home, count))
+            stage(&source_dirs(&own), &parents, 0).map(|staged| (home, staged))
         });
     let result = match outcome {
-        Ok((home, count)) => {
-            crate::logger::log("info", "engine", &format!("{count} engine files copied to the root-owned folder"));
+        Ok((home, staged)) => {
+            crate::logger::log(
+                "info",
+                "engine",
+                &format!(
+                    "engine files in the root-owned folder: {} copied, {} already up to date",
+                    staged.copied, staged.unchanged
+                ),
+            );
             Ok(home)
         }
         Err(reason) => {
@@ -148,34 +161,49 @@ pub fn prepare() {
     let _ = STAGED.set(result);
 }
 
+/// What one `stage` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Staged {
+    /// Files written afresh.
+    copied: usize,
+    /// Files whose staged copy already held exactly the bundle's bytes.
+    unchanged: usize,
+}
+
 /// Create (if missing) and check each folder in `chain`, then copy every
-/// engine and asset found in `sources` into the last one. Returns how many
-/// files were copied. `owner` is the uid every folder must belong to: 0 in
-/// the app, the test runner's own uid in tests.
-fn stage(sources: &[PathBuf], chain: &[PathBuf], owner: u32) -> Result<usize, String> {
+/// engine and asset found in `sources` into the last one, skipping those
+/// whose staged copy is already identical. `owner` is the uid every folder
+/// must belong to: 0 in the app, the test runner's own uid in tests.
+fn stage(sources: &[PathBuf], chain: &[PathBuf], owner: u32) -> Result<Staged, String> {
     let home = chain.last().ok_or_else(|| "no destination".to_string())?;
     for dir in chain {
         ensure_private_dir(dir, owner)?;
     }
 
-    let mut copied = 0usize;
+    let mut plan: Vec<(PathBuf, &str, u32)> = Vec::new();
     for stem in ENGINES {
         let names = pvpn_platform::triple::sidecar_file_names(stem);
         if let Some(src) = first_present(sources, &names) {
-            copy_private(&src, &home.join(stem), 0o755).map_err(|e| format!("{stem}: {e}"))?;
-            copied += 1;
+            plan.push((src, stem, 0o755));
         }
     }
     for asset in ASSETS {
         if let Some(src) = first_present(sources, &[asset.to_string()]) {
-            copy_private(&src, &home.join(asset), 0o644).map_err(|e| format!("{asset}: {e}"))?;
-            copied += 1;
+            plan.push((src, asset, 0o644));
         }
     }
-    if copied == 0 {
+    if plan.is_empty() {
         return Err("no engine found in the bundle".to_string());
     }
-    Ok(copied)
+
+    let mut staged = Staged { copied: 0, unchanged: 0 };
+    for (src, name, mode) in plan {
+        match copy_private(&src, &home.join(name), mode, owner).map_err(|e| format!("{name}: {e}"))? {
+            CopyOutcome::Copied => staged.copied += 1,
+            CopyOutcome::Unchanged => staged.unchanged += 1,
+        }
+    }
+    Ok(staged)
 }
 
 fn first_present(dirs: &[PathBuf], names: &[String]) -> Option<PathBuf> {
@@ -186,23 +214,49 @@ fn first_present(dirs: &[PathBuf], names: &[String]) -> Option<PathBuf> {
 
 /// The folder exists (created 0755 if it did not), is a real folder and not a
 /// link, belongs to `owner`, and nobody else may write into it.
+///
+/// A folder of `owner` that group or others may write into is tightened
+/// (their write bits dropped) instead of refused: 0.3.1 created
+/// /Library/Application Support/ProxysVPN with create_dir_all, and under a
+/// umask of 002 that left it root:admin 775 — refusing it locked every
+/// engine out on every launch until someone ran chmod by hand. Everything is
+/// done through one descriptor opened O_DIRECTORY|O_NOFOLLOW, so the folder
+/// checked is the folder changed, and a link is still refused.
 fn ensure_private_dir(dir: &Path, owner: u32) -> Result<(), String> {
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 
     match std::fs::DirBuilder::new().mode(0o755).create(dir) {
         Ok(()) => {}
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(format!("create {}: {e}", dir.display())),
     }
-    let meta = std::fs::symlink_metadata(dir).map_err(|e| format!("stat {}: {e}", dir.display()))?;
+    let handle = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(dir)
+        .map_err(|e| format!("{} is not a plain folder: {e}", dir.display()))?;
+    let meta = handle.metadata().map_err(|e| format!("stat {}: {e}", dir.display()))?;
     if !meta.file_type().is_dir() {
         return Err(format!("{} is not a plain folder", dir.display()));
     }
     if meta.uid() != owner {
         return Err(format!("{} belongs to uid {}, not {owner}", dir.display(), meta.uid()));
     }
-    if meta.mode() & 0o022 != 0 {
-        return Err(format!("{} is writable by others (mode {:o})", dir.display(), meta.mode() & 0o7777));
+    let mode = meta.mode() & 0o7777;
+    if mode & 0o022 != 0 {
+        let tightened = mode & !0o022;
+        handle
+            .set_permissions(std::fs::Permissions::from_mode(tightened))
+            .map_err(|e| format!("{} is writable by others (mode {mode:o}) and chmod failed: {e}", dir.display()))?;
+        let after = handle.metadata().map_err(|e| format!("stat {}: {e}", dir.display()))?;
+        if after.mode() & 0o022 != 0 {
+            return Err(format!("{} is still writable by others (mode {:o})", dir.display(), after.mode() & 0o7777));
+        }
+        crate::logger::log(
+            "warn",
+            "engine",
+            &format!("{} was writable by others (mode {mode:o}); now {tightened:o}", dir.display()),
+        );
     }
     Ok(())
 }
@@ -239,11 +293,65 @@ fn open_regular_source(src: &Path) -> io::Result<std::fs::File> {
     Ok(from)
 }
 
-/// Copy `src` to `dst` through one descriptor on each side, with `mode`.
-fn copy_private(src: &Path, dst: &Path, mode: u32) -> io::Result<()> {
+/// What `copy_private` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CopyOutcome {
+    Copied,
+    /// The staged file already held exactly these bytes, as a regular file of
+    /// `owner` with `mode`; nothing was written.
+    Unchanged,
+}
+
+/// Does `dst` already hold exactly what `from` holds, as a regular file of
+/// `owner` with exactly `mode`? Any doubt reads as "no", and the caller then
+/// copies as before. Leaves `from` at an unspecified offset.
+fn staged_copy_matches(from: &mut std::fs::File, dst: &Path, mode: u32, owner: u32) -> io::Result<bool> {
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    let Ok(mut staged) = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(dst)
+    else {
+        return Ok(false);
+    };
+    let theirs = staged.metadata()?;
+    let ours = from.metadata()?;
+    if !theirs.file_type().is_file()
+        || theirs.uid() != owner
+        || theirs.mode() & 0o7777 != mode
+        || theirs.len() != ours.len()
+    {
+        return Ok(false);
+    }
+
+    const CHUNK: usize = 64 * 1024;
+    let mut a = vec![0u8; CHUNK];
+    let mut b = vec![0u8; CHUNK];
+    loop {
+        let n = from.read(&mut a)?;
+        if n == 0 {
+            // Both ends at once: the staged file must not be longer.
+            return Ok(staged.read(&mut b[..1])? == 0);
+        }
+        if staged.read_exact(&mut b[..n]).is_err() || a[..n] != b[..n] {
+            return Ok(false);
+        }
+    }
+}
+
+/// Copy `src` to `dst` through one descriptor on each side, with `mode`,
+/// unless `dst` already holds exactly the same bytes.
+fn copy_private(src: &Path, dst: &Path, mode: u32, owner: u32) -> io::Result<CopyOutcome> {
+    use std::io::{Seek, SeekFrom};
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
     let mut from = open_regular_source(src)?;
+    if staged_copy_matches(&mut from, dst, mode, owner)? {
+        return Ok(CopyOutcome::Unchanged);
+    }
+    from.seek(SeekFrom::Start(0))?;
 
     let dir = dst
         .parent()
@@ -273,7 +381,7 @@ fn copy_private(src: &Path, dst: &Path, mode: u32) -> io::Result<()> {
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
-    result
+    result.map(|()| CopyOutcome::Copied)
 }
 
 #[cfg(test)]
@@ -317,8 +425,9 @@ mod tests {
         let home = base.join("stage/engines/x");
         let chain = [base.join("stage"), base.join("stage/engines"), home.clone()];
 
-        let copied = stage(&source_dirs(&own), &chain, me()).expect("staged");
-        assert_eq!(copied, ENGINES.len() + ASSETS.len());
+        let staged = stage(&source_dirs(&own), &chain, me()).expect("staged");
+        assert_eq!(staged.copied, ENGINES.len() + ASSETS.len());
+        assert_eq!(staged.unchanged, 0);
 
         std::fs::write(own.join("xray"), b"#!/bin/sh\necho evil\n").expect("tamper");
         let staged = std::fs::read_to_string(home.join("xray")).expect("staged xray");
@@ -392,25 +501,105 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// Our own folder that others may write into (0.3.1 under umask 002 left
+    /// it root:admin 775) is tightened and used, not refused forever.
     #[test]
-    fn a_folder_someone_else_may_write_into_is_refused() {
+    fn our_folder_that_others_may_write_into_is_tightened() {
         let base = temp_dir("perm");
+        let own = bundle(&base);
+        for (name, loose) in [("open", 0o777), ("group", 0o775), ("sticky", 0o1777)] {
+            let dir = base.join(name);
+            std::fs::create_dir(&dir).expect("dir");
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(loose)).expect("chmod");
+            stage(&source_dirs(&own), std::slice::from_ref(&dir), me()).expect("tightened and staged");
+            let mode = std::fs::symlink_metadata(&dir).expect("meta").permissions().mode() & 0o7777;
+            assert_eq!(mode, loose & !0o022, "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_linked_folder_or_one_of_another_uid_is_refused() {
+        let base = temp_dir("refuse");
         let own = bundle(&base);
         let open = base.join("open");
         std::fs::create_dir(&open).expect("dir");
         std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).expect("chmod");
-        assert!(stage(&source_dirs(&own), std::slice::from_ref(&open), me()).is_err());
 
         let link = base.join("link");
         std::os::unix::fs::symlink(&open, &link).expect("link");
         assert!(stage(&source_dirs(&own), &[link], me()).is_err(), "a linked folder is refused");
+        let mode = std::fs::symlink_metadata(&open).expect("meta").permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o777, "nothing is changed through a link");
 
         let theirs = base.join("theirs");
         std::fs::create_dir(&theirs).expect("dir");
+        std::fs::set_permissions(&theirs, std::fs::Permissions::from_mode(0o777)).expect("chmod");
         assert!(
-            stage(&source_dirs(&own), &[theirs], me().wrapping_add(1)).is_err(),
+            stage(&source_dirs(&own), std::slice::from_ref(&theirs), me().wrapping_add(1)).is_err(),
             "a folder of another uid is refused"
         );
+        let mode = std::fs::symlink_metadata(&theirs).expect("meta").permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o777, "and left as it was");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A relaunch with the same bundle writes nothing: a full disk, or a
+    /// folder nothing can be written into, must not lock out a staged set
+    /// that is already complete.
+    #[test]
+    fn an_unchanged_bundle_keeps_the_staged_set_without_writing() {
+        use std::os::unix::fs::MetadataExt;
+
+        let base = temp_dir("same");
+        let own = bundle(&base);
+        let home = base.join("stage");
+        let chain = [home.clone()];
+        stage(&source_dirs(&own), &chain, me()).expect("first launch");
+        let inode = std::fs::metadata(home.join("xray")).expect("meta").ino();
+
+        // Nothing can be created in the folder any more.
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o555)).expect("chmod");
+        let again = stage(&source_dirs(&own), &chain, me()).expect("second launch");
+        assert_eq!(again, Staged { copied: 0, unchanged: ENGINES.len() + ASSETS.len() });
+        assert_eq!(std::fs::metadata(home.join("xray")).expect("meta").ino(), inode);
+
+        // A changed engine does need a copy, and that one fails closed.
+        std::fs::write(own.join("xray"), b"#!/bin/sh\necho newer\n").expect("update");
+        let err = stage(&source_dirs(&own), &chain, me()).expect_err("cannot write the newer xray");
+        assert!(err.contains("xray"), "{err}");
+
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o755)).expect("chmod back");
+        let updated = stage(&source_dirs(&own), &chain, me()).expect("third launch");
+        assert_eq!(updated.copied, 1);
+        let staged = std::fs::read_to_string(home.join("xray")).expect("staged xray");
+        assert!(staged.contains("echo newer"), "{staged}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Same length, different bytes, or a staged copy whose mode drifted:
+    /// copied again, never trusted.
+    #[test]
+    fn a_staged_copy_that_differs_in_any_way_is_replaced() {
+        let base = temp_dir("differs");
+        let own = bundle(&base);
+        let home = base.join("stage");
+        let chain = [home.clone()];
+        stage(&source_dirs(&own), &chain, me()).expect("first launch");
+
+        let original = std::fs::read(own.join("tun2socks")).expect("source");
+        let mut flipped = original.clone();
+        if let Some(last) = flipped.last_mut() {
+            *last ^= 0x01;
+        }
+        std::fs::write(home.join("tun2socks"), &flipped).expect("same length, other bytes");
+        std::fs::set_permissions(home.join("hysteria"), std::fs::Permissions::from_mode(0o775)).expect("chmod");
+
+        let again = stage(&source_dirs(&own), &chain, me()).expect("second launch");
+        assert_eq!(again.copied, 2);
+        assert_eq!(std::fs::read(home.join("tun2socks")).expect("staged"), original);
+        let mode = std::fs::metadata(home.join("hysteria")).expect("meta").permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o755);
         let _ = std::fs::remove_dir_all(&base);
     }
 
