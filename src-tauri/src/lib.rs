@@ -67,8 +67,11 @@ fn sync_cleanup() {
 fn write_route_hint(server_ip: Ipv4Addr) {
     if let Some(path) = route_hint_path() {
         let contents = net::format_route_hint(std::process::id(), server_ip);
-        if let Err(e) = std::fs::write(&path, contents) {
-            logger::log("warn", "app", &format!("could not write route hint: {}", e));
+        // Not `fs::write`: on macOS this is a fixed name in /tmp written by
+        // root, so following a symlink would be a root-owned write to whatever
+        // a local user pointed it at. See paths::write_private_file.
+        if let Err(e) = pvpn_platform::paths::write_private_file(&path, contents.as_bytes()) {
+            logger::log("warn", "app", &format!("could not write route hint: {:#}", e));
         }
     }
 }
