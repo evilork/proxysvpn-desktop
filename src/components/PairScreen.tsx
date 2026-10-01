@@ -18,7 +18,7 @@
 // must read as a sign-in, never as entering a key, and never mention the bot
 // (it sells top-ups). The mechanics do not change.
 //
-// Pair code v1 sits under the QR as a second way in: the eight characters the
+// Pair code v1.1 sits under the QR as a second way in: the eight characters the
 // cabinet or the bot shows as "Код для приложения", for when the cabinet is
 // open on this same phone and there is nothing to point a camera at. A code
 // that works ends exactly like a scanned QR - the same "done" line, the same
@@ -44,8 +44,8 @@ import {
   isCompletePairCode,
   normalisePairCode,
   pairCodeProblemKey,
+  pairCodeRestMs,
   pastedPairCode,
-  rateLimitPauseMs,
   type PairCodeField,
 } from "../pairCode";
 import { Screen, Spinner, useLatest, useNow, useUi } from "./ui";
@@ -259,9 +259,10 @@ export default function PairScreen({
     } catch (err) {
       const app = toAppError(err);
       setCodeError(t(pairCodeProblemKey(app.code, IS_APPSTORE)));
-      if (app.code === "PAIR_RATE_LIMITED") {
-        setCodePausedUntil(Date.now() + rateLimitPauseMs(app));
-      }
+      // Only a 429 rests the button. After "could not reach the service" the
+      // same code may be sent again at once: the core keeps its request id.
+      const rest = pairCodeRestMs(app);
+      if (rest > 0) setCodePausedUntil(Date.now() + rest);
     } finally {
       setCodeBusy(false);
     }

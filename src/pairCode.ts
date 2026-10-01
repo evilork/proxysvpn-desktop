@@ -1,6 +1,6 @@
 // src/pairCode.ts
 //
-// Pair code v1, the window's half: what the code field does to what a person
+// Pair code v1.1, the window's half: what the code field does to what a person
 // types, and what it says when the core refuses. Pure functions with no
 // build-time input, so node --test runs them as they are; the screen passes
 // `IS_APPSTORE` (src/dist.ts) in.
@@ -8,6 +8,10 @@
 // The rules match the core (src-tauri/src/pair_code.rs) and the service:
 // eight characters of 23456789ABCDEFGHJKMNPQRSTUVWXYZ (no 0 1 I L O), shown
 // as XXXX-XXXX; input is uppercased and loses whitespace and dashes first.
+//
+// The request id of v1.1 never reaches the window: the core keeps one per
+// code and resends it on every press, so all the window has to do after "could
+// not reach the service" is leave the button pressable (`pairCodeRestMs`).
 
 import type { MsgKey } from "./i18n";
 import type { AppError, ErrorCode } from "./types";
@@ -163,4 +167,14 @@ export function rateLimitPauseMs(error: AppError): number {
   const raw = error.detail?.trim() ?? "";
   const seconds = /^\d+$/.test(raw) ? Number(raw) : RATE_LIMIT_PAUSE_MAX_S;
   return Math.min(Math.max(seconds, 1), RATE_LIMIT_PAUSE_MAX_S) * 1000;
+}
+
+/**
+ * How long the button rests after a refusal: the 429's wait, and nothing for
+ * any other. A network failure in particular is pressed again at once - the
+ * core resends the same request id, and the service repeats a link whose
+ * first answer was lost on the way.
+ */
+export function pairCodeRestMs(error: AppError): number {
+  return error.code === "PAIR_RATE_LIMITED" ? rateLimitPauseMs(error) : 0;
 }
