@@ -1,6 +1,15 @@
-# Builds the desktop app on all three targets and uploads the installers as
-# workflow artifacts. Nothing is signed, nothing is published, no secrets are
-# used — every step runs on public runner images only.
+# Builds and tests the desktop app on all three targets. Nothing is signed,
+# nothing is published, no secrets are used — every step runs on public runner
+# images only.
+#
+# The installers are NOT uploaded by default. This repository is public, and a
+# run's artifacts can be downloaded by any signed-in GitHub account: uploading
+# them on every pull request or push to main would hand an unreleased build to
+# strangers before the owner has looked at it. A pull request or a push to
+# main therefore builds and bundles (so a packaging breakage still fails the
+# run) and keeps the files on the runner. Uploading takes a manual run
+# (Actions → desktop-build → Run workflow) with "upload_installers" ticked —
+# a deliberate decision that the build may be seen.
 #
 # Runner images:
 #   macos-latest    arm64  -> .dmg built by src-tauri/scripts/build-release.sh
@@ -17,6 +26,13 @@ name: desktop-build
 
 on:
   workflow_dispatch:
+    inputs:
+      upload_installers:
+        description: >-
+          Upload the installers as run artifacts. The repository is public:
+          any signed-in GitHub account can download them for 14 days.
+        type: boolean
+        default: false
   # main is built too. Without this a merge is never compiled or bundled and a
   # breakage only surfaces on the next pull request — which is exactly how a
   # merged main could sit unverified, and did once in this branch's history.
@@ -183,6 +199,8 @@ jobs:
             -print0 | while IFS= read -r -d '' f; do sha256 "$f"; done
 
       - name: Upload installers
+        # Only on a manual run that asked for it: see the header.
+        if: github.event_name == 'workflow_dispatch' && inputs.upload_installers
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
