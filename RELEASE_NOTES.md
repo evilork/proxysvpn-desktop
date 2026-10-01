@@ -1,3 +1,141 @@
+# ProxysVPN Desktop v0.3.2-beta
+
+🇷🇺 Первый выпуск для трёх систем: macOS (Apple Silicon), Windows 10/11 (x64) и Linux (.deb, x86_64). Плюс исправления по итогам аудита перед публикацией.
+
+🇬🇧 The first release for three systems: macOS (Apple Silicon), Windows 10/11 (x64) and Linux (.deb, x86_64). Plus the fixes from the pre-release audit.
+
+## 🇷🇺 Установка
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt` ниже. Подписи кода пока нет, поэтому каждая система один раз предупреждает.
+
+- **macOS 12+ (Apple Silicon):** откройте `ProxysVPN_0.3.2_aarch64.dmg`, перетащите ProxysVPN на ярлык Applications, затем один раз в Терминале `xattr -dr com.apple.quarantine /Applications/ProxysVPN.app` (или «Всё равно открыть» в Системных настройках → Конфиденциальность и безопасность). При запуске приложение спрашивает пароль администратора. Подробно — INSTALL.md.
+- **Windows 10/11 (x64):** запустите `ProxysVPN_0.3.2_x64-setup.exe`; SmartScreen: «Подробнее» → «Выполнить в любом случае». При каждом запуске — запрос прав администратора (UAC).
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.2_amd64.deb`. Нужен сеанс с агентом polkit. Удаление: `sudo apt remove proxys-vpn`.
+
+## 🇷🇺 Что исправлено
+
+- **Локации Hysteria2 снова работают.** Переход xray → hysteria привязывался к физическому интерфейсу, и соединение с 127.0.0.1 не устанавливалось — ни трафика, ни DNS.
+- **Windows: повторное подключение к тому же узлу.** Маршрут до узла не удалялся (netsh требует имя интерфейса), и следующее подключение, смена локации туда и обратно и перезапуск движка падали до перезагрузки.
+- **Окно на маленьких экранах.** На 1366×768 и ноутбуках с масштабом 150 % нижняя кнопка уходила под панель задач. Окно теперь подстраивается под экран и меняет размер.
+- **Безопасность:** помощник Linux больше не запускает файл по пути от непривилегированного процесса; на macOS движки запускаются из копии в папке root, а не из бандла пользователя (само приложение — пока из бандла, см. ограничения); журнал от root не идёт по ссылкам ни в одной папке на пути к нему; ссылка подписки только по https и не уходит чужим сайтам; QR-привязка принимает ссылки только наших сайтов; конфигурация hysteria защищена от подстановки ключей.
+- **Приватность:** имена открытых сайтов больше не попадают в журнал и «Отчёт для поддержки», а журналы, оставшиеся от 0.3.1, маскируются один раз при первом запуске; на компьютере больше нельзя выбрать «IPv6»/«Оба» (туннель IPv6 не несёт), уведомление о данных говорит об этом; hysteria больше не проверяет обновления у api.hy2.io; настройки на macOS не читаются другими учётными записями.
+- **Починка:** проверка во время починки не засчитывается, если туннель лежит (раньше щит мог стать зелёным при трафике мимо VPN); выбор локации во время починки больше не гоняется с ней; после неудачи «Повторить» берёт свежий список серверов, а если ни один сайт не отвечает — подключается по уже полученному; выбор локации во время отключения больше не включает VPN обратно; на Windows и Linux починка снова поднимает туннель после падения tun2socks; сохранённый список Watafast больше не перекрывает отказ подписки («ссылка занята», «нет средств») и не подменяет свежий список, а ответ защиты хостинга (403) больше не стирает его.
+- **macOS:** запуск и выход больше не удаляют маршруты другого VPN, а подключение больше не пишет в журнал несуществующий «другой VPN»; если движки не удалось скопировать при запуске, окно говорит об этом прямо; минимальная версия — macOS 12 (движки на ней не работают на 11).
+- **Linux:** при смене сети, а также после сбоя или отключения питания отключение возвращает DNS текущей сети, а не старый /etc/resolv.conf; отключение больше не убивает tun2socks других VPN-клиентов; удаление пакета восстанавливает /etc/resolv.conf; без агента polkit приложение говорит об этом прямо.
+- **Интерфейс:** названия стран (в окне, трее, всплывающих сообщениях и истории) и трей по-английски в английском интерфейсе; Esc закрывает только верхнее окно; на Windows нет квадратиков вместо флагов; экран лицензий теперь есть и для Windows и Linux: движки, компоненты Rust и JavaScript и GPL-модули Go внутри движков (остальные Go-модули движков под MIT, BSD, Apache-2.0 пока не перечислены поштучно).
+
+## 🇷🇺 Известные ограничения
+
+- **IPv6 не идёт через туннель** ни на одной системе. Программы, которые сами соединяются по IPv6 (звонки WebRTC, приложения со своим DNS), в сети с IPv6 могут ходить мимо VPN.
+- **Windows:** системный DNS пока не направляется в туннель — имена разрешает DNS вашей сети.
+- **Нет подписи кода и автообновления.**
+- **macOS:** после сбоя или принудительного завершения движки могут работать до следующего запуска ProxysVPN (он их и остановит). Всё приложение работает от root: движки запускаются из копии в папке root, но сам исполняемый файл приложения и его лаунчер — из бандла в «Программах», который принадлежит вам, поэтому программа под вашей учётной записью может подменить их до следующего запуска. Установщик .pkg с привилегированным помощником запланирован.
+- Шаг починки «перечитать подписку» идёт через туннель, который чинится; если все адреса узлов сменились, нажмите «Повторить» — теперь это загрузит свежий список.
+- Windows и Linux проверены вживую на версии 0.3.1 (VLESS); 0.3.2 и локации Hysteria2 на них ещё не проверялись.
+
+## 🇬🇧 Install
+
+Compare each file's SHA-256 with `SHA256SUMS.txt` below. Nothing is code-signed yet, so each system warns once.
+
+- **macOS 12+ (Apple Silicon):** open `ProxysVPN_0.3.2_aarch64.dmg`, drag ProxysVPN onto the Applications shortcut, then once in Terminal `xattr -dr com.apple.quarantine /Applications/ProxysVPN.app` (or "Open Anyway" in System Settings → Privacy & Security). The app asks for the administrator password at launch.
+- **Windows 10/11 (x64):** run `ProxysVPN_0.3.2_x64-setup.exe`; SmartScreen: "More info" → "Run anyway". Every launch asks for administrator rights (UAC).
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.2_amd64.deb`. Needs a session with a polkit agent. Remove with `sudo apt remove proxys-vpn`.
+
+## 🇬🇧 What's fixed
+
+- **Hysteria2 locations work again.** The xray → hysteria hop was pinned to the physical interface, so the 127.0.0.1 connection never opened: no traffic, no DNS.
+- **Windows: reconnecting to the same node.** The node's host route was never deleted (netsh needs the interface), so the next connect, a there-and-back location change and an engine revive failed until a reboot.
+- **The window on small screens.** On 1366×768 and laptops at 150 % the bottom button sat under the taskbar. The window now fits the screen and can be resized.
+- **Security:** the Linux helper no longer runs a file path given by an unprivileged process; macOS runs the engines from a copy in a root-owned folder, not from the user's bundle (the app itself still runs from the bundle, see the limitations); root's log writes follow no link in any folder on the way; subscription links are https-only and never sent to other services' sites; QR pairing accepts only links on our own sites; the hysteria config cannot be fed extra keys.
+- **Privacy:** the names of sites you open no longer reach the log or the support report, and logs left by 0.3.1 are masked once on the first start; desktops no longer offer "IPv6"/"Both" (the tunnel does not carry IPv6) and the data notice says so; hysteria no longer checks api.hy2.io for updates; macOS settings are no longer readable by other accounts.
+- **Repair:** a probe during repair no longer counts when the tunnel is down (the shield could turn green while traffic went outside the VPN); picking a location during repair no longer races the repair; "Retry" after a failure fetches a fresh server list, and connects with the list it already has when no site answers; picking a location during Disconnect no longer turns the VPN back on; on Windows and Linux repair raises the tunnel again after tun2socks died; a cached Watafast list no longer overrides the subscription's refusals ("link in use", "no funds") or a fresh list, and a hosting firewall's 403 no longer deletes it.
+- **macOS:** launching and quitting no longer delete another VPN's routes, and connecting no longer logs a phantom "other VPN"; when the engines could not be copied at launch the window says so; the minimum is now macOS 12 (the engines do not run on 11).
+- **Linux:** after a network change, a crash or a power cut, Disconnect restores the current network's DNS, not an old /etc/resolv.conf; Disconnect no longer kills other VPN clients' tun2socks; removing the package restores /etc/resolv.conf; a session without a polkit agent is named as such.
+- **Interface:** country names (in the window, the tray, the toasts and the history) and the tray in English in the English interface; Esc closes only the top layer; no boxed letters instead of flags on Windows; the licences screen now covers Windows and Linux too: the engines, the Rust and JavaScript components and the GPL Go modules inside the engines (the engines' other Go modules, under MIT, BSD and Apache-2.0, are not listed one by one yet).
+
+## 🇬🇧 Known limitations
+
+- **IPv6 does not go through the tunnel** on any system. Programs that connect over IPv6 on their own (WebRTC calls, apps with their own DNS) can go outside the VPN on an IPv6 network.
+- **Windows:** the system DNS is not sent into the tunnel yet — your network's DNS resolves names.
+- **No code signing and no automatic updates.**
+- **macOS:** after a crash or Force Quit the engines may keep running until ProxysVPN is opened again (which stops them). The whole app runs as root: the engines run from a copy in a root-owned folder, but the app's own executable and its launcher run from the bundle in Applications, which you own, so a program running as your user can replace them before the next launch. A .pkg installer with a privileged helper is planned.
+- The repair step that re-reads the subscription goes through the tunnel being repaired; if every node address changed, press "Retry", which now fetches a fresh list.
+- Windows and Linux were tried live with 0.3.1 (VLESS); 0.3.2 and Hysteria2 locations have not been run on them yet.
+
+---
+
+# ProxysVPN Desktop v0.3.1-beta
+
+🇷🇺 Новые настройки: способ подключения, подключение при запуске, свои правила для сайтов и уведомления. Плюс исправления по итогам проверки 0.3.0.
+
+🇬🇧 New settings: how to connect, connect on launch, your own site rules and notifications. Plus fixes from testing 0.3.0.
+
+## 🇷🇺 Что нового
+
+- **Способ подключения.** Авто, только XHTTP или только Vision. Если у локации нет выбранного способа, она подключится тем, что есть, и напишет об этом в списке.
+- **Подключаться при запуске.** Выключено по умолчанию.
+- **Свои правила.** Два списка сайтов: «всегда напрямую» и «всегда через VPN». Они сильнее правил из подписки.
+- **Уведомления.** macOS сообщит, если защита пропала, и когда она вернулась.
+- Исправлено: двойное «Watafast» в названии локации; сообщение об ошибке ifconfig при каждом подключении; мелькание «не удалось» сразу после подключения; огромные числа в журнале после перезапуска туннеля; долгие ответы DNS в начале сеанса.
+
+## 🇬🇧 What's new
+
+- **How to connect.** Auto, XHTTP only or Vision only. A location without the chosen way still connects with what it has and says so in the list.
+- **Connect on launch.** Off by default.
+- **Your own rules.** Two site lists, «always direct» and «always through the VPN». They take priority over the subscription's rules.
+- **Notifications.** macOS tells you when protection drops and when it is back.
+- Fixed: «Watafast» shown twice in a location name; an ifconfig error logged on every connect; a brief «failed» flash right after connecting; huge byte counts in the log after a tunnel restart; slow DNS answers at the start of a session.
+
+---
+
+# ProxysVPN Desktop v0.3.0-beta
+
+🇷🇺 Watafast: приложение само выбирает способ подключения, помнит, что работает в вашей сети, и подключается, даже когда сайты сервиса не открываются.
+
+🇬🇧 Watafast: the app picks the way to connect by itself, remembers what works on your network, and connects even when the service's sites do not open.
+
+## 🇷🇺 Что нового
+
+- **Watafast.** Локации на XHTTP (Британия, США, Франция) в списке называются «Watafast», автоматический выбор — тоже «Watafast».
+- **Память по сети.** Приложение запоминает, какая локация сработала дома, на работе, в мобильной сети, и в следующий раз начинает с неё.
+- **Гонка в новой сети.** В незнакомой сети два варианта подключения стартуют одновременно, побеждает первый ответивший.
+- **Подписанный список серверов.** Приложение получает от сервиса список, подписанный ключом сервиса, и хранит последний проверенный. Если ни один сайт сервиса не открывается, оно подключается по сохранённому списку. Поддельный список отвергается.
+- Исправлено: смена сети без отключения больше не путает память по сетям; служебный локальный порт гонки закрывается сразу после выбора и, пока открыт, требует пароль.
+
+## 🇬🇧 What's new
+
+- **Watafast.** XHTTP locations (Britain, USA, France) are shown as «Watafast», and so is the automatic choice.
+- **Per-network memory.** The app remembers which location worked at home, at work and on mobile data, and starts there next time.
+- **A race on a new network.** On a network it does not know yet, two ways to connect start at once and the first to answer wins.
+- **Signed server list.** The app gets a list signed with the service's key and keeps the last verified one. When none of the service's sites opens, it connects from the stored list; a forged list is rejected.
+- Fixed: changing networks without disconnecting no longer mixes up the per-network memory; the race's local helper port closes right after the choice and requires a password while it exists.
+
+---
+
+# ProxysVPN Desktop v0.2.0-beta
+
+🇷🇺 Быстрее подключается, работает на всех локациях, включая «Британия · XHTTP».
+
+🇬🇧 Connects faster and works on every location, «Britain · XHTTP» included.
+
+## 🇷🇺 Что нового
+
+- **XHTTP.** Локации на новом транспорте XHTTP («Британия · XHTTP») подключаются. Прежняя версия собирала для них обычное TCP-соединение, и они не работали.
+- **Протокол в списке стран.** Под каждой локацией видно, на чём она работает: «VLESS · Vision», «VLESS · XHTTP», «Hysteria2». Имя локации показывается целиком, как его пишет сервис.
+- **Подключение за 2–4 секунды** вместо 7–30: сохранённая подписка, прогрев по адресу и гонка попыток.
+- **Сайты открываются сразу после подключения.** Исправлено «подключено, но ничего не грузится» на Mac с DNS 8.8.8.8 / 1.1.1.1: на время сеанса приложение ведёт системный DNS через туннель и возвращает его при отключении, в том числе если приложение закроется аварийно.
+- Журнал пишет, какая локация и протокол выбраны и сколько занял каждый шаг подключения (без адресов).
+
+## 🇬🇧 What's new
+
+- **XHTTP.** Locations on the XHTTP transport («Britain · XHTTP») now connect; the previous build set them up as plain TCP and they never worked.
+- **Protocol in the list of countries**: «VLESS · Vision», «VLESS · XHTTP», «Hysteria2» under every location, with the full name the service gives it.
+- **Connects in 2-4 seconds** instead of 7-30: a fresh stored subscription, an address-based warm-up and racing attempts.
+- **Sites load right after connecting.** Fixed "connected but nothing loads" on Macs with DNS 8.8.8.8 / 1.1.1.1: for the session the system resolver goes through the tunnel, and is handed back on disconnect — or on a crash.
+- The log names the chosen location and protocol and times every connect step (no addresses).
+
+---
+
 # ProxysVPN Desktop v0.1.0-beta
 
 🇷🇺 Первый публичный релиз. Бета-версия для Apple Silicon Mac.
@@ -20,17 +158,15 @@
 
 ## Установка
 
-1. Скачай **`ProxysVPN_0.1.0_aarch64.dmg`** из этого релиза (внизу страницы, в Assets)
-2. Открой `.dmg`, перетащи `ProxysVPN.app` в **Программы**
-3. **Один раз** запусти в Терминале:
-   ```bash
-   xattr -cr /Applications/ProxysVPN.app
-   ```
-4. Запусти из Программ
-5. Введи свою ссылку подписки (получить на [proxysvpn.com](https://proxysvpn.com))
-6. Нажми кнопку питания
+1. Скачай **`ProxysVPN_0.1.0_aarch64.dmg`** из Assets ниже
+2. Открой `.dmg` (двойной клик)
+3. Двойной клик на **«ProxysVPN Installer»**
+4. Нажми **«Установить»** → введи пароль администратора если попросит
+5. Готово — приложение запустится автоматически. Введи свою ссылку подписки и нажми кнопку питания.
 
-> Команда `xattr` нужна один раз — снимает карантинный флаг macOS. Без Apple Developer ID ($99/год) приложение не может пройти полную нотаризацию, поэтому это пока такой workaround.
+> При первом запуске Installer macOS может спросить «открыть приложение от неизвестного разработчика» — нажми **«Открыть»**. Это разовое действие.
+
+Получить ссылку подписки: [proxysvpn.com](https://proxysvpn.com)
 
 ## Системные требования
 
@@ -40,7 +176,7 @@
 
 ## Известные ограничения
 
-- 🟡 **Нет Apple Developer подписи** — нужна команда `xattr` (см. выше). Будет в v1.0
+- 🟡 **Бета-сборка** — приложение подписано ad-hoc (без Apple Developer ID). Установщик берёт это на себя автоматически. В v1.0 будет полная нотаризация Apple
 - 🟡 **Только Apple Silicon** — Intel x86_64 в планах на v0.2
 - 🟡 **Нет авто-обновлений** — следующие версии надо скачивать вручную
 - 🟡 **Только VLESS Reality** — другие протоколы (Hysteria2, WireGuard) в планах
@@ -48,8 +184,8 @@
 ## Сообщить о проблеме
 
 1. Открой приложение
-2. Нажми кнопку (i) в нижнем правом углу
-3. Нажми **Скачать .txt**
+2. Нажми кнопку **(i)** в нижнем правом углу
+3. Нажми **«Скачать .txt»**
 4. Создай [issue](https://github.com/evilork/proxysvpn-desktop/issues/new) и приложи файл
 
 ---
@@ -69,16 +205,14 @@ First public build of the desktop client for [ProxysVPN](https://proxysvpn.com).
 ## Installation
 
 1. Download **`ProxysVPN_0.1.0_aarch64.dmg`** from Assets below
-2. Open `.dmg`, drag `ProxysVPN.app` to **Applications**
-3. Run **once** in Terminal:
-   ```bash
-   xattr -cr /Applications/ProxysVPN.app
-   ```
-4. Launch from Applications
-5. Enter your subscription URL (get one at [proxysvpn.com](https://proxysvpn.com))
-6. Hit the power button
+2. Open the `.dmg` (double-click)
+3. Double-click **"ProxysVPN Installer"**
+4. Click **"Install"** → enter admin password if prompted
+5. Done — the app launches automatically. Enter your subscription URL and hit the power button.
 
-> The `xattr` command is needed once — it removes the macOS quarantine flag. Without an Apple Developer ID ($99/year) we can't do full notarization yet, so this is a temporary workaround.
+> On first launch the Installer, macOS may ask whether to "open an app from an unidentified developer" — click **"Open"**. One-time action.
+
+Get a subscription URL: [proxysvpn.com](https://proxysvpn.com)
 
 ## System requirements
 
@@ -88,7 +222,7 @@ First public build of the desktop client for [ProxysVPN](https://proxysvpn.com).
 
 ## Known limitations
 
-- 🟡 **No Apple Developer signature** — `xattr` workaround required (see above). Coming in v1.0
+- 🟡 **Beta build** — ad-hoc signed (no Apple Developer ID yet). The installer handles this transparently. Full Apple notarization coming in v1.0
 - 🟡 **Apple Silicon only** — Intel x86_64 planned for v0.2
 - 🟡 **No auto-updates** — future versions need manual download
 - 🟡 **VLESS Reality only** — other protocols (Hysteria2, WireGuard) planned
@@ -96,8 +230,8 @@ First public build of the desktop client for [ProxysVPN](https://proxysvpn.com).
 ## Reporting issues
 
 1. Open the app
-2. Click the (i) button in the bottom-right corner
-3. Click **Download .txt**
+2. Click the **(i)** button in the bottom-right corner
+3. Click **"Download .txt"**
 4. Open an [issue](https://github.com/evilork/proxysvpn-desktop/issues/new) and attach the file
 
 ---
