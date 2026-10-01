@@ -39,6 +39,7 @@ mod probe;
 mod netmem;
 mod manifest;
 mod motion;
+mod site_ladder;
 mod subscription;
 mod tunnel_prefs;
 mod notify_prefs;
@@ -3619,54 +3620,43 @@ fn http_client() -> Result<reqwest::Client, AppError> {
         })
 }
 
-/// Walk the ladder of site names until one answers. Sequential on purpose:
-/// four simultaneous handshakes to four of our names is a pattern worth
-/// recognising on a filtering network, and the first name almost always works.
+/// Walk the ladder of site names until one answers (site_ladder.rs: in
+/// order, one at a time). A 404 is the endpoint's own "nothing there".
 async fn ladder_get(path: &str) -> Result<(String, String), AppError> {
-    let client = http_client()?;
-    let mut last = AppError::new(ErrorCode::SubUnreachable);
-    for host in SITE_LADDER {
-        let url = format!("https://{host}{path}");
-        match client.get(&url).send().await {
-            Ok(response) if response.status().is_success() => {
-                let body = response.text().await.unwrap_or_default();
-                return Ok((host.to_string(), body));
-            }
-            Ok(response) if response.status() == 404 => {
-                return Err(AppError::new(ErrorCode::SubEmpty));
-            }
-            Ok(response) => {
-                logger::log("warn", "pair", &format!("{host} answered {}", response.status()));
-                last = AppError::new(ErrorCode::SubUnreachable);
-            }
-            Err(e) => {
-                logger::log("warn", "pair", &format!("{host} unreachable: {e}"));
-                last = AppError::new(ErrorCode::SubUnreachable);
-            }
+    let wire = site_ladder::HttpWire::new(http_client()?);
+    site_ladder::walk(&wire, &SITE_LADDER, site_ladder::Method::Get, path, None, |host, reply| {
+        if reply.is_success() {
+            site_ladder::Verdict::Done((host.to_string(), reply.body))
+        } else if reply.status == 404 {
+            site_ladder::Verdict::Stop(AppError::new(ErrorCode::SubEmpty))
+        } else {
+            site_ladder::Verdict::Next
         }
-    }
-    Err(last)
+    })
+    .await
 }
 
-async fn ladder_post(path: &str) -> Result<(String, String), AppError> {
-    let client = http_client()?;
-    let mut last = AppError::new(ErrorCode::SubUnreachable);
-    for host in SITE_LADDER {
-        let url = format!("https://{host}{path}");
-        match client.post(&url).send().await {
-            Ok(response) if response.status().is_success() => {
-                let body = response.text().await.unwrap_or_default();
-                return Ok((host.to_string(), body));
-            }
-            Ok(_) | Err(_) => last = AppError::new(ErrorCode::SubUnreachable),
+/// The same walk for a POST, with an optional JSON body. Anything but a 2xx
+/// sends the request on to the next name. `/api/pair/code`, whose errors are
+/// answers, judges its replies itself (`pair_code::redeem`) over this ladder.
+async fn ladder_post(
+    path: &str,
+    json: Option<&serde_json::Value>,
+) -> Result<(String, String), AppError> {
+    let wire = site_ladder::HttpWire::new(http_client()?);
+    site_ladder::walk(&wire, &SITE_LADDER, site_ladder::Method::Post, path, json, |host, reply| {
+        if reply.is_success() {
+            site_ladder::Verdict::Done((host.to_string(), reply.body))
+        } else {
+            site_ladder::Verdict::Next
         }
-    }
-    Err(last)
+    })
+    .await
 }
 
 /// `POST /api/pair/new` → `{"token": "<32 hex>", "expiresIn": 300}`.
 async fn start_pairing() -> Result<PairSession, AppError> {
-    let (_, body) = ladder_post("/api/pair/new").await?;
+    let (_, body) = ladder_post("/api/pair/new", None).await?;
     let parsed: serde_json::Value =
         serde_json::from_str(&body).map_err(|_| AppError::new(ErrorCode::SubInvalid))?;
     let token = parsed
