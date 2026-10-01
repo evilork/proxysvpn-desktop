@@ -128,6 +128,9 @@ fn adapter_rows() -> Result<Vec<p::AdapterRow>> {
     Ok(out)
 }
 
+/// How long removing one leftover adapter may take before we go on without.
+const STALE_REMOVAL_LIMIT: Duration = Duration::from_secs(10);
+
 /// Free our adapter name before tun2socks asks for it: remove what is left
 /// of earlier adapters under that name whose device is gone. Best effort —
 /// `device_index` copes with a leftover that stays — but with the name free
@@ -145,17 +148,19 @@ async fn free_device_name() {
             log::warn("net", &format!("leftover {} (index {}) has no usable GUID", stale.alias, stale.index));
             continue;
         };
-        match argv.output().await {
-            Ok(out) => {
-                let removed = String::from_utf8_lossy(&out.stdout).split_whitespace().count();
-                log::info(
-                    "net",
-                    &format!(
-                        "leftover {} (index {}, device gone): removed {} device(s)",
-                        stale.alias, stale.index, removed
-                    ),
-                );
-            }
+        // Bounded: connecting must never hang on housekeeping.
+        match argv.output_within(STALE_REMOVAL_LIMIT).await {
+            Ok(out) if out.status.success() => log::info(
+                "net",
+                &format!("leftover {} (index {}, device gone): removed", stale.alias, stale.index),
+            ),
+            Ok(out) => log::warn(
+                "net",
+                &format!(
+                    "leftover {} (index {}) not removed: pnputil {}",
+                    stale.alias, stale.index, out.status
+                ),
+            ),
             Err(e) => log::warn("net", &format!("could not remove leftover {}: {e:#}", stale.alias)),
         }
     }

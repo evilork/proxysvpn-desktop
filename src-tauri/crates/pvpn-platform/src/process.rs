@@ -45,6 +45,9 @@ impl Argv {
     fn command(&self) -> Command {
         let mut cmd = Command::new(&self.program);
         cmd.args(&self.args);
+        // A command whose future is dropped (a timeout, a cancelled connect)
+        // must not keep running behind our back.
+        cmd.kill_on_drop(true);
         no_window(&mut cmd);
         cmd
     }
@@ -109,6 +112,13 @@ impl Argv {
             .output()
             .await
             .with_context(|| format!("spawn {} {:?}", self.program, self.args))
+    }
+
+    /// `output`, but given up on — and the child killed — after `limit`.
+    pub async fn output_within(&self, limit: std::time::Duration) -> Result<Output> {
+        tokio::time::timeout(limit, self.output())
+            .await
+            .map_err(|_| anyhow!("{} gave no answer within {}s", self.short_name(), limit.as_secs()))?
     }
 
     /// stdout as UTF-8 (lossy), or `None` when the command could not run.
