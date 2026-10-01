@@ -34,6 +34,7 @@ import {
 } from "../bridge";
 import { IS_APPSTORE } from "../dist";
 import type { MsgKey } from "../i18n";
+import { tunnelHintKeys } from "../platformCopy";
 import { Screen, Spinner, useUi } from "./ui";
 
 const IP_KINDS: [IpKind, MsgKey][] = [
@@ -127,6 +128,9 @@ export default function TunnelScreen({
   const customMissing = prefs.dns === "custom" && prefs.customDns.trim() === "";
   // See the header: on iOS these two choices would change nothing.
   const engineOwnsDns = platform === "ios";
+  // On Windows they reach the engine only (src/platformCopy.ts), and the
+  // hints say so instead of promising that lookups stay in the tunnel.
+  const hints = tunnelHintKeys(platform);
 
   return (
     <Screen
@@ -210,7 +214,7 @@ export default function TunnelScreen({
             <div className="row">
               <span className="row-main">
                 <span className="row-title">{t("tun.ip")}</span>
-                <span className="row-sub">{t("tun.ipHint")}</span>
+                <span className="row-sub">{t(hints.ip)}</span>
               </span>
             </div>
             <div className="row">
@@ -232,7 +236,7 @@ export default function TunnelScreen({
             <div className="row">
               <span className="row-main">
                 <span className="row-title">{t("tun.dns")}</span>
-                <span className="row-sub">{t("tun.dnsHint")}</span>
+                <span className="row-sub">{t(hints.dns)}</span>
               </span>
             </div>
             <div className="row">

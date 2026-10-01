@@ -524,14 +524,18 @@ impl Privileged for Windows {
     /// *opposite*: it clears the resolver list on the tunnel adapter.
     ///
     /// Windows queries every adapter that has a resolver configured, in
-    /// parallel, and takes the first answer. Publishing a resolver on the
-    /// tunnel would therefore send a copy of each lookup into the tunnel, where
-    /// the generated xray config has no `dns` section and nothing answers; the
-    /// race would show up as names that resolve only sometimes. With no
-    /// resolver on the adapter, lookups go out over the physical link and their
-    /// packets are proxied like all other traffic under 0.0.0.0/1 — the same
-    /// behaviour as macOS. NRPT, which would scope DNS to the tunnel properly,
-    /// belongs with the `dns` work in the config builder.
+    /// parallel, and takes the first answer, so publishing a resolver on the
+    /// tunnel alone would not keep lookups inside it. With no resolver on the
+    /// adapter, lookups go to the network's resolver: through the tunnel when
+    /// that resolver is a public address (0.0.0.0/1 and 128.0.0.0/1 cover it),
+    /// past it when it sits on the local network, whose route is more
+    /// specific. The tunnel is IPv4 only, so IPv6 traffic passes it as well.
+    ///
+    /// This is NOT what 0.3.1 does on macOS, where sysdns.rs points the
+    /// system at `subscription::TUNNEL_DNS` and xray answers it through
+    /// dns-out. The window says so on Windows (src/platformCopy.ts) until the
+    /// same is done here: TUNNEL_DNS on the adapter plus an NRPT rule for "."
+    /// so Windows asks nothing else, and IPv6 carried or blocked.
     async fn configure_dns(_servers: &[IpAddr]) -> Result<()> {
         Ok(())
     }

@@ -246,6 +246,8 @@ const ru = {
   "tun.muxWhy": "Недоступно: наши узлы идут с XTLS Vision, а он с ним несовместим. Тумблер ничего бы не менял.",
   "tun.ip": "Тип адресов",
   "tun.ipHint": "Какие адреса спрашивать у резолвера. IPv6-выхода у наших узлов нет, поэтому по умолчанию только IPv4.",
+  "tun.ipHintWindows":
+    "Какие адреса спрашивает сам VPN-движок. Программ на Windows это не касается: их IPv6-трафик пока идёт мимо туннеля.",
   "tun.ip.v4": "IPv4",
   "tun.ip.v6": "IPv6",
   "tun.ip.both": "Оба",
@@ -254,6 +256,8 @@ const ru = {
   // Cloudflare and TCP to Google, both through the node - not a resolver of ours.
   "tun.dnsHint":
     "Кто разрешает имена. Cloudflare и Google спрашиваются через VPN-сервер, поэтому запросы не уходят мимо туннеля.",
+  "tun.dnsHintWindows":
+    "Резолвер самого VPN-движка. Windows и программы пока спрашивают DNS вашей сети, что бы здесь ни было выбрано.",
   "tun.dns.internal": "Cloudflare и Google",
   "tun.dns.system": "Системный",
   "tun.dns.custom": "Указать",
@@ -590,6 +594,10 @@ const ru = {
     "Имена сайтов разрешает Cloudflare по DNS-over-HTTPS — через VPN-сервер. Имена сайтов, которые открываются напрямую (российских и тех, что вы внесли в «Всегда напрямую»), разрешает публичный DNS Яндекса, мимо VPN. Адрес самого VPN-сервера приложение узнаёт через DNS вашей сети.",
   "notice.dns.desktop":
     "Имена сайтов разрешают Cloudflare и Google — запросы к ним идут через VPN-сервер. В настройках туннеля можно выбрать системный или свой резолвер.",
+  // Windows leaves the system resolver alone and its tunnel is IPv4 only
+  // (src/platformCopy.ts): the desktop sentence above would be false there.
+  "notice.dns.windows":
+    "На Windows приложение пока не направляет системный DNS в туннель: имена сайтов разрешает DNS вашей сети (обычно роутер или провайдер), и эти запросы могут идти мимо VPN. Если ваша сеть даёт IPv6, сайты с IPv6-адресом тоже могут открываться мимо VPN.",
   "notice.noActivityLogs": "Мы не записываем, какие сайты вы открываете.",
   "notice.log":
     "Технический журнал хранится только на этом устройстве. Отчёт для поддержки покидает его, только если вы отправите его сами.",
@@ -800,12 +808,16 @@ const en: Partial<Record<MsgKey, string>> = {
   "tun.muxWhy": "Unavailable: our nodes use XTLS Vision, which it cannot work with. The switch would change nothing.",
   "tun.ip": "Address family",
   "tun.ipHint": "Which records to ask for. Our nodes have no IPv6 exit, so IPv4 only by default.",
+  "tun.ipHintWindows":
+    "Which records the VPN engine itself asks for. Other programs on Windows are not affected: their IPv6 traffic still goes outside the tunnel.",
   "tun.ip.v4": "IPv4",
   "tun.ip.v6": "IPv6",
   "tun.ip.both": "Both",
   "tun.dns": "Resolver",
   "tun.dnsHint":
     "Who resolves names. Cloudflare and Google are asked through the VPN server, so queries cannot leak past the tunnel.",
+  "tun.dnsHintWindows":
+    "The VPN engine's own resolver. Windows and its programs still ask your network's DNS, whatever is chosen here.",
   "tun.dns.internal": "Cloudflare & Google",
   "tun.dns.system": "System",
   "tun.dns.custom": "Set one",
@@ -1094,6 +1106,8 @@ const en: Partial<Record<MsgKey, string>> = {
     "Site names are resolved by Cloudflare over DNS-over-HTTPS, through the VPN server. Names of sites that open directly (Russian ones and those on your “Always direct” list) are resolved by Yandex public DNS, outside the VPN. The app looks up the VPN server's own address through your network's DNS.",
   "notice.dns.desktop":
     "Site names are resolved by Cloudflare and Google, asked through the VPN server. Tunnel settings let you pick the system resolver or one of your own.",
+  "notice.dns.windows":
+    "On Windows the app does not yet send the system DNS into the tunnel: site names are resolved by your network's DNS (usually your router or provider), and those lookups may go outside the VPN. If your network offers IPv6, sites with an IPv6 address may open outside the VPN too.",
   "notice.noActivityLogs": "We do not record which sites you open.",
   "notice.log":
     "The technical log stays on this device. A support report leaves it only when you send it yourself.",

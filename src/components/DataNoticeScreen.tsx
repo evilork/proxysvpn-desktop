@@ -16,12 +16,9 @@
 // screen cannot back up does not go on it: "we keep no logs" waits for
 // NO_ACTIVITY_LOGS_CONFIRMED (src/legal.ts).
 //
-// The resolvers differ by engine, so the DNS line does too: the Apple engine
-// (xray_apple.rs) asks Cloudflare over HTTPS through the server, sends every
-// name routed direct (Russian ones, the person's "Всегда напрямую") to
-// Yandex's public DNS, and looks up the server's own name with the network's
-// resolver; the desktop engine asks Cloudflare and Google through the server,
-// or whatever the person set in Tunnel settings.
+// The resolvers differ by engine and platform, so the DNS line does too:
+// src/platformCopy.ts holds which sentence each one may say and why. Windows
+// has its own, because it does not point the system resolver into the tunnel.
 
 import { useEffect, useRef } from "react";
 
@@ -29,22 +26,10 @@ import type { AppInfo } from "../bridge";
 import { IS_APPSTORE } from "../dist";
 import type { MsgKey } from "../i18n";
 import { NO_ACTIVITY_LOGS_CONFIRMED, privacyUrl, termsUrl } from "../legal";
+import { dnsNoticeKey } from "../platformCopy";
 import { Screen, Spinner, useUi } from "./ui";
 
 type Platform = AppInfo["platform"];
-
-/**
- * Which engine's resolvers to name. Before `app_info` answers, the build
- * decides: every App Store build today is iOS, the direct build is a desktop
- * one (macOS, Windows or Linux), and all three run the same xray config.
- */
-function dnsKey(platform: Platform | undefined): MsgKey {
-  if (platform === "ios") return "notice.dns.apple";
-  if (platform === "macos" || platform === "windows" || platform === "linux") {
-    return "notice.dns.desktop";
-  }
-  return IS_APPSTORE ? "notice.dns.apple" : "notice.dns.desktop";
-}
 
 function bulletKeys(platform: Platform | undefined): MsgKey[] {
   const keys: MsgKey[] = [
@@ -53,7 +38,7 @@ function bulletKeys(platform: Platform | undefined): MsgKey[] {
     "notice.version",
     "notice.ip",
     "notice.traffic",
-    dnsKey(platform),
+    dnsNoticeKey(platform, IS_APPSTORE),
   ];
   if (NO_ACTIVITY_LOGS_CONFIRMED) keys.push("notice.noActivityLogs");
   keys.push("notice.log", "notice.promise");
