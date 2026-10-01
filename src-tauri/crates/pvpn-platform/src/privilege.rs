@@ -89,9 +89,11 @@ fn windows_is_elevated() -> anyhow::Result<bool> {
 pub enum ElevationUnavailable {
     /// pkexec (polkit) is not installed: there is no system dialog to show.
     NoPkexec,
-    /// This executable lives on a FUSE mount — an AppImage. The kernel lets
-    /// nobody but the user who mounted it execute from there, root included,
-    /// so pkexec would ask for the password and then fail to start the helper.
+    /// This executable lives on a FUSE mount that is not an AppImage we
+    /// recognise (an AppImage is: helper/install.rs copies its helper out).
+    /// The kernel lets nobody but the user who mounted it execute from there,
+    /// root included, so pkexec would ask for the password and then fail to
+    /// start the helper.
     FuseMount,
     /// pkexec is installed but the session runs no polkit authentication
     /// agent (i3, sway, Openbox and other minimal sessions): there is no
@@ -117,7 +119,7 @@ impl std::fmt::Display for ElevationUnavailable {
                 "не найден pkexec (polkit) — установите пакет pkexec или policykit-1 либо запустите приложение от root"
             }
             Self::FuseMount => {
-                "приложение запущено из AppImage, а root не может запустить файл из её монтирования — установите пакет .deb"
+                "приложение запущено из FUSE-монтирования, откуда root не может запустить файл — установите пакет .deb или запустите сам файл AppImage"
             }
             Self::NoAgent => {
                 "в сеансе нет агента авторизации polkit, окну пароля негде появиться — запустите агент (например, polkit-gnome или lxpolkit) или войдите в полноценный рабочий стол"
@@ -133,10 +135,78 @@ pub fn is_elevation_unavailable(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| cause.is::<ElevationUnavailable>())
 }
 
+/// The AppImage's root-owned copy of the helper (helper/install.rs) could not
+/// be made or cannot be trusted: a folder on the way that others may change,
+/// a staged file that did not hash to its sum, a full disk. The person's
+/// password was not the problem, so it is not a refusal either; the GUI shows
+/// the "could not prepare its files" screen, and the log carries the reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HelperSetupFailed(pub String);
+
+impl std::fmt::Display for HelperSetupFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "помощник не скопирован в папку root: {}", self.0)
+    }
+}
+
+impl std::error::Error for HelperSetupFailed {}
+
+/// Does `err`, anywhere in its chain, carry a failed helper setup?
+pub fn is_helper_setup_failure(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| cause.is::<HelperSetupFailed>())
+}
+
+/// Why a pkexec child died before the helper answered its first request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandshakeFailure {
+    /// 126: the dialog was dismissed.
+    Dismissed,
+    /// 127 with any other line: not authorized (a wrong password three
+    /// times), or pkexec could not run the program.
+    NotAuthorized,
+    /// 127 with pkexec's "No authentication agent found".
+    NoAgent,
+    /// The AppImage's setup script stopped with this exit code; its own
+    /// stderr line, in the log, says why.
+    SetupFailed(i32),
+    /// Still running, killed by a signal, or a code that means none of the
+    /// above.
+    Other,
+}
+
+/// Read a dead pkexec child: its exit code, the start of its stderr, and
+/// whether it was running the AppImage's setup script.
+///
+/// The setup is checked first and by its name on stderr, not by the code: a
+/// shell that cannot exec the installed helper (a /home mounted noexec) exits
+/// 126 or 127 itself, and must not be read as the person's answer. Both the
+/// shell's own messages and the script's start with `$0`, which is
+/// `install::SETUP_NAME`.
+pub fn handshake_failure(exit: Option<i32>, stderr: &str, setup: bool) -> HandshakeFailure {
+    let Some(code) = exit else {
+        return HandshakeFailure::Other;
+    };
+    if setup && stderr.contains(crate::helper::install::SETUP_NAME) {
+        return HandshakeFailure::SetupFailed(code);
+    }
+    match code {
+        126 => HandshakeFailure::Dismissed,
+        127 if pkexec_unavailable(exit, stderr).is_some() => HandshakeFailure::NoAgent,
+        127 => HandshakeFailure::NotAuthorized,
+        // The script's own codes, should its line not have reached us.
+        _ if setup => HandshakeFailure::SetupFailed(code),
+        _ => HandshakeFailure::Other,
+    }
+}
+
 /// Why we cannot gain privileges, or `None` when we can.
 ///
 /// Linux only: it is the one platform where elevation happens at connect time
 /// rather than at launch, so the reason has to be reportable mid-session.
+/// Asked for the .deb and every other start that runs our own executable as
+/// the helper; an AppImage never gets here (net/linux.rs recognises it first
+/// and starts the root-owned copy, helper/install.rs), so the FUSE check below
+/// is left for a FUSE mount we do not know.
 #[cfg(target_os = "linux")]
 pub fn elevation_blocker() -> Option<ElevationUnavailable> {
     if is_elevated() {
@@ -160,9 +230,8 @@ pub fn elevation_blocker() -> Option<ElevationUnavailable> {
 const FUSE_SUPER_MAGIC: libc::__fsword_t = 0x6573_5546;
 
 /// Is `path` on a FUSE file system? Asked of the kernel rather than guessed
-/// from `$APPIMAGE` or a `/tmp/.mount_` prefix: an AppImage extracted with
-/// --appimage-extract-and-run is a plain directory root can execute from, and
-/// the environment variable is inherited by whatever an AppImage starts.
+/// from a `/tmp/.mount_` prefix: whatever the mount is, root cannot execute
+/// from it.
 #[cfg(target_os = "linux")]
 fn on_fuse_mount(path: &std::path::Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
@@ -263,8 +332,40 @@ mod tests {
         assert!(ElevationUnavailable::NoAgent.to_string().contains("polkit"));
     }
 
-    /// The AppImage text sends the person to the package that works, and the
-    /// pkexec one names both package spellings the .deb depends on.
+    /// A setup that failed is told apart from the person's answer by its
+    /// name on stderr, whatever its code; without it, 126 and 127 are
+    /// pkexec's own.
+    #[test]
+    fn a_failed_setup_is_not_read_as_a_refusal() {
+        let shell = "proxysvpn-setup: line 25: /home/.proxysvpn/bin/proxysvpn-helper: Permission denied";
+        assert_eq!(handshake_failure(Some(126), shell, true), HandshakeFailure::SetupFailed(126));
+        let script = "proxysvpn-setup: tun2socks does not match its checksum";
+        assert_eq!(handshake_failure(Some(65), script, true), HandshakeFailure::SetupFailed(65));
+        assert_eq!(handshake_failure(Some(73), "", true), HandshakeFailure::SetupFailed(73));
+
+        assert_eq!(handshake_failure(Some(126), "", true), HandshakeFailure::Dismissed);
+        let no_agent = "Error executing command as another user: No authentication agent found.";
+        assert_eq!(handshake_failure(Some(127), no_agent, true), HandshakeFailure::NoAgent);
+        assert_eq!(handshake_failure(Some(127), "Not authorized", true), HandshakeFailure::NotAuthorized);
+
+        // The installed helper, or the .deb's: no setup to blame.
+        assert_eq!(handshake_failure(Some(126), "", false), HandshakeFailure::Dismissed);
+        assert_eq!(handshake_failure(Some(127), no_agent, false), HandshakeFailure::NoAgent);
+        assert_eq!(handshake_failure(Some(65), script, false), HandshakeFailure::Other);
+        assert_eq!(handshake_failure(None, no_agent, true), HandshakeFailure::Other);
+    }
+
+    #[test]
+    fn a_failed_setup_is_found_through_context_and_is_not_unavailability() {
+        let err = anyhow::Error::new(HelperSetupFailed("/home is writable by others".to_string()))
+            .context("spawn the privileged helper");
+        assert!(is_helper_setup_failure(&err));
+        assert!(!is_elevation_unavailable(&err));
+        assert!(!is_helper_setup_failure(&anyhow::anyhow!("запрос прав отменён")));
+    }
+
+    /// The FUSE text sends the person to what works, and the pkexec one
+    /// names both package spellings the .deb depends on.
     #[test]
     fn each_reason_names_its_way_out() {
         assert!(ElevationUnavailable::FuseMount.to_string().contains(".deb"));

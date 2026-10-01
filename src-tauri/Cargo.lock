@@ -2931,6 +2931,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "sha2",
  "socket2",
  "tokio",
  "windows 0.62.2",

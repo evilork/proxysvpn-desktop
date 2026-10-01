@@ -29,6 +29,10 @@ tokio = { version = "1", features = ["process", "time", "rt", "sync", "io-util"]
 # Already in the tree through tokio, pure Rust over libc / windows-sys; "all"
 # only unlocks the interface-binding calls.
 socket2 = { version = "0.6", features = ["all"] }
+# SHA-256 of the AppImage's helper and tun2socks, checked again by root after
+# it copies them (helper/install.rs). Already in the app through the GUI
+# crate's network memory; pure Rust, so the cross-check still needs no C.
+sha2 = "0.10"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -18,7 +18,9 @@
 //   2. File capabilities (`setcap cap_net_admin+ep`) are not inherited by child
 //      processes, so tun2socks would still lack them, and capabilities are lost
 //      inside an AppImage mount — the .deb and the AppImage would need two
-//      different privilege models.
+//      different privilege models. They share this one: the AppImage runs a
+//      root-owned copy of the same helper (helper/install.rs), because root
+//      cannot execute from its mount.
 //   3. It is also simply better: the webview, which renders remote content,
 //      never runs as root. That is stricter than what macOS and Windows do
 //      today, and the contract is shaped so they can follow.
@@ -33,6 +35,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
 
+use crate::helper::install::{self, Launch};
 use crate::helper::proto::{self, Frame, Request, UpParams};
 use crate::helper::{DEV_ENV, HELPER_DEV_FLAG, HELPER_FLAG};
 use crate::net::linux_logic as logic;
@@ -54,6 +57,9 @@ struct Link {
     /// The start of pkexec's stderr, for telling "no polkit agent" apart from
     /// a refusal when the handshake fails (`privilege::pkexec_unavailable`).
     stderr: std::sync::Arc<std::sync::Mutex<String>>,
+    /// This start runs the AppImage's setup before the helper
+    /// (helper/install.rs), so a failed handshake may be the setup's.
+    setup: bool,
 }
 
 /// How much of pkexec's stderr is kept for that diagnosis.
@@ -133,7 +139,24 @@ async fn request(link: &mut Link, req: Request, timeout: Duration) -> Result<boo
     }
 }
 
-fn spawn_command() -> Result<Command> {
+/// What to start for the helper, and what to tidy up once it has answered.
+struct Spawn {
+    cmd: Command,
+    /// The AppImage's staged files (helper/install.rs), removed after the
+    /// handshake whether it worked or not.
+    staged: Option<std::path::PathBuf>,
+    setup: bool,
+}
+
+/// Is this process the AppImage's own executable? See `install::launch_kind`.
+fn launch_kind(exe: &std::path::Path) -> Launch {
+    let appdir = std::env::var_os("APPDIR")
+        .filter(|dir| !dir.is_empty())
+        .and_then(|dir| std::fs::canonicalize(dir).ok());
+    install::launch_kind(std::env::var_os("APPIMAGE").as_deref(), appdir.as_deref(), exe)
+}
+
+fn spawn_command() -> Result<Spawn> {
     let exe = std::env::current_exe().context("locate our own executable")?;
     // Debug builds only. The helper ignores the flag in a release build anyway
     // (helper/proto.rs::dev_mode_allowed), but a release argv should not even
@@ -141,33 +164,67 @@ fn spawn_command() -> Result<Command> {
     let dev = cfg!(debug_assertions)
         && std::env::var(DEV_ENV).map(|v| v == "1").unwrap_or(false);
 
-    let mut cmd = if privilege::is_elevated() {
+    if privilege::is_elevated() {
         // Already root (the user ran us with sudo on X11): no dialog needed,
-        // just fork the helper.
-        Command::new(&exe)
-    } else {
-        // Typed, not text: the GUI tells "this machine cannot elevate" apart
-        // from "the person said no" by this type (ELEVATION_UNAVAILABLE).
-        if let Some(reason) = privilege::elevation_blocker() {
-            return Err(anyhow::Error::new(reason));
+        // just fork the helper. Root mounted the AppImage in that case, so
+        // even the AppImage's own executable is reachable.
+        let mut cmd = Command::new(&exe);
+        cmd.arg(HELPER_FLAG);
+        if dev {
+            cmd.arg(HELPER_DEV_FLAG);
         }
+        return Ok(Spawn { cmd, staged: None, setup: false });
+    }
+
+    if launch_kind(&exe) == Launch::AppImage {
         let pkexec = privilege::which("pkexec")
             .ok_or_else(|| anyhow::Error::new(privilege::ElevationUnavailable::NoPkexec))?;
-        let mut c = Command::new(pkexec);
-        c.arg(&exe);
-        c
-    };
-    cmd.arg(HELPER_FLAG);
+        // Typed, so the window shows "could not prepare its files" rather
+        // than a refusal the person never gave.
+        let plan = install::plan_appimage_spawn(&exe).map_err(anyhow::Error::new)?;
+        crate::log::info(
+            "helper",
+            if plan.setup {
+                "AppImage: copying the helper into /home/.proxysvpn, then starting it (one password window)"
+            } else {
+                "AppImage: starting the helper copied into /home/.proxysvpn"
+            },
+        );
+        let mut cmd = Command::new(pkexec);
+        cmd.arg(&plan.program).args(&plan.args);
+        return Ok(Spawn { cmd, staged: plan.staged, setup: plan.setup });
+    }
+
+    // Typed, not text: the GUI tells "this machine cannot elevate" apart
+    // from "the person said no" by this type (ELEVATION_UNAVAILABLE).
+    if let Some(reason) = privilege::elevation_blocker() {
+        return Err(anyhow::Error::new(reason));
+    }
+    let pkexec = privilege::which("pkexec")
+        .ok_or_else(|| anyhow::Error::new(privilege::ElevationUnavailable::NoPkexec))?;
+    let mut cmd = Command::new(pkexec);
+    cmd.arg(&exe).arg(HELPER_FLAG);
     if dev {
         cmd.arg(HELPER_DEV_FLAG);
     }
-    Ok(cmd)
+    Ok(Spawn { cmd, staged: None, setup: false })
 }
 
 async fn spawn_helper() -> Result<Link> {
+    let Spawn { cmd, staged, setup } = spawn_command()?;
+    let linked = start_helper(cmd, setup).await;
+    if let Some(dir) = staged {
+        // Root has copied the files by now, or never will.
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            crate::log::warn("helper", &format!("could not remove {}: {e}", dir.display()));
+        }
+    }
+    linked
+}
+
+async fn start_helper(mut cmd: Command, setup: bool) -> Result<Link> {
     use std::process::Stdio;
 
-    let mut cmd = spawn_command()?;
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -207,6 +264,7 @@ async fn spawn_helper() -> Result<Link> {
         out: BufReader::new(stdout).lines(),
         next_id: 0,
         stderr: stderr_seen,
+        setup,
     };
 
     match request(&mut link, Request::Hello, HANDSHAKE_TIMEOUT).await {
@@ -217,28 +275,35 @@ async fn spawn_helper() -> Result<Link> {
 
 /// Turn a dead pkexec child into something a user can act on.
 async fn describe_handshake_failure(link: &mut Link, cause: anyhow::Error) -> anyhow::Error {
+    use privilege::HandshakeFailure;
+
     let code = match link.child.try_wait() {
         Ok(Some(status)) => status.code(),
         _ => None,
     };
-    match code {
-        // pkexec(1): 126 — the dialog was dismissed or authorization failed.
-        Some(126) => anyhow!("запрос прав отменён — без пароля администратора туннель не поднять"),
-        // 127 — not authorized, or pkexec could not ask at all. Only its own
-        // stderr says which; give the reader a moment to catch up with it.
-        Some(127) => {
-            tokio::time::sleep(Duration::from_millis(150)).await;
-            let stderr = link.stderr.lock().map(|s| s.clone()).unwrap_or_default();
-            match privilege::pkexec_unavailable(Some(127), &stderr) {
-                // Typed, so the window says "this system cannot ask" instead
-                // of "press Retry and allow it in the system dialog".
-                Some(reason) => anyhow::Error::new(reason),
-                None => anyhow!(
-                    "polkit отказал в правах — запустите приложение из рабочего стола или от root"
-                ),
-            }
+    if code.is_some() {
+        // pkexec(1) exits 127 both for "not authorized" and for "could not
+        // ask at all", and the AppImage's setup names itself there too: only
+        // stderr tells them apart. Give its reader a moment to catch up.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    let stderr = link.stderr.lock().map(|s| s.clone()).unwrap_or_default();
+    match privilege::handshake_failure(code, &stderr, link.setup) {
+        // pkexec(1): 126 — the dialog was dismissed.
+        HandshakeFailure::Dismissed => {
+            anyhow!("запрос прав отменён — без пароля администратора туннель не поднять")
         }
-        _ => cause.context("helper handshake failed"),
+        // Typed, so the window says "this system cannot ask" instead of
+        // "press Retry and allow it in the system dialog".
+        HandshakeFailure::NoAgent => anyhow::Error::new(privilege::ElevationUnavailable::NoAgent),
+        HandshakeFailure::NotAuthorized => {
+            anyhow!("polkit отказал в правах — запустите приложение из рабочего стола или от root")
+        }
+        HandshakeFailure::SetupFailed(code) => anyhow::Error::new(privilege::HelperSetupFailed(format!(
+            "the setup exited with {code}: {}",
+            stderr.lines().filter(|line| line.contains(install::SETUP_NAME)).collect::<Vec<_>>().join("; ")
+        ))),
+        HandshakeFailure::Other => cause.context("helper handshake failed"),
     }
 }
 
