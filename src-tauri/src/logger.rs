@@ -1077,6 +1077,11 @@ impl LogDir {
             .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
             .open(anchor)?;
         let owner = current.metadata()?.uid();
+        // A folder of our own user is as safe as one of the anchor's owner:
+        // for root this adds nothing, for a user it lets an anchor owned by
+        // root (/tmp in tests) hold the user's folders.
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        let me = unsafe { libc::geteuid() };
         let mut walked = 0usize;
         for component in rel.components() {
             let Component::Normal(name) = component else {
@@ -1104,9 +1109,9 @@ impl LogDir {
             // nothing else owns it.
             let next = unsafe { File::from_raw_fd(raw) };
             let uid = next.metadata()?.uid();
-            if uid != owner && uid != 0 {
+            if uid != owner && uid != 0 && uid != me {
                 return Err(std::io::Error::other(format!(
-                    "a folder on the way to the log belongs to uid {uid}, not {owner} or root"
+                    "a folder on the way to the log belongs to uid {uid}, not {owner}, {me} or root"
                 )));
             }
             current = next;
