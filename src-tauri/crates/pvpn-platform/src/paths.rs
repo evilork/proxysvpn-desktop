@@ -45,6 +45,25 @@ fn linux_state_dir(xdg_state_home: Option<&str>, home: Option<&str>) -> Option<P
     }
 }
 
+#[allow(dead_code)]
+fn macos_data_dir(home: &str) -> PathBuf {
+    PathBuf::from(home).join("Library/Application Support/com.proxysvpn.desktop")
+}
+
+#[allow(dead_code)]
+fn windows_data_dir(local_app_data: &str) -> PathBuf {
+    PathBuf::from(local_app_data).join(APP_DIR)
+}
+
+#[allow(dead_code)]
+fn linux_data_dir(xdg_data_home: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
+    match (xdg_data_home, home) {
+        (Some(x), _) if !x.is_empty() => Some(PathBuf::from(x).join(APP_DIR)),
+        (_, Some(h)) if !h.is_empty() => Some(PathBuf::from(h).join(".local/share").join(APP_DIR)),
+        _ => None,
+    }
+}
+
 fn env_non_empty(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.is_empty())
 }
@@ -76,6 +95,54 @@ pub fn state_dir() -> Result<PathBuf> {
             .with_context(|| format!("create state dir {}", dir.display()))?;
     }
     Ok(dir)
+}
+
+/// Directory for the app's own data: the subscription link, the device id, the
+/// per-network memory and the preferences. Created on demand; owner-only on
+/// Unix, and on Windows `%LOCALAPPDATA%` already carries an owner-only ACL.
+///
+/// macOS: `~/Library/Application Support/com.proxysvpn.desktop` — the per-user
+/// half of the two locations the macOS app has always used (the GUI keeps the
+/// shared `/Library/Application Support/ProxysVPN` in front of it, because the
+/// launcher starts it as root with two different `HOME`s).
+/// Windows: `%LOCALAPPDATA%\ProxysVPN`, the same folder as [`state_dir`].
+/// Linux: `$XDG_DATA_HOME/ProxysVPN`, else `~/.local/share/ProxysVPN`.
+pub fn data_dir() -> Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    let dir = macos_data_dir(
+        &env_non_empty("HOME").ok_or_else(|| anyhow::anyhow!("HOME is not set"))?,
+    );
+
+    #[cfg(target_os = "windows")]
+    let dir = windows_data_dir(
+        &env_non_empty("LOCALAPPDATA")
+            .ok_or_else(|| anyhow::anyhow!("LOCALAPPDATA is not set — cannot locate app data"))?,
+    );
+
+    #[cfg(target_os = "linux")]
+    let dir = linux_data_dir(
+        env_non_empty("XDG_DATA_HOME").as_deref(),
+        env_non_empty("HOME").as_deref(),
+    )
+    .ok_or_else(|| anyhow::anyhow!("neither XDG_DATA_HOME nor HOME is set"))?;
+
+    if !dir.is_dir() {
+        create_private_dir(&dir).with_context(|| format!("create data dir {}", dir.display()))?;
+    }
+    Ok(dir)
+}
+
+/// `create_dir_all`, with the last level owner-only on Unix: the files inside
+/// are 0600 already, and the directory listing names what the app keeps.
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
 }
 
 /// Mirror file for the support log. `None` when the environment gives us
@@ -234,6 +301,41 @@ mod tests {
         );
         assert_eq!(linux_state_dir(Some(""), Some("")), None);
         assert_eq!(linux_state_dir(None, None), None);
+    }
+
+    #[test]
+    fn data_dirs_per_platform() {
+        assert_eq!(
+            macos_data_dir("/Users/x"),
+            PathBuf::from("/Users/x/Library/Application Support/com.proxysvpn.desktop")
+        );
+        assert_eq!(
+            windows_data_dir(r"C:\Users\x\AppData\Local"),
+            PathBuf::from(r"C:\Users\x\AppData\Local").join("ProxysVPN")
+        );
+        assert_eq!(
+            linux_data_dir(Some("/home/x/.data"), Some("/home/x")),
+            Some(PathBuf::from("/home/x/.data/ProxysVPN"))
+        );
+        assert_eq!(
+            linux_data_dir(None, Some("/home/x")),
+            Some(PathBuf::from("/home/x/.local/share/ProxysVPN"))
+        );
+        assert_eq!(linux_data_dir(Some(""), Some("")), None);
+        assert_eq!(linux_data_dir(None, None), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_dirs_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("pvpn-data-{}", std::process::id()));
+        let dir = base.join("ProxysVPN");
+        std::fs::remove_dir_all(&base).ok();
+        create_private_dir(&dir).expect("create");
+        let mode = std::fs::metadata(&dir).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]

@@ -143,6 +143,48 @@ pub fn parse_split_defaults(text: &str, iface: &str) -> (bool, bool) {
     (low, high)
 }
 
+/// Is there an IPv6 default route on a physical interface in
+/// `/proc/net/ipv6_route`?
+///
+/// Columns: destination (32 hex digits), prefix length (hex), source, source
+/// prefix, next hop, metric, refcount, use, flags, device. `::/0` on anything
+/// but loopback or a tunnel means the machine reaches the internet over IPv6.
+/// The kernel lists unreachable defaults on `lo`, which is why that one is
+/// skipped explicitly.
+pub fn parse_ipv6_physical_default(text: &str) -> bool {
+    text.lines().any(|line| {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 10 {
+            return false;
+        }
+        let (dest, prefix, iface) = (cols[0], cols[1], cols[9]);
+        dest.len() == 32
+            && dest.bytes().all(|b| b == b'0')
+            && prefix == "00"
+            && iface != "lo"
+            && !is_tunnel_iface(iface)
+    })
+}
+
+/// May `name` be used as one path component under `/sys/class/net`?
+///
+/// The name comes from our own constants today; the check keeps it that way —
+/// a slash or a dot-dot would turn a counter read into a read of somewhere else.
+pub fn is_plain_iface_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() < 16
+        && name != "."
+        && name != ".."
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
+}
+
+/// One `/sys/class/net/<iface>/statistics/*_bytes` value.
+pub fn parse_counter(text: &str) -> Option<u64> {
+    text.trim().parse().ok()
+}
+
 /// Extract the `dev <name>` token from `ip -4 route get <ip>` output.
 /// iproute2 is not translated, so this is locale-safe.
 pub fn parse_ip_route_get_dev(text: &str) -> Option<String> {
@@ -359,6 +401,52 @@ proxysvpn0\t00000000\t00000000\t0001\t0\t0\t0\t00000080\t0\t0\t0
 proxysvpn0\t00000080\t00000000\t0001\t0\t0\t0\t00000080\t0\t0\t0
 proxysvpn0\t000012C6\t00000000\t0001\t0\t0\t0\t0000FEFF\t0\t0\t0
 ";
+
+    // `cat /proc/net/ipv6_route` shape: an unreachable default on lo (the
+    // kernel always lists one), a real default via the wired link, and a
+    // default on another VPN's tunnel.
+    const IPV6_SAMPLE: &str = "\
+00000000000000000000000000000000 00 00000000000000000000000000000000 00 fe800000000000000000000000000001 00000400 00000001 00000000 00000003   enp0s3
+00000000000000000000000000000000 00 00000000000000000000000000000000 00 00000000000000000000000000000000 ffffffff 00000001 00000000 00200200       lo
+fe800000000000000000000000000000 40 00000000000000000000000000000000 00 00000000000000000000000000000000 00000100 00000001 00000000 00000001   enp0s3
+";
+
+    #[test]
+    fn an_ipv6_default_on_a_real_link_counts() {
+        assert!(parse_ipv6_physical_default(IPV6_SAMPLE));
+    }
+
+    #[test]
+    fn ipv6_defaults_on_loopback_or_a_tunnel_do_not_count() {
+        let only_lo_and_tunnel = "\
+00000000000000000000000000000000 00 00000000000000000000000000000000 00 00000000000000000000000000000000 ffffffff 00000001 00000000 00200200       lo
+00000000000000000000000000000000 00 00000000000000000000000000000000 00 00000000000000000000000000000000 00000400 00000001 00000000 00000001      wg0
+";
+        assert!(!parse_ipv6_physical_default(only_lo_and_tunnel));
+        assert!(!parse_ipv6_physical_default(""));
+        assert!(!parse_ipv6_physical_default("short line\n"));
+    }
+
+    #[test]
+    fn only_a_plain_interface_name_reaches_sysfs() {
+        assert!(is_plain_iface_name("proxysvpn0"));
+        assert!(is_plain_iface_name("enp0s3"));
+        assert!(is_plain_iface_name("wlan0.100"));
+        assert!(!is_plain_iface_name(""));
+        assert!(!is_plain_iface_name(".."));
+        assert!(!is_plain_iface_name("."));
+        assert!(!is_plain_iface_name("../../etc"));
+        assert!(!is_plain_iface_name("eth0/statistics"));
+        assert!(!is_plain_iface_name("averyveryverylongname"));
+    }
+
+    #[test]
+    fn sysfs_counters_parse_with_their_newline() {
+        assert_eq!(parse_counter("123456\n"), Some(123_456));
+        assert_eq!(parse_counter("0"), Some(0));
+        assert_eq!(parse_counter("x\n"), None);
+        assert_eq!(parse_counter(""), None);
+    }
 
     #[test]
     fn hex_fields_decode_little_endian() {

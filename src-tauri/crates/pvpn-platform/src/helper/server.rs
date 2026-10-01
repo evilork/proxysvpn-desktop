@@ -177,6 +177,16 @@ fn handle(req: Request) -> Result<bool, String> {
             net::ensure(active).map_err(|e| format!("{:#}", e))?;
             Ok(true)
         }
+        Request::Retarget(params) => {
+            // The same validation as `Up`: a retarget can point the host route
+            // at nothing an `Up` could not, and it execs nothing.
+            let valid = validate_up(&params)?;
+            let active = guard
+                .as_mut()
+                .ok_or_else(|| "tunnel is not up".to_string())?;
+            net::retarget(active, valid.server_ip).map_err(|e| format!("{:#}", e))?;
+            Ok(net::engine_alive(active))
+        }
     }
 }
 

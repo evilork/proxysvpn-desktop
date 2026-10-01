@@ -36,16 +36,17 @@ use anyhow::{anyhow, Context, Result};
 use windows::core::HSTRING;
 use windows::Win32::Foundation::NO_ERROR;
 use windows::Win32::NetworkManagement::IpHelper::{
-    ConvertInterfaceAliasToLuid, ConvertInterfaceLuidToIndex, FreeMibTable, GetBestRoute2,
-    GetIpForwardTable2, GetIpInterfaceEntry, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
+    ConvertInterfaceAliasToLuid, ConvertInterfaceIndexToLuid, ConvertInterfaceLuidToAlias,
+    ConvertInterfaceLuidToIndex, FreeMibTable, GetBestRoute2, GetIfEntry2, GetIpForwardTable2,
+    GetIpInterfaceEntry, MIB_IF_ROW2, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
     MIB_IPINTERFACE_ROW,
 };
-use windows::Win32::NetworkManagement::Ndis::NET_LUID_LH;
+use windows::Win32::NetworkManagement::Ndis::{IF_MAX_STRING_SIZE, NET_LUID_LH};
 use windows::Win32::Networking::WinSock::{AF_INET, SOCKADDR_INET};
 
 use crate::log;
 use crate::net::plan::{self, windows as p, SPLIT_HIGH, SPLIT_LOW};
-use crate::net::PhysicalRoute;
+use crate::net::{IfCounters, PhysicalRoute};
 
 pub use plan::windows::DEVICE;
 
@@ -209,11 +210,69 @@ fn physical_default(exclude_index: Option<u32>) -> Result<PhysicalRoute> {
     })
 }
 
+/// The interface alias ("Ethernet", "Wi-Fi") of an interface index.
+///
+/// The alias is the name Go's `net.InterfaceByName` matches on Windows, which
+/// is how xray's `sockopt.interface` finds the adapter its sockets must leave
+/// through. `None` when the index has gone away in the meantime.
+fn interface_alias(index: u32) -> Option<String> {
+    let mut luid = NET_LUID_LH::default();
+    // SAFETY: `luid` is a live out-parameter for the duration of the call.
+    if unsafe { ConvertInterfaceIndexToLuid(index, &mut luid) } != NO_ERROR {
+        return None;
+    }
+    // IF_MAX_STRING_SIZE characters plus the terminating NUL.
+    let mut buf = [0u16; IF_MAX_STRING_SIZE as usize + 1];
+    // SAFETY: `luid` was filled in above; the call writes at most `buf.len()`
+    // UTF-16 units into `buf`, including the terminator.
+    if unsafe { ConvertInterfaceLuidToAlias(&luid, &mut buf) } != NO_ERROR {
+        return None;
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    let alias = String::from_utf16(&buf[..len]).ok()?;
+    if alias.is_empty() {
+        None
+    } else {
+        Some(alias)
+    }
+}
+
 // ----------------------------------------------------------------- contract
 
+/// The physical default, with the adapter's alias filled in so the GUI can
+/// bind the engine's sockets to it (xray `sockopt.interface`).
 pub async fn physical_route() -> Result<PhysicalRoute> {
     let ours = device_index().ok();
-    physical_default(ours)
+    let mut route = physical_default(ours)?;
+    route.if_name = route.if_index.and_then(interface_alias);
+    Ok(route)
+}
+
+/// Byte counters of the tunnel adapter, `None` while it does not exist.
+pub fn device_counters() -> Option<IfCounters> {
+    let alias = HSTRING::from(DEVICE);
+    let mut row = MIB_IF_ROW2::default();
+    // SAFETY: both arguments are valid for the duration of the call; the
+    // second one is the LUID field of a live, zero-initialised row.
+    if unsafe { ConvertInterfaceAliasToLuid(&alias, &mut row.InterfaceLuid) } != NO_ERROR {
+        return None;
+    }
+    // SAFETY: `row` is a live MIB_IF_ROW2 whose key (InterfaceLuid) is set,
+    // which is what GetIfEntry2 requires; it only writes into that struct.
+    if unsafe { GetIfEntry2(&mut row) } != NO_ERROR {
+        return None;
+    }
+    Some(IfCounters {
+        rx_bytes: row.InOctets,
+        tx_bytes: row.OutOctets,
+    })
+}
+
+/// Does the machine have a way out at all? An IPv4 default route on an adapter
+/// that is not ours is the same answer Windows' own "no internet" check starts
+/// from, and it needs no packet.
+pub fn has_usable_link() -> bool {
+    physical_default(device_index().ok()).is_ok()
 }
 
 pub async fn add_host_route(dest: Ipv4Addr, via: &PhysicalRoute) -> Result<()> {
@@ -451,6 +510,10 @@ pub async fn up(plan: &TunPlan) -> Result<()> {
 
 pub async fn ensure(plan: &TunPlan) -> Result<()> {
     local::ensure::<Windows>(plan).await
+}
+
+pub async fn retarget(old: Option<Ipv4Addr>, plan: &TunPlan) -> Result<()> {
+    local::retarget::<Windows>(old, plan).await
 }
 
 pub async fn down(server_ip: Option<Ipv4Addr>) -> Result<()> {

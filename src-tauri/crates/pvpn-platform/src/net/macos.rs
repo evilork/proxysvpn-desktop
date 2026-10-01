@@ -230,6 +230,10 @@ pub async fn ensure(plan: &TunPlan) -> Result<()> {
     local::ensure::<MacOs>(plan).await
 }
 
+pub async fn retarget(old: Option<Ipv4Addr>, plan: &TunPlan) -> Result<()> {
+    local::retarget::<MacOs>(old, plan).await
+}
+
 pub async fn down(server_ip: Option<Ipv4Addr>) -> Result<()> {
     local::down::<MacOs>(server_ip).await
 }

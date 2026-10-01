@@ -17,13 +17,31 @@
 //                                          leave nothing behind
 //   async ensure(&TunPlan) -> Result<()>   supervisor tick: re-assert routes
 //                                          and DNS that the OS dropped
+//   async retarget(Option<Ipv4Addr>, &TunPlan) -> Result<()>
+//                                          move the live tunnel to another
+//                                          node: the new host route goes in
+//                                          before the old one goes out, and
+//                                          nothing else is touched
 //   async down(Option<Ipv4Addr>) -> Result<()>
 //                                          tear down; idempotent, safe when
 //                                          nothing is up
 //   async engine_alive() -> bool           is tun2socks still running?
+//   async physical_route() -> Result<PhysicalRoute>
+//                                          how the machine reaches the
+//                                          internet outside the tunnel, with
+//                                          the interface name the engine binds
+//                                          its sockets to
 //   fn    purge_stale(&[Ipv4Addr])         blocking crash recovery, for the
 //                                          startup and exit paths where there
 //                                          is no runtime to await on
+//
+// Windows and Linux also export two read-only facts the GUI's supervisor
+// samples every tick, which the macOS GUI reads itself from getifaddrs
+// (src/probe.rs) exactly as it did before this layer existed:
+//
+//   fn    device_counters() -> Option<IfCounters>
+//                                          byte counters of the tunnel device
+//   fn    has_usable_link() -> bool        is there any way out at all
 //
 // ---------------------------------------------------------------------------
 // WHY THE CONTRACT IS COARSE
@@ -99,7 +117,19 @@ mod linux;
 #[cfg(target_os = "linux")]
 use linux as sys;
 
-pub use sys::{down, engine_alive, ensure, preflight, purge_stale, up, DEVICE};
+pub use sys::{
+    down, engine_alive, ensure, physical_route, preflight, purge_stale, retarget, up, DEVICE,
+};
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub use sys::{device_counters, has_usable_link};
+
+/// Cumulative byte counters of one interface, as the OS reports them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct IfCounters {
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+}
 
 /// Address of the TUN device, identical on every platform.
 pub use plan::DEVICE_ADDR;

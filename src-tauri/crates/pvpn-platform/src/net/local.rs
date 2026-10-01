@@ -192,6 +192,27 @@ pub async fn ensure<P: Privileged>(plan: &TunPlan) -> Result<()> {
     }
 }
 
+/// Move the live tunnel to a different node without lowering it.
+///
+/// Only the host route changes: the device, its address, both halves of the
+/// default route and the engine stay where they are, because the engine behind
+/// the SOCKS port is what the caller swaps for the new node. The new route is
+/// added BEFORE the old one goes, so there is no instant in which the engine's
+/// traffic to a node has no way out but the tunnel itself — that instant is how
+/// a location change turns into a connection storm. On failure nothing was
+/// removed and the old node stays reachable.
+pub async fn retarget<P: Privileged>(old: Option<Ipv4Addr>, plan: &TunPlan) -> Result<()> {
+    if old == Some(plan.server_ip) {
+        return Ok(());
+    }
+    let physical = P::physical_route().await?;
+    P::add_host_route(plan.server_ip, &physical).await?;
+    if let Some(old) = old {
+        P::delete_host_route(old).await;
+    }
+    Ok(())
+}
+
 /// Tear the tunnel down, in the order pinned by `TEARDOWN_ORDER`. Idempotent:
 /// safe to call when nothing is up, which is what the exit path does.
 pub async fn down<P: Privileged>(server_ip: Option<Ipv4Addr>) -> Result<()> {
@@ -461,6 +482,41 @@ mod tests {
                 "kill_stray",
             ]
         );
+    }
+
+    /// The new host route goes in before the old one goes out, and nothing
+    /// else about the tunnel is touched.
+    #[tokio::test]
+    async fn retarget_adds_the_new_route_before_removing_the_old_one() {
+        let _g = begin(None).await;
+        retarget::<Fake>(Some(Ipv4Addr::new(198, 51, 100, 9)), &plan())
+            .await
+            .expect("retarget succeeds");
+        assert_eq!(
+            calls(),
+            vec!["physical_route", "add_host_route", "delete_host_route"]
+        );
+    }
+
+    /// A failed add must leave the old route alone: the engine still talks to
+    /// the old node until the caller decides what to do.
+    #[tokio::test]
+    async fn a_failed_retarget_keeps_the_old_route() {
+        let _g = begin(Some("add_host_route")).await;
+        let err = retarget::<Fake>(Some(Ipv4Addr::new(198, 51, 100, 9)), &plan())
+            .await
+            .expect_err("must fail");
+        assert!(err.to_string().contains("add_host_route"), "{err:#}");
+        assert!(!calls().contains(&"delete_host_route"), "{:?}", calls());
+    }
+
+    #[tokio::test]
+    async fn retarget_to_the_same_node_does_nothing() {
+        let _g = begin(None).await;
+        retarget::<Fake>(Some(plan().server_ip), &plan())
+            .await
+            .expect("no-op");
+        assert!(calls().is_empty(), "{:?}", calls());
     }
 
     #[tokio::test]
