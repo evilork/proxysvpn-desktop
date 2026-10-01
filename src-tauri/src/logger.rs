@@ -1682,16 +1682,16 @@ mod tests {
 
     #[test]
     fn a_node_address_never_reaches_the_file() {
-        let line = "server panel.example.net -> 89.124.98.58";
+        let line = "server panel.example.net -> 198.51.100.58";
         let out = redact(line, &["panel.example.net".to_string()]);
-        assert!(!out.contains("89.124.98.58"), "{out}");
+        assert!(!out.contains("198.51.100.58"), "{out}");
         assert!(!out.contains("panel.example.net"), "{out}");
         assert!(out.contains(MASK_NODE) && out.contains(MASK_ADDR), "{out}");
     }
 
     #[test]
     fn a_node_address_with_a_port_is_taken_whole() {
-        let out = redact("hysteria server 89.124.98.58:443", &[]);
+        let out = redact("hysteria server 198.51.100.58:443", &[]);
         assert_eq!(out, "hysteria server <addr>");
     }
 
