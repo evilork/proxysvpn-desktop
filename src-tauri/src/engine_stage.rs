@@ -29,7 +29,9 @@
 //
 // The copy is read from one open file descriptor (O_NOFOLLOW, checked to be a
 // regular file) and written to a fresh temp file (O_EXCL|O_NOFOLLOW) that is
-// renamed into place, so neither side can be redirected through a link.
+// renamed into place, so neither side can be redirected through a link. The
+// source is opened O_NONBLOCK, so a FIFO in place of an engine is opened and
+// refused at once instead of blocking the root process before any window.
 //
 // Fail closed: if the copy cannot be made, no engine is found at all and
 // connecting fails with ENGINE_START_FAILED until the next launch. Falling
@@ -205,17 +207,43 @@ fn ensure_private_dir(dir: &Path, owner: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// Copy `src` to `dst` through one descriptor on each side, with `mode`.
-fn copy_private(src: &Path, dst: &Path, mode: u32) -> io::Result<()> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+/// Open `src` for reading only if it is a regular file, never through a link.
+///
+/// O_NONBLOCK on the open itself: without it a FIFO planted in place of an
+/// engine blocks open(2) until someone opens it for writing, and `prepare`
+/// runs before the window exists — the root process would hang there, every
+/// relaunch adding another. With it the open returns at once, the fstat
+/// below refuses the FIFO, and the flag is cleared again for the real read.
+fn open_regular_source(src: &Path) -> io::Result<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
 
-    let mut from = std::fs::OpenOptions::new()
+    let from = std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(src)?;
     if !from.metadata()?.file_type().is_file() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file"));
     }
+    let fd = from.as_raw_fd();
+    // SAFETY: fcntl(2) on a descriptor `from` owns for the whole call; F_GETFL
+    // and F_SETFL read and write only the descriptor's status flags.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: as above.
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(from)
+}
+
+/// Copy `src` to `dst` through one descriptor on each side, with `mode`.
+fn copy_private(src: &Path, dst: &Path, mode: u32) -> io::Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let mut from = open_regular_source(src)?;
 
     let dir = dst
         .parent()
@@ -317,13 +345,50 @@ mod tests {
     }
 
     #[test]
-    fn a_fifo_or_folder_in_place_of_an_engine_fails_the_whole_copy() {
-        let base = temp_dir("fifo");
+    fn a_folder_in_place_of_an_engine_fails_the_whole_copy() {
+        let base = temp_dir("folder");
         let own = bundle(&base);
         std::fs::remove_file(own.join("hysteria")).expect("remove");
         std::fs::create_dir(own.join("hysteria")).expect("folder");
         let chain = [base.join("stage")];
         assert!(stage(&source_dirs(&own), &chain, me()).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A FIFO with no writer must fail the copy at once. Before O_NONBLOCK,
+    /// open(2) blocked on it forever and `prepare` hung the root process
+    /// before any window appeared.
+    #[test]
+    fn a_fifo_in_place_of_an_engine_fails_the_copy_without_blocking() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let base = temp_dir("fifo");
+        let own = bundle(&base);
+        let fifo = own.join("hysteria");
+        std::fs::remove_file(&fifo).expect("remove");
+        let c_path = CString::new(fifo.as_os_str().as_bytes()).expect("path");
+        // SAFETY: `c_path` is a valid NUL-terminated string for the call.
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o644) }, 0, "mkfifo");
+
+        let chain = [base.join("stage")];
+        let sources = source_dirs(&own);
+        let (tx, rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ = tx.send(stage(&sources, &chain, me()));
+        });
+        let outcome = rx.recv_timeout(Duration::from_secs(10));
+        if outcome.is_err() {
+            // Unblock the stuck open so the test process can finish, then fail.
+            let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+        }
+        let _ = worker.join();
+        let result = outcome.expect("stage blocked on a FIFO instead of refusing it");
+        let err = result.expect_err("a FIFO must not be copied");
+        assert!(err.contains("hysteria"), "{err}");
+        assert!(!base.join("stage/hysteria").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 
