@@ -154,8 +154,8 @@ mod tests {
     fn a_record_for_the_current_notice_clears_it() {
         let dir = temp_dir("record");
         let path = dir.join("nested").join(FILE_NAME);
-        record(&[path.clone()], 1_700_000_000_000).expect("record");
-        assert!(!is_pending(&[path.clone()]));
+        record(std::slice::from_ref(&path), 1_700_000_000_000).expect("record");
+        assert!(!is_pending(std::slice::from_ref(&path)));
 
         let text = fs::read_to_string(&path).expect("read back");
         let value: serde_json::Value = serde_json::from_str(&text).expect("json");
@@ -178,7 +178,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = temp_dir("mode");
         let path = dir.join(FILE_NAME);
-        record(&[path.clone()], 1).expect("record");
+        record(std::slice::from_ref(&path), 1).expect("record");
         let mode = fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
         let _ = fs::remove_dir_all(dir);
@@ -206,7 +206,7 @@ mod tests {
             b"{\"at\":1}",
         ] {
             fs::write(&path, body).expect("write");
-            assert!(is_pending(&[path.clone()]), "{:?}", String::from_utf8_lossy(body));
+            assert!(is_pending(std::slice::from_ref(&path)), "{:?}", String::from_utf8_lossy(body));
         }
         let huge = format!("{{\"v\":1,\"at\":1,\"pad\":\"{}\"}}", "x".repeat(8192));
         fs::write(&path, huge).expect("write");
@@ -221,7 +221,7 @@ mod tests {
         let second = dir.join("b").join(FILE_NAME);
         fs::create_dir_all(first.parent().expect("dir")).expect("mkdir");
         fs::write(&first, b"garbage").expect("write");
-        record(&[second.clone()], 5).expect("record");
+        record(std::slice::from_ref(&second), 5).expect("record");
         assert!(!is_pending(&[first, second]));
         let _ = fs::remove_dir_all(dir);
     }

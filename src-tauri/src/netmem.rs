@@ -114,6 +114,8 @@ impl NetworkMemory {
         }
     }
 
+    // Exercised by the tests; no caller in the app itself yet.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn len(&self) -> usize {
         self.networks.len()
     }

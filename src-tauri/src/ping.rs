@@ -103,6 +103,8 @@ impl PingOutcome {
         }
     }
 
+    // Part of the outcome's API; neither the app nor the tests read it today.
+    #[allow(dead_code)]
     pub fn rtt_ms(self) -> Option<u32> {
         match self {
             Self::Measured { rtt_ms } => Some(rtt_ms),
@@ -206,6 +208,8 @@ fn lock() -> std::sync::MutexGuard<'static, Option<PingTarget>> {
 /// Kept for the existing call sites in lib.rs. Prefer `set_target_proto`:
 /// without the protocol the first Hysteria2 measurement has to spend two
 /// timeouts discovering what `server.proto()` already knew.
+// Exercised by the tests; no caller in the app itself yet.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn set_target(host: String, port: u16) {
     set_target_proto(host, port, "");
 }
@@ -222,6 +226,8 @@ pub fn clear_target() {
 }
 
 /// What we currently know about the target, without measuring anything.
+// Exercised by the tests; no caller in the app itself yet.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn target_kind() -> Option<TargetKind> {
     lock().as_ref().map(|t| t.kind)
 }
@@ -395,6 +401,8 @@ pub fn rtt_of(host: &str, port: u16, proto: &str) -> Option<u32> {
     }
 }
 
+// Exercised by the tests; no caller in the app itself yet.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn tcp_ping() -> Result<u32> {
     match measure().outcome {
         PingOutcome::Measured { rtt_ms } => Ok(rtt_ms),

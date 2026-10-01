@@ -169,6 +169,8 @@ pub struct Hy2Config {
 /// Short server description for the UI. Carries `host` because the engine
 /// needs it; the window is under orders never to render it.
 #[derive(Debug, Clone, serde::Serialize)]
+// The old window's server list; kept for its serialised shape, no caller today.
+#[allow(dead_code)]
 pub struct ServerInfo {
     pub index: usize,
     pub remark: String,
@@ -315,6 +317,8 @@ impl RoutingRules {
     /// profile, for people abroad. Distinguishing it from "we have no rules"
     /// matters: the first means send everything through the tunnel, the second
     /// means fall back to the seed.
+    // Exercised by the tests; no caller in the app itself yet.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn is_global(&self) -> bool {
         self.direct_domains.is_empty()
     }
@@ -781,6 +785,8 @@ fn retry_without_inline(err: &AppError) -> bool {
 /// Compatibility entry point for `lib.rs`, which asks only for the list.
 /// `lang_en` is the UI language, forwarded to `fetch_manifest_servers` — see
 /// its doc comment.
+// Compatibility entry point; the core calls `fetch_subscription` directly now.
+#[allow(dead_code)]
 pub async fn fetch_all_servers(sub_url: &str, lang_en: bool) -> Result<Vec<ServerConfig>, AppError> {
     Ok(fetch_subscription(sub_url, lang_en).await?.servers)
 }
@@ -1888,6 +1894,8 @@ pub fn build_xray_config(cfg: &VlessConfig) -> Value {
 /// profile, chosen for someone abroad, and it means everything goes through
 /// the tunnel on purpose.
 #[cfg(any(target_os = "macos", test))]
+// Exercised by the tests; no caller in the app itself yet.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn build_xray_config_with_routing(cfg: &VlessConfig, routing: Option<&RoutingRules>) -> Value {
     build_xray_config_with_routing_and_prefs(cfg, routing, &crate::tunnel_prefs::TunnelPrefs::default())
 }
@@ -2966,7 +2974,7 @@ mod tests {
 
     #[test]
     fn host_is_kept_when_valid_and_refused_when_not() {
-        let with_host = format!("{}", XHTTP_LINE.replace("&mode=", "&host=cdn.example.com&mode="));
+        let with_host = XHTTP_LINE.replace("&mode=", "&host=cdn.example.com&mode=");
         match parse_vless_url(&with_host).expect("parses").transport {
             VlessTransport::Xhttp { host, .. } => assert_eq!(host.as_deref(), Some("cdn.example.com")),
             other => panic!("expected xhttp, got {other:?}"),

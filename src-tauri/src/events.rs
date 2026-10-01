@@ -120,6 +120,9 @@ pub struct StatePayload {
     pub healing_for_ms: Option<u64>,
 }
 
+// Constructors for the payload: `of` is exercised by the tests, `at` and
+// `failed` by nothing yet — the core builds the payload from the session.
+#[allow(dead_code)]
 impl StatePayload {
     pub fn of(phase: VpnPhase) -> Self {
         Self {

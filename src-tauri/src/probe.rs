@@ -106,6 +106,8 @@ pub const PROBE_LADDER: &[&str] = &[
 /// Per-address patience. 2.5 s is the number from the design: long enough for
 /// a bad mobile network to finish a TLS handshake, short enough that walking
 /// the whole ladder still fits inside the 25 s connect budget.
+// Exercised by the tests; no caller in the app itself yet.
+#[cfg_attr(not(test), allow(dead_code))]
 pub const ATTEMPT_TIMEOUT: Duration = Duration::from_millis(2500);
 
 /// A captive portal answers 200 with a login page. We only ever need a few
@@ -191,6 +193,8 @@ impl ProbeVerdict {
     }
 
     /// True while the core should keep working on it by itself.
+    // Exercised by the tests; no caller in the app itself yet.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn is_repairable(self) -> bool {
         matches!(self, Self::Blocked | Self::NoRoute)
     }
@@ -256,8 +260,12 @@ pub struct ProbeReport {
     /// Round trip of a FRESH connection, milliseconds. `None` unless passed.
     pub rtt_ms: Option<u32>,
     /// Exit address, for `POST /api/tools/whoami` and nothing else.
+    // Exercised by the tests; no caller in the app itself yet.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub exit_ip: Option<IpAddr>,
     /// Index into `PROBE_LADDER` of the address that answered.
+    // Diagnostic only: nothing reads it today, the log line carries the host.
+    #[allow(dead_code)]
     pub via: Option<usize>,
     pub rx_bytes: u64,
     pub tx_bytes: u64,
@@ -407,6 +415,8 @@ impl ProbeGate {
     }
 
     /// Age of the last probe, for "проверено N секунд назад".
+    // Exercised by the tests; no caller in the app itself yet.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn age_ms(&self, now_ms: u64) -> Option<u64> {
         self.last_at_ms.map(|last| now_ms.saturating_sub(last))
     }
@@ -1076,12 +1086,16 @@ async fn ask(client: &reqwest::Client, url: &str, timeout: Duration) -> Answer {
 /// `meter` is folded with a sample taken before and after, so the passive
 /// counters describe exactly the window the request lived in; that is what
 /// lets `classify` tell "sent and heard nothing" from "never left".
+// The plain entry point; the core and the tests both call the variants below.
+#[allow(dead_code)]
 pub async fn probe_once(meter: &mut TunnelMeter) -> ProbeReport {
     probe_once_with(meter, PROBE_LADDER, ATTEMPT_TIMEOUT).await
 }
 
 /// `probe_once` with the ladder and patience spelled out, for tests and for
 /// the diagnostics screen, which walks a shorter ladder on a tighter budget.
+// Exercised by the tests; no caller in the app itself yet.
+#[cfg_attr(not(test), allow(dead_code))]
 pub async fn probe_once_with(
     meter: &mut TunnelMeter,
     ladder: &[&str],

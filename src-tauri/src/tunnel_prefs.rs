@@ -180,6 +180,8 @@ impl TunnelPrefs {
     }
 
     /// Показывать ли окну, что выбранный «свой» резолвер не задан.
+    // Exercised by the tests; no caller in the app itself yet.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn custom_dns_missing(&self) -> bool {
         self.dns == DnsChoice::Custom && self.custom_dns.trim().is_empty()
     }

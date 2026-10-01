@@ -2158,10 +2158,7 @@ impl Core {
         // рукопожатия TCP не бывает: там ответ - «не применимо», и число не
         // показывается вовсе. Это честнее выдуманной цифры.
         let shown_rtt = if verdict == ProbeVerdict::Passed {
-            match ping::tcp_ping_async().await {
-                Ok(ms) => Some(ms),
-                Err(_) => None,
-            }
+            ping::tcp_ping_async().await.ok()
         } else {
             None
         };

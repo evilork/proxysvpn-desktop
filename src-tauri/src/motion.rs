@@ -27,11 +27,15 @@ use std::time::Duration;
 use serde::Serialize;
 
 /// Event the web view listens to (src/bridge.ts).
+// Used by the iOS sampler below; the desktop has no tilt sensor.
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
 pub const EVENT: &str = "gaze-tilt";
 
 /// Below this change in either angle a new reading is not worth an event: the
 /// eye's own travel is 22 degrees end to end (src/gaze.ts), so 0.15 degrees is
 /// well under a pixel of pupil movement.
+// Used by the iOS sampler below; the desktop has no tilt sensor.
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
 const MIN_CHANGE_DEG: f64 = 0.15;
 
 #[cfg(target_os = "ios")]
@@ -43,6 +47,8 @@ const HEARTBEAT: Duration = Duration::from_millis(200);
 
 /// Tilt in DeviceOrientationEvent terms, degrees.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+// Used by the iOS sampler below; the desktop has no tilt sensor.
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
 pub struct Tilt {
     /// Front to back: 0 lying flat face up, +90 upright facing the person.
     pub beta: f64,
@@ -59,6 +65,8 @@ pub struct MotionState {
 }
 
 /// Whether a reading moved far enough from the last emitted one to send.
+// Used by the iOS sampler below; the desktop has no tilt sensor.
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
 fn changed_enough(prev: Option<Tilt>, next: Tilt) -> bool {
     match prev {
         None => true,

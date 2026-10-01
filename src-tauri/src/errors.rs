@@ -81,6 +81,8 @@ pub enum ErrorCode {
     TunFailed,
     /// iOS Simulator build: Network Extensions do not run there at all, so
     /// "press again" would be a lie. Seen only by developers.
+    // Constructed only by the iOS Simulator build (lib.rs).
+    #[cfg_attr(not(all(target_os = "ios", target_abi = "sim")), allow(dead_code))]
     SimulatorNoVpn,
 
     // ── The tunnel is up but the internet is not ───────────────────────────
@@ -170,6 +172,8 @@ impl From<ErrorCode> for AppError {
 /// Deliberately narrow: it only recognises shapes we have actually seen in
 /// logs. Anything else stays `Unknown` WITH its text attached, so the support
 /// report still carries the truth even when we failed to name it.
+// For a caller that has only an anyhow chain; none today.
+#[allow(dead_code)]
 pub fn classify(err: &anyhow::Error) -> AppError {
     let text = format!("{err:#}");
     let lower = text.to_lowercase();

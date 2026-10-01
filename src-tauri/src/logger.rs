@@ -112,6 +112,8 @@ pub struct LogLine {
 /// One page of the ring buffer.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+// Exercised by the tests; no caller in the app itself yet.
+#[cfg_attr(not(test), allow(dead_code))]
 pub struct LogPage {
     pub lines: Vec<LogLine>,
     /// Highest `seq` the caller now holds; pass it back as `after`.
@@ -139,6 +141,8 @@ pub struct TrafficSplit {
 }
 
 impl TrafficSplit {
+    // Exercised by the tests; no caller in the app itself yet.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn total(&self) -> u64 {
         self.via_tunnel + self.direct + self.unclassified
     }
@@ -806,6 +810,8 @@ struct LoggerState {
     /// tell the window it missed something.
     oldest_seq: u64,
     sink: Option<FileSink>,
+    // Read by `log_file_path`, which nothing calls today.
+    #[allow(dead_code)]
     path: Option<PathBuf>,
     split: TrafficSplit,
     /// Counted but not yet summarised.
@@ -1036,6 +1042,8 @@ pub fn snapshot(limit: Option<usize>) -> Vec<LogLine> {
 /// stop polling and ask once after an event.
 ///
 /// `after = 0` means "from the beginning of what we still hold".
+// Exercised by the tests; no caller in the app itself yet.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn snapshot_since(after: u64, limit: Option<usize>) -> LogPage {
     let st = lock();
     let take = page_size(limit);
@@ -1060,6 +1068,8 @@ pub fn snapshot_since(after: u64, limit: Option<usize>) -> LogPage {
     }
 }
 
+// Public logger API kept for the log window's "clear"; nothing calls it today.
+#[allow(dead_code)]
 pub fn clear() {
     {
         let mut st = lock();
@@ -1069,6 +1079,8 @@ pub fn clear() {
     log("info", "app", "logs cleared by user");
 }
 
+// Public logger API kept for the support screen; nothing calls it today.
+#[allow(dead_code)]
 pub fn log_file_path() -> Option<String> {
     lock().path.as_ref().map(|p| p.to_string_lossy().to_string())
 }
@@ -1079,6 +1091,8 @@ pub fn log_file_path() -> Option<String> {
 /// has already been redacted on the way in, so there is nothing left to strip
 /// on the way out — which is the point of redacting before the write rather
 /// than before the export.
+// Public logger API kept for the support export; nothing calls it today.
+#[allow(dead_code)]
 pub fn export_text(include_system_info: bool) -> String {
     let (lines, split) = {
         let st = lock();
