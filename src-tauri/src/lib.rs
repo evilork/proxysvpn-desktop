@@ -2674,8 +2674,10 @@ impl Core {
 
         let current = self.session.lock().await.current?;
 
-        // C1 — same node, engine restarted. TUN and routes untouched.
-        if self.start_on(current, generation, true).await.is_ok() {
+        // C1 — same node, engine restarted. TUN and routes untouched while
+        // they are there; raised again when tun2socks took them down with it.
+        let keep = self.tunnel_is_up().await;
+        if self.start_on(current, generation, keep).await.is_ok() {
             if let Some(phase) = self.try_probe(generation).await {
                 return Some(phase);
             }
@@ -2748,11 +2750,21 @@ impl Core {
         if !self.is_current(generation).await {
             return None;
         }
-        match self.probe(ProbeReason::AfterConnect).await? {
-            ProbeVerdict::Passed => Some(VpnPhase::On),
-            ProbeVerdict::Unconfirmed => Some(VpnPhase::Unconfirmed),
-            _ => None,
+        // The probe dials with `no_proxy` over the system routes, so it says
+        // nothing about the tunnel unless the tunnel is there to take it. When
+        // tun2socks has died the device and both half-defaults go with it, the
+        // probe reaches the site straight from the real address, and C0 used
+        // to call that "Protection restored" while every byte went outside the
+        // VPN. Desktop only: on iOS the extension owns the tunnel and
+        // `tunnel_is_up` is always false by design.
+        #[cfg(desktop)]
+        let carrying = self.tunnel_is_up().await && self.engines_alive().await;
+        #[cfg(target_os = "ios")]
+        let carrying = true;
+        if !carrying {
+            logger::log("info", "vpn", "проверка не засчитана: туннель не поднят");
         }
+        healing_verdict(self.probe(ProbeReason::AfterConnect).await, carrying)
     }
 
     /// Keep `healingForMs` moving for as long as the ladder runs.
@@ -4356,6 +4368,20 @@ fn reveal_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// What a probe during repair counts for. A pass is only a pass when the
+/// tunnel was there to carry it: otherwise it went out of the real interface
+/// and proves the internet works, not that protection does.
+fn healing_verdict(probe: Option<ProbeVerdict>, tunnel_carrying: bool) -> Option<VpnPhase> {
+    if !tunnel_carrying {
+        return None;
+    }
+    match probe? {
+        ProbeVerdict::Passed => Some(VpnPhase::On),
+        ProbeVerdict::Unconfirmed => Some(VpnPhase::Unconfirmed),
+        _ => None,
+    }
+}
+
 /// Smallest inner height the window may be fitted down to, in logical
 /// pixels. Matches `minHeight` in tauri.conf.json: every screen body scrolls
 /// above its pinned footer, so this is enough for a heading, a little body
@@ -4616,6 +4642,18 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+
+    /// A dead tun2socks takes the device and both half-defaults with it; the
+    /// probe then reaches the site straight from the real address. That must
+    /// not turn the shield green ("Protection restored") during repair.
+    #[test]
+    fn a_probe_that_passed_without_the_tunnel_does_not_restore_protection() {
+        assert_eq!(healing_verdict(Some(ProbeVerdict::Passed), false), None);
+        assert_eq!(healing_verdict(Some(ProbeVerdict::Unconfirmed), false), None);
+        assert_eq!(healing_verdict(Some(ProbeVerdict::Passed), true), Some(VpnPhase::On));
+        assert_eq!(healing_verdict(Some(ProbeVerdict::Unconfirmed), true), Some(VpnPhase::Unconfirmed));
+        assert_eq!(healing_verdict(None, true), None);
+    }
 
     /// 1366x768 at 100 % leaves a 720 px work area under the taskbar, a 1080p
     /// laptop at 150 % 672 px; the 720 px window plus its caption did not fit
