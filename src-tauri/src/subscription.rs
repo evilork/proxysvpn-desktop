@@ -455,8 +455,15 @@ fn build_client() -> Option<reqwest::Client> {
 /// own signed `hosts`, MANIFEST-v1.md rule 4) not already in the list.
 /// Case-insensitive de-duplication; order otherwise preserved. `extra` is
 /// empty for the subscription fetch, which is exactly today's list.
+///
+/// Only a link on one of our own sites gets the ladder. A link of another
+/// service had its token sent to all four of our sites whenever its own host
+/// was slow, and a 404 from one of them ended the ladder as "no devices".
 fn ladder_hosts(primary_host: &str, extra: &[String]) -> Vec<String> {
     let mut hosts = vec![primary_host.to_string()];
+    if !RESERVE_HOSTS.iter().any(|ours| ours.eq_ignore_ascii_case(primary_host)) {
+        return hosts;
+    }
     for host in RESERVE_HOSTS {
         if !hosts.iter().any(|h| h.eq_ignore_ascii_case(host)) {
             hosts.push((*host).to_string());
@@ -503,6 +510,9 @@ fn candidate_urls(sub_url: &str, lang_en: bool) -> Result<Vec<String>, AppError>
     if primary.host_str().is_none() {
         return Err(AppError::new(ErrorCode::SubMalformed));
     }
+    // The token in the path is the account's credential: never in clear
+    // text, not even for a link stored before http:// was refused.
+    upgrade_to_https(&mut primary)?;
 
     force_query(&mut primary, lang_en.then_some("en"));
 
@@ -530,10 +540,11 @@ fn manifest_urls(sub_url: &str, extra_hosts: &[String]) -> Result<Vec<String>, A
     if trimmed.is_empty() {
         return Err(AppError::new(ErrorCode::NoSubscription));
     }
-    let primary = Url::parse(trimmed).map_err(|_| AppError::new(ErrorCode::SubMalformed))?;
+    let mut primary = Url::parse(trimmed).map_err(|_| AppError::new(ErrorCode::SubMalformed))?;
     if !matches!(primary.scheme(), "http" | "https") {
         return Err(AppError::new(ErrorCode::SubMalformed));
     }
+    upgrade_to_https(&mut primary)?;
     let primary_host = primary
         .host_str()
         .ok_or_else(|| AppError::new(ErrorCode::SubMalformed))?
@@ -554,6 +565,20 @@ fn manifest_urls(sub_url: &str, extra_hosts: &[String]) -> Result<Vec<String>, A
         return Err(AppError::new(ErrorCode::SubMalformed));
     }
     Ok(urls)
+}
+
+/// `http://` becomes `https://` (and a port that only made sense for plain
+/// HTTP is dropped). Every site of ours serves https; the token in the path
+/// must not cross a network in clear text, where anyone on the way could read
+/// it and rewrite the unsigned answer.
+fn upgrade_to_https(url: &mut Url) -> Result<(), AppError> {
+    if url.scheme() == "http" {
+        if url.port() == Some(80) {
+            url.set_port(None).map_err(|()| AppError::new(ErrorCode::SubMalformed))?;
+        }
+        url.set_scheme("https").map_err(|()| AppError::new(ErrorCode::SubMalformed))?;
+    }
+    Ok(())
 }
 
 /// The token of the person's subscription link: the last path segment of
@@ -2777,6 +2802,24 @@ mod tests {
         assert!(first.contains("lang=en"), "{first}");
         assert!(first.contains("format=vless"), "{first}");
         assert!(!first.contains("format=xray"), "{first}");
+    }
+
+    /// The token is the account's credential: it never travels in clear text,
+    /// and a link of another service is never sent to our sites.
+    #[test]
+    fn the_ladder_is_https_only_and_ours_only() {
+        let urls = candidate_urls("http://proxysvpn.com/api/sub/tok12345", false).unwrap();
+        assert!(urls.len() > 1, "our link keeps the reserves");
+        assert!(urls.iter().all(|u| u.starts_with("https://")), "{urls:?}");
+
+        let foreign = candidate_urls("https://vpn.example.org/sub/tok12345", false).unwrap();
+        assert_eq!(foreign.len(), 1, "{foreign:?}");
+        assert!(foreign[0].starts_with("https://vpn.example.org/"));
+
+        let manifest = manifest_urls("http://proksya.xyz/api/sub/tok12345", &[]).unwrap();
+        assert!(manifest.iter().all(|u| u.starts_with("https://")), "{manifest:?}");
+        let foreign_manifest = manifest_urls("https://vpn.example.org/sub/tok12345", &[]).unwrap();
+        assert_eq!(foreign_manifest.len(), 1);
     }
 
     /// The service writes its refusals in the language the request asks for;

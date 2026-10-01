@@ -988,7 +988,9 @@ fn validate_link(raw: &str) -> Result<String, AppError> {
         return Err(AppError::new(ErrorCode::NoSubscription));
     }
     let url = Url::parse(trimmed).map_err(|_| AppError::new(ErrorCode::SubMalformed))?;
-    if !matches!(url.scheme(), "http" | "https") {
+    // https only: the token in the path is the account's credential, and a
+    // plain-http link sent it in clear text to every site of the ladder.
+    if url.scheme() != "https" {
         return Err(AppError::new(ErrorCode::SubMalformed));
     }
     if url.host_str().is_none() || url.path().trim_matches('/').is_empty() {
@@ -5285,6 +5287,10 @@ mod tests {
         assert!(validate_link("  https://proxysvpn.com/api/sub/abc  ").is_ok());
         assert!(validate_link("vless://uuid@host:443").is_err());
         assert!(validate_link("https://proxysvpn.com").is_err());
+        assert!(
+            validate_link("http://proxysvpn.com/api/sub/abc").is_err(),
+            "the token must not travel in clear text"
+        );
         assert!(validate_link("").is_err());
         assert!(validate_link("not a url").is_err());
     }
