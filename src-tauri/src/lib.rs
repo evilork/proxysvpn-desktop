@@ -4323,6 +4323,32 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Bring the main window back: from the tray, or from a second launch.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn reveal_main_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+/// The red X with a tray icon present: hide, the VPN keeps running.
+///
+/// Linux asks first whether the icon can be seen at all (pvpn-platform
+/// tray.rs). Stock GNOME has no StatusNotifier host: the tray is "built" and
+/// invisible there, and a hidden window could never come back. Minimised, it
+/// stays in the dock and in Alt+Tab.
+#[cfg(desktop)]
+fn close_to_tray(window: &tauri::Window) {
+    #[cfg(target_os = "linux")]
+    if !pvpn_platform::tray::host_present() {
+        let _ = window.minimize();
+        return;
+    }
+    let _ = window.hide();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Linux: when we were started as the privileged helper, become it and never
@@ -4343,7 +4369,12 @@ pub fn run() {
     #[cfg(desktop)]
     pvpn_platform::log::set_sink(logger::log);
 
-    #[cfg(desktop)]
+    // macOS: LaunchServices never starts a second copy, so the leftovers of a
+    // crashed run are cleaned here, before anything else. Windows and Linux
+    // clean in `setup` instead, after the single-instance plugin has sent a
+    // second launch away: run here, it would tear down the routes and engines
+    // of the copy that is already running.
+    #[cfg(target_os = "macos")]
     sync_cleanup();
 
     // ОДИН setup на всё приложение. Их было два, и это молча ломало macOS
@@ -4358,7 +4389,16 @@ pub fn run() {
     // показывало код и ждало вечно; подключение не запустилось бы тоже.
     // Найдено 22.09.2026 живым прогоном — тесты такое не ловят, потому что
     // собирают приложение без Builder.
-    let builder = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Windows and Linux: a second launch (the desktop icon clicked again while
+    // the app sits in the tray) shows the running window and exits. It must
+    // be the first plugin: plugins start in order, and the second copy has to
+    // leave before anything else of it runs.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        reveal_main_window(app);
+    }));
+    let builder = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init());
     // «Уведомления» (notify_prefs.rs): desktop-only, same split as the
@@ -4368,6 +4408,10 @@ pub fn run() {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder.plugin(tauri_plugin_notification::init());
     let builder = builder.setup(|app| {
+            // After the single-instance plugin: only the first copy gets here.
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            sync_cleanup();
+
             let core = Core::new(app.handle().clone());
             app.manage(core);
             app.manage(motion::MotionState::default());
@@ -4380,12 +4424,21 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             build_tray(app.handle())?;
             // Windows and Linux: a missing tray is not a reason to refuse to
-            // start. A Linux desktop without an AppIndicator host has none to
-            // offer, and the window then closes for real instead of hiding
-            // (see CloseRequested below).
+            // start. Without it the window closes for real instead of hiding
+            // (see CloseRequested below). On Linux libappindicator panics
+            // rather than fail when neither appindicator library is installed,
+            // so the panic is caught here and read as "no tray".
             #[cfg(any(target_os = "windows", target_os = "linux"))]
-            if let Err(err) = build_tray(app.handle()) {
-                logger::log("error", "app", &format!("no tray icon: {err}"));
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                build_tray(app.handle())
+            })) {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => logger::log("error", "app", &format!("no tray icon: {err}")),
+                Err(_) => logger::log(
+                    "error",
+                    "app",
+                    "no tray icon: the tray library panicked (libayatana-appindicator3 missing?)",
+                ),
             }
             #[cfg(desktop)]
             install_signal_handlers();
@@ -4404,7 +4457,7 @@ pub fn run() {
                 if window.app_handle().tray_by_id("main-tray").is_some() =>
             {
                 api.prevent_close();
-                let _ = window.hide();
+                close_to_tray(window);
             }
             // «Уведомления»: не слать тост, пока окно на экране - в нём и так
             // видно то же самое щитом. `Focused(false)` приходит и когда окно

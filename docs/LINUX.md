@@ -255,8 +255,10 @@ Verified here:
 * whether `resolvectl domain '~.'` is enough on distros where NetworkManager
   manages DNS itself, and whether the `/etc/resolv.conf` fallback survives a
   NetworkManager rewrite (the supervisor re-applies it, but only every 5 s);
-* tray behaviour on desktops without an AppIndicator host (the window close is
-  allowed to quit there, instead of hiding into a tray that does not exist);
+* tray behaviour on desktops without a StatusNotifier host (stock GNOME): the
+  close button minimises there instead of hiding into an icon nobody can see
+  (`pvpn-platform` tray.rs asks the session bus), and a second launch shows the
+  running window (single-instance plugin) instead of starting a second core;
 * aarch64 Linux end to end; the matrix builds x86_64 only, since ARM runners are
   not reliably available;
 * the AppImage refusal (`ELEVATION_UNAVAILABLE` from statfs on a FUSE mount) —

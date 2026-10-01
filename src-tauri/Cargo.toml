@@ -61,6 +61,13 @@ pvpn-platform = { path = "crates/pvpn-platform" }
 # SCDynamicStore: the system resolver pointed into the tunnel (src/sysdns.rs).
 core-foundation = "0.10"
 
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+# One instance per session. A second launch from the Start menu or the
+# desktop shows the running window instead of starting a second core, whose
+# startup cleanup would tear down the first one's routes and engines while
+# its window still says "protected". macOS gets this from LaunchServices.
+tauri-plugin-single-instance = "2.5"
+
 [target.'cfg(windows)'.dependencies]
 # The system CSPRNG for the device id, the network-memory salt and the race
 # password (src/entropy.rs): Windows has no /dev/urandom. Already in the tree
