@@ -1729,6 +1729,12 @@ pub fn parse_hy2_url(raw: &str) -> Result<Hy2Config, AppError> {
         sni = host.clone();
     }
     let sni = clean_sni(&sni);
+    // A fingerprint is hex, optionally colon-separated. `query_pairs` decodes
+    // percent-escapes, so anything else (a %0A above all) is not a pin but an
+    // attempt to write into the hysteria config: the line is unreadable.
+    if !pin_sha256.bytes().all(|b| b.is_ascii_hexdigit() || b == b':') {
+        return Err(malformed());
+    }
     // With a certificate pin the fingerprint IS the verification, and the
     // standard x509 check only breaks the self-signed certificates our nodes
     // use. `insecure` is safe here precisely because the pin is present.
@@ -2834,6 +2840,14 @@ mod tests {
 
         let own = candidate_urls("https://proxysvpn.com/api/sub/tok12345?lang=ru", true).unwrap();
         assert!(own[0].contains("lang=ru") && !own[0].contains("lang=en"), "{}", own[0]);
+    }
+
+    #[test]
+    fn a_pin_that_is_not_hex_makes_the_hy2_line_unreadable() {
+        let ok = "hy2://pw@nl.example.net:443/?sni=a.example&pinSHA256=AA%3ABB%3Acc#NL";
+        assert_eq!(parse_hy2_url(ok).expect("hex pin").pin_sha256, "AA:BB:cc");
+        let injected = "hy2://pw@nl.example.net:443/?sni=a.example&pinSHA256=AA%0Asocks5%3A%0A%20%20listen%3A%200.0.0.0%3A1080#NL";
+        assert!(parse_hy2_url(injected).is_err());
     }
 
     #[test]

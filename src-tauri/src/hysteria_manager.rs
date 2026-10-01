@@ -68,20 +68,42 @@ pub fn hysteria_path(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
 /// binary, a network or a filesystem.
 pub fn build_config(cfg: &Hy2Config) -> String {
     let mut yaml = String::new();
-    yaml.push_str(&format!("server: {}:{}\n", cfg.host, cfg.port));
-    yaml.push_str(&format!("auth: {}\n", cfg.password));
+    yaml.push_str(&format!("server: {}\n", yaml_scalar(&format!("{}:{}", cfg.host, cfg.port))));
+    yaml.push_str(&format!("auth: {}\n", yaml_scalar(&cfg.password)));
     yaml.push_str("tls:\n");
-    yaml.push_str(&format!("  sni: {}\n", cfg.sni));
+    yaml.push_str(&format!("  sni: {}\n", yaml_scalar(&cfg.sni)));
     if cfg.insecure {
         yaml.push_str("  insecure: true\n");
     }
     if !cfg.pin_sha256.is_empty() {
-        yaml.push_str(&format!("  pinSHA256: {}\n", cfg.pin_sha256));
+        yaml.push_str(&format!("  pinSHA256: {}\n", yaml_scalar(&cfg.pin_sha256)));
     }
     yaml.push_str("socks5:\n");
     yaml.push_str(&format!("  listen: 127.0.0.1:{}\n", HY2_SOCKS_PORT));
     yaml.push_str("fastOpen: true\n");
     yaml
+}
+
+/// One value of the hand-built YAML.
+///
+/// Every value comes from a subscription line, and `query_pairs` decodes
+/// percent-escapes: a `pinSHA256=%0A...` used to put a newline, and with it any
+/// top-level key the line liked, into the config of a process that runs as
+/// root (macOS) or administrator (Windows). Ordinary values — host:port, hex,
+/// a UUID password — are written bare exactly as before; anything else is
+/// written as a JSON string, which YAML reads as a double-quoted scalar, so it
+/// can never end the line or start a key.
+fn yaml_scalar(value: &str) -> String {
+    let plain = !value.is_empty()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b':' | b'[' | b']'))
+        && value.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric() || b == b'[');
+    if plain {
+        value.to_string()
+    } else {
+        serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+    }
 }
 
 /// Write the config owner-only and never through a symlink.
@@ -292,6 +314,35 @@ mod tests {
         let yaml = build_config(&c);
         assert!(yaml.contains("insecure: true"));
         assert!(yaml.contains("pinSHA256: AA:BB"));
+    }
+
+    /// A percent-encoded newline in a subscription value must not become a
+    /// new key in the config of a root/administrator process.
+    #[test]
+    fn a_value_cannot_inject_yaml_keys() {
+        let mut c = cfg();
+        c.pin_sha256 = "AA\nsocks5:\n  listen: 0.0.0.0:1080".into();
+        c.password = "p\r\nhttp:\n  listen: 0.0.0.0:8080".into();
+        let yaml = build_config(&c);
+        let keys: Vec<&str> = yaml
+            .lines()
+            .filter(|line| !line.starts_with(' '))
+            .map(|line| line.split(':').next().unwrap_or(""))
+            .collect();
+        assert_eq!(keys, ["server", "auth", "tls", "socks5", "fastOpen"], "{yaml}");
+        assert_eq!(yaml.lines().count(), 8, "one line per key, nothing smuggled in: {yaml}");
+        assert!(yaml.contains(r#"auth: "p\r\nhttp:\n  listen: 0.0.0.0:8080""#), "{yaml}");
+    }
+
+    #[test]
+    fn ordinary_values_are_written_bare_as_before() {
+        assert_eq!(yaml_scalar("node.example:443"), "node.example:443");
+        assert_eq!(yaml_scalar("[2001:db8::1]:443"), "[2001:db8::1]:443");
+        assert_eq!(yaml_scalar("11111111-2222-3333-4444-555555555555"), "11111111-2222-3333-4444-555555555555");
+        assert_eq!(yaml_scalar("AA:BB:CC"), "AA:BB:CC");
+        assert_eq!(yaml_scalar("a b"), "\"a b\"");
+        assert_eq!(yaml_scalar("#comment"), "\"#comment\"");
+        assert_eq!(yaml_scalar(""), "\"\"");
     }
 
     #[test]
