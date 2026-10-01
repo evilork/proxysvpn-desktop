@@ -726,6 +726,18 @@ pub fn forget_route_hint() {
     let _ = std::fs::remove_file(ROUTE_HINT_PATH);
 }
 
+fn effective_uid() -> u32 {
+    // SAFETY: geteuid(2) has no preconditions and cannot fail.
+    unsafe { libc::geteuid() }
+}
+
+/// The route hint is ours only when it is a plain file of our own effective
+/// user that nobody else may read or write — what `write_private_file`
+/// creates (0600).
+fn route_hint_is_trusted(is_file: bool, uid: u32, mode: u32, euid: u32) -> bool {
+    is_file && uid == euid && mode & 0o077 == 0
+}
+
 /// Remove routes a previous run left behind. Synchronous on purpose: it runs
 /// at startup and on signals, where there is no runtime to await on.
 pub fn purge_stale_routes() {
@@ -740,13 +752,18 @@ pub fn purge_stale_routes() {
         .args([TUN_NAME, "down"])
         .status();
 
-    // Only a plain file is believed: a symlink in its place was not written by
-    // us (`persist_route_hint` never writes through one), so it is removed
-    // unread rather than followed by root.
-    let is_plain_file = std::fs::symlink_metadata(ROUTE_HINT_PATH)
-        .map(|m| m.file_type().is_file())
+    // Only our own file is believed: a symlink in its place, or a file another
+    // account left in the world-writable /tmp, was not written by
+    // `persist_route_hint`. Read anyway, it would have root delete host routes
+    // for whatever addresses another user listed (their VPN's server, the
+    // gateway). Removed unread instead.
+    let trusted = std::fs::symlink_metadata(ROUTE_HINT_PATH)
+        .map(|m| {
+            use std::os::unix::fs::MetadataExt;
+            route_hint_is_trusted(m.file_type().is_file(), m.uid(), m.mode(), effective_uid())
+        })
         .unwrap_or(false);
-    if !is_plain_file {
+    if !trusted {
         let _ = std::fs::remove_file(ROUTE_HINT_PATH);
         return;
     }
@@ -814,6 +831,17 @@ default            192.168.1.1        UGScg                 en0
         assert!(!half_default_is_ours(""));
         // Same name, longer: utun2250 is not utun225.
         assert!(!half_default_is_ours(&ours.replace("utun225", "utun2250")));
+    }
+
+    /// Another account on the Mac can leave a file at the fixed /tmp name;
+    /// root must not delete host routes for the addresses it lists.
+    #[test]
+    fn only_our_own_private_route_hint_is_believed() {
+        assert!(route_hint_is_trusted(true, 0, 0o100600, 0));
+        assert!(!route_hint_is_trusted(true, 501, 0o100600, 0), "another user's file");
+        assert!(!route_hint_is_trusted(true, 0, 0o100644, 0), "readable by others");
+        assert!(!route_hint_is_trusted(true, 0, 0o100606, 0), "writable by others");
+        assert!(!route_hint_is_trusted(false, 0, 0o120600, 0), "a link");
     }
 
     #[test]
