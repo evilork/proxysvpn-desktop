@@ -215,12 +215,18 @@ jobs:
           node-version: "22"
           cache: npm
 
+      - name: Fetch sidecars (xray, tun2socks, hysteria, geo data)
+        # The script runs the GUI crate's checks, whose build script is
+        # tauri_build::try_build — it copies the externalBin sidecars and fails
+        # if they are absent. On a developer's Mac they are already there, which
+        # is precisely the kind of difference this job exists to catch.
+        run: bash scripts/fetch-binaries.sh
+
       - name: Install npm dependencies
         run: npm ci
 
       - name: Frontend build (tsc typecheck + vite)
-        # The script runs the GUI crate's checks too, and
-        # tauri::generate_context! embeds ../dist at compile time.
+        # Same reason: tauri::generate_context! embeds ../dist at compile time.
         run: npm run build
 
       - name: scripts/check-platform.sh
