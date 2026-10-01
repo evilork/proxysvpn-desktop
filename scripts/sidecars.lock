@@ -1,0 +1,41 @@
+# scripts/sidecars.lock
+#
+# Pinned sidecar releases and the sha256 of every release asset we download.
+# Pinned, not "latest": a build must produce the same engines tomorrow as today,
+# and an xray bump is a decision (newer cores have changed REALITY behaviour on
+# our fleet before), not something a fresh clone should do silently.
+#
+# Where the hashes come from:
+#   xray      — the per-asset `<asset>.dgst` published next to each release asset
+#               (field SHA2-256), fetched 2026-10-01.
+#   hysteria  — `hashes.txt` published in the release, fetched 2026-10-01.
+#   tun2socks — upstream publishes no checksums, so these are ours: computed
+#               from the downloaded assets on 2026-10-01 and pinned here. That
+#               is the whole point of this file — the first download is trusted,
+#               every later one is verified against it.
+#
+# Bumping a version: change the tag, run
+#   scripts/fetch-binaries.sh --refresh-lock --target <triple>
+# for each target, paste the printed lines, and review the diff.
+
+tag xray v26.3.27
+tag tun2socks v2.7.0
+tag hysteria app/v2.12.3
+
+sha256 Xray-macos-arm64-v8a.zip 2e93a67e8aa1936ecefb307e120830fcbd4c643ab9b1c46a2d0838d5f8409eaf
+sha256 Xray-macos-64.zip f5b0471d3459eff1b82e48af0aeac186abcc3298210070afbbbd8437a4e8b203
+sha256 Xray-linux-64.zip 23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae
+sha256 Xray-linux-arm64-v8a.zip 4d30283ae614e3057f730f67cd088a42be6fdf91f8639d82cb69e48cde80413c
+
+sha256 tun2socks-darwin-arm64.zip 7c5ebfe2ffb60ecf6e958cc5bbf3e06e74b8b33575ffbb4ba4f6f785a647f1ad
+sha256 tun2socks-darwin-amd64.zip 6e654da8bab9ca1645862f0e251a69980e0966680713011feea7b1e5901b2a95
+sha256 tun2socks-linux-amd64.zip a612baa287a3b6de6221f74fd02b442a50888508227ecf51e1288a5ccbb77381
+sha256 tun2socks-linux-arm64.zip 3931476c9cfa8fa236d23aeaf36767df0eb27cc11ecaab699faba57744450f49
+
+sha256 hysteria-darwin-arm64 9065dc5dc9cd75f7ba881f481e8cb77e7eae17139460ca09d399682ca6fad443
+sha256 hysteria-darwin-amd64 cdbc8144cbdb19a535234a8ccb6afceaab3ddf03d0fb60c6e198e056d4f689a7
+sha256 hysteria-linux-amd64 8c7a68a906998b747a0db87586e364f995fbfddb95693ae6e2fdb68a6e920d3e
+sha256 hysteria-linux-arm64 c8dc653c3ba0a28d29a26b8fa52d2086f27c0927afddce95c09965e7174e78b0
+
+# Windows assets (Xray-windows-*.zip, tun2socks-windows-*.zip,
+# hysteria-windows-*.exe and wintun) are added by the Windows branch.

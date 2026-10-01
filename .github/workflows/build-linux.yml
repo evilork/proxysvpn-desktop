@@ -1,0 +1,123 @@
+# .github/workflows/build-linux.yml
+#
+# Builds the real Linux installers. There is no Linux machine in the dev
+# environment (Apple Silicon Mac, no Docker), so this workflow is the only place
+# the Linux target is actually compiled, linked and packaged — treat a red run
+# here as "the Linux port does not build", not as a CI quirk.
+#
+# Pinned to ubuntu-22.04 on purpose: a binary linked against ubuntu-24.04's
+# glibc 2.39 refuses to start on 22.04, and 22.04 is still the most common LTS
+# on users' desktops. Building on the older image keeps both working.
+name: build-linux
+
+on:
+  push:
+    branches:
+      - feat/desktop-linux
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      arm64:
+        description: Also build for aarch64 (needs ARM runners enabled)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # appimagetool needs FUSE otherwise, which GitHub runners do not provide.
+  APPIMAGE_EXTRACT_AND_RUN: 1
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: x86_64 (deb + AppImage)
+            runner: ubuntu-22.04
+            triple: x86_64-unknown-linux-gnu
+            arm: false
+          - label: aarch64 (deb + AppImage)
+            runner: ubuntu-22.04-arm
+            triple: aarch64-unknown-linux-gnu
+            arm: true
+    runs-on: ${{ matrix.runner }}
+    if: ${{ !matrix.arm || inputs.arm64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The webkit2gtk-4.1 development files are what tauri v2 links the webview
+      # against; libayatana-appindicator3 is what the tray icon needs.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            patchelf \
+            build-essential \
+            curl wget file unzip \
+            iproute2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      # generate_context!() reads ../dist, so the frontend must exist before any
+      # cargo command touches the crate.
+      - run: npm run build
+
+      - name: Fetch sidecars (sha256 pinned in scripts/sidecars.lock)
+        run: ./scripts/fetch-binaries.sh --target ${{ matrix.triple }}
+
+      - name: Unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+      # Informational for now: the base branch already carries warnings
+      # (dead_code in subscription.rs, a deprecated tray setter), so -D warnings
+      # would fail for reasons that have nothing to do with the Linux port.
+      # Flip continue-on-error off once the base is warning-clean.
+      - name: Clippy (Linux platform code)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+        continue-on-error: true
+
+      - name: Build deb + AppImage
+        run: npm run tauri -- build --target ${{ matrix.triple }} --bundles deb,appimage
+
+      - name: Show what the deb installs
+        run: |
+          set -e
+          deb=$(find src-tauri/target -name '*.deb' | head -n1)
+          echo "deb: $deb"
+          dpkg --contents "$deb" | sed -n '1,200p'
+          echo "--- control ---"
+          dpkg --info "$deb"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proxysvpn-linux-${{ matrix.triple }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/**/release/bundle/deb/*.deb
+            src-tauri/target/**/release/bundle/appimage/*.AppImage
