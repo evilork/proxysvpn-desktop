@@ -4808,6 +4808,27 @@ fn fit_main_window_to_screen(app: &tauri::AppHandle) {
     );
 }
 
+/// Should WebKitGTK's DMA-BUF renderer be switched off before the webview
+/// exists? Only under gamescope — Gaming Mode on a Steam Deck — and only
+/// when the person has not set the variable themselves.
+///
+/// Other WebKitGTK apps report a blank window there with the DMA-BUF
+/// renderer on (Tauri's own Linux graphics notes name the same variable for
+/// blank windows); not seen on a Deck here, there was none to try. The cost
+/// is the slower shared-memory path, for this one screen, which draws a VPN
+/// switch and not a game. Desktop Mode and every other Linux keep the
+/// default: Tauri's notes advise against switching it off for everyone.
+#[cfg(desktop)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn gamescope_wants_shm_renderer(current_desktop: Option<&str>, gamescope_display: Option<&str>, already_set: bool) -> bool {
+    if already_set {
+        return false;
+    }
+    let desktop = current_desktop
+        .is_some_and(|names| names.split(':').any(|name| name.trim().eq_ignore_ascii_case("gamescope")));
+    desktop || gamescope_display.is_some_and(|display| !display.trim().is_empty())
+}
+
 /// The red X with a tray icon present: hide, the VPN keeps running.
 ///
 /// Linux asks first whether the icon can be seen at all (pvpn-platform
@@ -4838,11 +4859,31 @@ pub fn run() {
         pvpn_platform::helper::run_helper();
     }
 
+    // Gaming Mode on a Steam Deck: before any thread exists, since the
+    // environment is process-wide, and before WebKitGTK reads it.
+    #[cfg(target_os = "linux")]
+    let shm_renderer = {
+        const VAR: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
+        let wanted = gamescope_wants_shm_renderer(
+            std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
+            std::env::var("GAMESCOPE_WAYLAND_DISPLAY").ok().as_deref(),
+            std::env::var_os(VAR).is_some(),
+        );
+        if wanted {
+            std::env::set_var(VAR, "1");
+        }
+        wanted
+    };
+
     logger::init();
     // Route the platform layer's messages into the same ring buffer and file
     // the support UI reads; without this they would only reach stdout.
     #[cfg(desktop)]
     pvpn_platform::log::set_sink(logger::log);
+    #[cfg(target_os = "linux")]
+    if shm_renderer {
+        logger::log("info", "app", "gamescope session: WebKitGTK's DMA-BUF renderer switched off");
+    }
 
     // macOS: LaunchServices never starts a second copy, so the leftovers of a
     // crashed run are cleaned here, before anything else. Windows and Linux
@@ -5206,6 +5247,30 @@ mod tests {
         assert_eq!(fitted_inner_height(1008, 1127, 1080, 780), Some(961));
         // Never below the minimum, even on an absurd screen.
         assert_eq!(fitted_inner_height(400, 751, 720, 520), Some(520));
+    }
+
+    /// Steam Deck: 1280x800, and in Desktop Mode about 756 px of it above
+    /// the panel. The 720 px window just fits under a 31 px caption; under a
+    /// taller one it is fitted, still well above the 520 px minimum.
+    #[test]
+    fn the_window_fits_a_steam_deck_in_desktop_mode() {
+        assert_eq!(fitted_inner_height(756, 751, 720, 520), None);
+        assert_eq!(fitted_inner_height(756, 760, 720, 520), Some(716));
+        // Gaming Mode: no panel and no caption, gamescope scales the window.
+        assert_eq!(fitted_inner_height(800, 720, 720, 520), None);
+    }
+
+    /// Only a gamescope session switches the renderer, and never over the
+    /// person's own setting.
+    #[test]
+    fn only_gamescope_switches_webkit_to_shared_memory() {
+        assert!(gamescope_wants_shm_renderer(Some("gamescope"), None, false));
+        assert!(gamescope_wants_shm_renderer(Some("KDE:gamescope"), None, false));
+        assert!(gamescope_wants_shm_renderer(None, Some("gamescope-0"), false));
+        assert!(!gamescope_wants_shm_renderer(Some("gamescope"), Some("gamescope-0"), true));
+        assert!(!gamescope_wants_shm_renderer(Some("KDE"), None, false));
+        assert!(!gamescope_wants_shm_renderer(Some("GNOME"), Some(""), false));
+        assert!(!gamescope_wants_shm_renderer(None, None, false));
     }
 
     /// The window must be resizable and allowed below 720 px: with the old
