@@ -16,8 +16,10 @@
 //   • Windows — the system resolver is left alone (net/windows.rs) and the
 //     tunnel carries IPv4 only, so lookups to a resolver on the local network
 //     and IPv6 traffic go outside it. Until that changes, Windows gets its
-//     own sentence, and the Tunnel screen says its DNS and address-family
-//     choices reach only the engine itself.
+//     own sentence, and the Tunnel screen says its DNS choice reaches only
+//     the engine itself.
+//   • IPv6 — no desktop tunnel carries it (macOS and Linux route only the two
+//     IPv4 halves), so the desktop sentence says so as well.
 
 /** The platforms `app_info` reports (src/bridge.ts AppInfo["platform"]). */
 export type CopyPlatform = "macos" | "ios" | "windows" | "linux" | "other";
@@ -53,4 +55,28 @@ export function tunnelHintKeys(platform: CopyPlatform | undefined): TunnelHintKe
     return { ip: "tun.ipHintWindows", dns: "tun.dnsHintWindows" };
   }
   return { ip: "tun.ipHint", dns: "tun.dnsHint" };
+}
+
+/**
+ * Whether the Tunnel screen offers the IPv4 / IPv6 / Both choice at all.
+ *
+ * Nowhere today. iOS never did (the Apple engine fixes the policy itself).
+ * On desktop no tunnel carries IPv6 yet — macOS and Linux route only the two
+ * IPv4 halves, Windows leaves IPv6 alone — while macOS and Linux point the
+ * system resolver at the engine: "IPv6" or "Both" handed out AAAA records and
+ * sent nearly all traffic of a dual-stack network outside the VPN with the
+ * shield still green. The core ignores a stored choice on desktop for the
+ * same reason (tunnel_prefs.rs IpKind::effective). Turn it back on per
+ * platform once its tunnel captures IPv6.
+ */
+export function offersIpFamilyChoice(platform: CopyPlatform | undefined): boolean {
+  switch (platform) {
+    case "ios":
+    case "macos":
+    case "linux":
+    case "windows":
+    case "other":
+    case undefined:
+      return false;
+  }
 }

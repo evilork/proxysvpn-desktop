@@ -2063,7 +2063,9 @@ pub(crate) fn build_xray_config_around(
             // IPv6-выхода у наших узлов нет ни на одном (проверено по флоту
             // 07.09.2026), поэтому запрос AAAA - гарантированное ожидание
             // впустую на каждом имени.
-            "queryStrategy": prefs.ip_kind.query_strategy(),
+            // On desktop always UseIPv4, whatever is stored: see
+            // `IpKind::effective` for the leak "IPv6"/"Both" opened there.
+            "queryStrategy": prefs.ip_kind.effective().query_strategy(),
             // Гонка, не очередь. Без этого поля список из двух резолверов
             // (DoH к 1.1.1.1, TCP к 8.8.8.8) xray спрашивает ПО ОЧЕРЕДИ:
             // первый получает весь свой `timeoutMs`, и только после отказа
@@ -3516,10 +3518,17 @@ mod tests {
             &TunnelPrefs { dns: DnsChoice::System, ..Default::default() });
         assert_eq!(system["dns"]["servers"][0], "localhost");
 
+        // Desktop: no tunnel carries IPv6 yet, so a stored "Both" (or "IPv6")
+        // must not hand AAAA records to the system resolver — that sent
+        // nearly all traffic of a dual-stack network outside the tunnel.
         let both = build_xray_config_with_routing_and_prefs(
             &vless_fixture(), None,
             &TunnelPrefs { ip_kind: IpKind::Both, ..Default::default() });
-        assert_eq!(both["dns"]["queryStrategy"], "UseIP");
+        assert_eq!(both["dns"]["queryStrategy"], "UseIPv4");
+        let v6 = build_xray_config_with_routing_and_prefs(
+            &vless_fixture(), None,
+            &TunnelPrefs { ip_kind: IpKind::Ipv6, ..Default::default() });
+        assert_eq!(v6["dns"]["queryStrategy"], "UseIPv4");
 
         let own = build_xray_config_with_routing_and_prefs(
             &vless_fixture(), None,

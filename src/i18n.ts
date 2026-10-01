@@ -596,7 +596,7 @@ const ru = {
   "notice.dns.apple":
     "Имена сайтов разрешает Cloudflare по DNS-over-HTTPS — через VPN-сервер. Имена сайтов, которые открываются напрямую (российских и тех, что вы внесли в «Всегда напрямую»), разрешает публичный DNS Яндекса, мимо VPN. Адрес самого VPN-сервера приложение узнаёт через DNS вашей сети.",
   "notice.dns.desktop":
-    "Имена сайтов разрешают Cloudflare и Google — запросы к ним идут через VPN-сервер. В настройках туннеля можно выбрать системный или свой резолвер.",
+    "Имена сайтов разрешают Cloudflare и Google — запросы к ним идут через VPN-сервер. В настройках туннеля можно выбрать системный или свой резолвер. Туннель пока несёт только IPv4: если ваша сеть даёт IPv6, программы, которые соединяются по IPv6-адресу сами (звонки в браузере, приложения со своим DNS), могут ходить мимо VPN.",
   // Windows leaves the system resolver alone and its tunnel is IPv4 only
   // (src/platformCopy.ts): the desktop sentence above would be false there.
   "notice.dns.windows":
@@ -1111,7 +1111,7 @@ const en: Partial<Record<MsgKey, string>> = {
   "notice.dns.apple":
     "Site names are resolved by Cloudflare over DNS-over-HTTPS, through the VPN server. Names of sites that open directly (Russian ones and those on your “Always direct” list) are resolved by Yandex public DNS, outside the VPN. The app looks up the VPN server's own address through your network's DNS.",
   "notice.dns.desktop":
-    "Site names are resolved by Cloudflare and Google, asked through the VPN server. Tunnel settings let you pick the system resolver or one of your own.",
+    "Site names are resolved by Cloudflare and Google, asked through the VPN server. Tunnel settings let you pick the system resolver or one of your own. The tunnel carries IPv4 only for now: if your network offers IPv6, programs that connect to an IPv6 address on their own (calls in the browser, apps with their own DNS) may go outside the VPN.",
   "notice.dns.windows":
     "On Windows the app does not yet send the system DNS into the tunnel: site names are resolved by your network's DNS (usually your router or provider), and those lookups may go outside the VPN. If your network offers IPv6, sites with an IPv6 address may open outside the VPN too.",
   "notice.noActivityLogs": "We do not record which sites you open.",

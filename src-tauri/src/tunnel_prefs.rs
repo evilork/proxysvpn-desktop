@@ -30,6 +30,24 @@ pub enum IpKind {
 }
 
 impl IpKind {
+    /// What the engine may actually use on this platform.
+    ///
+    /// Desktop: always IPv4. No desktop tunnel carries IPv6 yet — macOS and
+    /// Linux install only 0.0.0.0/1 and 128.0.0.0/1, Windows leaves IPv6
+    /// alone — while the system resolver on macOS and Linux asks xray. With
+    /// "IPv6" or "Both" xray handed out AAAA records, Happy Eyeballs picked
+    /// IPv6 on a dual-stack network, and nearly all traffic left through the
+    /// physical interface while the shield stayed green. A choice stored by an
+    /// earlier version is therefore ignored here rather than rewritten, so it
+    /// comes back the day the tunnel captures IPv6.
+    pub fn effective(self) -> Self {
+        if cfg!(desktop) {
+            Self::Ipv4
+        } else {
+            self
+        }
+    }
+
     /// Значение для `dns.queryStrategy` в конфигурации xray.
     pub fn query_strategy(self) -> &'static str {
         match self {
