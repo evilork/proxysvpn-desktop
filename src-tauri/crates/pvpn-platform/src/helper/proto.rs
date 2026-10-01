@@ -96,9 +96,26 @@ pub fn validate_up(params: &UpParams) -> Result<ValidUp, String> {
         return Err("socks_port must be non-zero".to_string());
     }
 
+    // A leading slash, checked by hand rather than with `Path::is_absolute()`.
+    // This is a wire protocol whose receiver is always the Linux helper, so
+    // "absolute" must mean POSIX-absolute no matter which OS compiled the code;
+    // `is_absolute()` asks the *host* and answers false for "/usr/bin/tun2socks"
+    // on Windows, which made this validation — and its test — disagree with
+    // itself across platforms.
+    if !params.tun2socks.starts_with('/') {
+        return Err(format!(
+            "tun2socks path must be absolute: {:?}",
+            params.tun2socks
+        ));
+    }
+    // No `..`: the path is handed to root for exec, and the trust check that
+    // follows stats the file, so a traversal must not slip past it.
     let tun2socks = PathBuf::from(&params.tun2socks);
-    if !tun2socks.is_absolute() {
-        return Err(format!("tun2socks path must be absolute: {:?}", params.tun2socks));
+    if tun2socks.components().any(|c| c.as_os_str() == "..") {
+        return Err(format!(
+            "tun2socks path must not contain '..': {:?}",
+            params.tun2socks
+        ));
     }
 
     if params.dns.is_empty() {
@@ -264,9 +281,31 @@ mod tests {
         p.socks_port = 0;
         assert!(validate_up(&p).is_err());
 
-        let mut p = sample();
-        p.tun2socks = "tun2socks".to_string();
-        assert!(validate_up(&p).is_err());
+        for bad in [
+            "tun2socks",
+            "./tun2socks",
+            "../../usr/bin/tun2socks",
+            "/usr/bin/../../tmp/evil",
+            "",
+            r"C:\tun2socks.exe",
+        ] {
+            let mut p = sample();
+            p.tun2socks = bad.to_string();
+            assert!(validate_up(&p).is_err(), "{bad:?} must be rejected");
+        }
+    }
+
+    /// The verdict must not depend on which OS compiled this code: the helper
+    /// that acts on it always runs on Linux. `Path::is_absolute()` would answer
+    /// false for a POSIX path on a Windows host and break this invariant.
+    #[test]
+    fn absolute_means_posix_absolute_on_every_host() {
+        let ok = validate_up(&sample()).expect("a POSIX path validates everywhere");
+        assert_eq!(
+            ok.tun2socks.to_string_lossy(),
+            "/usr/bin/tun2socks",
+            "the path must survive validation unchanged"
+        );
     }
 
     #[test]
