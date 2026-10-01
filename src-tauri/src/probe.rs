@@ -2131,6 +2131,19 @@ mod tests {
             // warm-up is actually waiting for.
             let _ = sock.write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await;
             let _ = sock.write_all(b"x").await;
+            // Read the warm-up's request until the client hangs up. Dropping
+            // the socket with that request unread makes Windows send a reset,
+            // and a reset there discards the "x" still waiting in the
+            // client's buffer, so the warm-up would read an error instead.
+            let mut sink = [0u8; 256];
+            let _ = tokio::time::timeout(Duration::from_secs(2), async {
+                while let Ok(n) = sock.read(&mut sink).await {
+                    if n == 0 {
+                        break;
+                    }
+                }
+            })
+            .await;
         });
 
         (port, handle)
