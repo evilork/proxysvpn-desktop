@@ -17,7 +17,7 @@
 - **Локации Hysteria2 снова работают.** Переход xray → hysteria привязывался к физическому интерфейсу, и соединение с 127.0.0.1 не устанавливалось — ни трафика, ни DNS.
 - **Windows: повторное подключение к тому же узлу.** Маршрут до узла не удалялся (netsh требует имя интерфейса), и следующее подключение, смена локации туда и обратно и перезапуск движка падали до перезагрузки.
 - **Окно на маленьких экранах.** На 1366×768 и ноутбуках с масштабом 150 % нижняя кнопка уходила под панель задач. Окно теперь подстраивается под экран и меняет размер.
-- **Безопасность:** помощник Linux больше не запускает файл по пути от непривилегированного процесса; на macOS движки запускаются из папки root, а не из бандла пользователя; журнал от root не идёт по ссылкам; ссылка подписки только по https и не уходит чужим сайтам; QR-привязка принимает ссылки только наших сайтов; конфигурация hysteria защищена от подстановки ключей.
+- **Безопасность:** помощник Linux больше не запускает файл по пути от непривилегированного процесса; на macOS движки запускаются из копии в папке root, а не из бандла пользователя (само приложение — пока из бандла, см. ограничения); журнал от root не идёт по ссылкам ни в одной папке на пути к нему; ссылка подписки только по https и не уходит чужим сайтам; QR-привязка принимает ссылки только наших сайтов; конфигурация hysteria защищена от подстановки ключей.
 - **Приватность:** имена открытых сайтов больше не попадают в журнал и «Отчёт для поддержки»; на компьютере больше нельзя выбрать «IPv6»/«Оба» (туннель IPv6 не несёт), уведомление о данных говорит об этом; hysteria больше не проверяет обновления у api.hy2.io; настройки на macOS не читаются другими учётными записями.
 - **Починка:** проверка во время починки не засчитывается, если туннель лежит (раньше щит мог стать зелёным при трафике мимо VPN); выбор локации во время починки больше не гоняется с ней; после неудачи «Повторить» берёт свежий список серверов; сохранённый список Watafast больше не перекрывает отказ подписки («ссылка занята», «нет средств») и не подменяет свежий список.
 - **macOS:** запуск и выход больше не удаляют маршруты другого VPN; минимальная версия — macOS 12 (движки на ней не работают на 11).
@@ -29,7 +29,7 @@
 - **IPv6 не идёт через туннель** ни на одной системе. Программы, которые сами соединяются по IPv6 (звонки WebRTC, приложения со своим DNS), в сети с IPv6 могут ходить мимо VPN.
 - **Windows:** системный DNS пока не направляется в туннель — имена разрешает DNS вашей сети.
 - **Нет подписи кода и автообновления.**
-- **macOS:** после сбоя или принудительного завершения движки могут работать до следующего запуска ProxysVPN (он их и остановит). Всё приложение работает от root.
+- **macOS:** после сбоя или принудительного завершения движки могут работать до следующего запуска ProxysVPN (он их и остановит). Всё приложение работает от root: движки запускаются из копии в папке root, но сам исполняемый файл приложения и его лаунчер — из бандла в «Программах», который принадлежит вам, поэтому программа под вашей учётной записью может подменить их до следующего запуска. Установщик .pkg с привилегированным помощником запланирован.
 - Шаг починки «перечитать подписку» идёт через туннель, который чинится; если все адреса узлов сменились, нажмите «Повторить» — теперь это загрузит свежий список.
 - Windows и Linux проверены вживую на версии 0.3.1 (VLESS); 0.3.2 и локации Hysteria2 на них ещё не проверялись.
 
@@ -46,7 +46,7 @@ Compare each file's SHA-256 with `SHA256SUMS.txt` below. Nothing is code-signed 
 - **Hysteria2 locations work again.** The xray → hysteria hop was pinned to the physical interface, so the 127.0.0.1 connection never opened: no traffic, no DNS.
 - **Windows: reconnecting to the same node.** The node's host route was never deleted (netsh needs the interface), so the next connect, a there-and-back location change and an engine revive failed until a reboot.
 - **The window on small screens.** On 1366×768 and laptops at 150 % the bottom button sat under the taskbar. The window now fits the screen and can be resized.
-- **Security:** the Linux helper no longer runs a file path given by an unprivileged process; macOS runs the engines from a root-owned folder, not from the user's bundle; root's log writes do not follow links; subscription links are https-only and never sent to other services' sites; QR pairing accepts only links on our own sites; the hysteria config cannot be fed extra keys.
+- **Security:** the Linux helper no longer runs a file path given by an unprivileged process; macOS runs the engines from a copy in a root-owned folder, not from the user's bundle (the app itself still runs from the bundle, see the limitations); root's log writes follow no link in any folder on the way; subscription links are https-only and never sent to other services' sites; QR pairing accepts only links on our own sites; the hysteria config cannot be fed extra keys.
 - **Privacy:** the names of sites you open no longer reach the log or the support report; desktops no longer offer "IPv6"/"Both" (the tunnel does not carry IPv6) and the data notice says so; hysteria no longer checks api.hy2.io for updates; macOS settings are no longer readable by other accounts.
 - **Repair:** a probe during repair no longer counts when the tunnel is down (the shield could turn green while traffic went outside the VPN); picking a location during repair no longer races the repair; "Retry" after a failure fetches a fresh server list; a cached Watafast list no longer overrides the subscription's refusals ("link in use", "no funds") or a fresh list.
 - **macOS:** launching and quitting no longer delete another VPN's routes; the minimum is now macOS 12 (the engines do not run on 11).
@@ -58,7 +58,7 @@ Compare each file's SHA-256 with `SHA256SUMS.txt` below. Nothing is code-signed 
 - **IPv6 does not go through the tunnel** on any system. Programs that connect over IPv6 on their own (WebRTC calls, apps with their own DNS) can go outside the VPN on an IPv6 network.
 - **Windows:** the system DNS is not sent into the tunnel yet — your network's DNS resolves names.
 - **No code signing and no automatic updates.**
-- **macOS:** after a crash or Force Quit the engines may keep running until ProxysVPN is opened again (which stops them). The whole app runs as root.
+- **macOS:** after a crash or Force Quit the engines may keep running until ProxysVPN is opened again (which stops them). The whole app runs as root: the engines run from a copy in a root-owned folder, but the app's own executable and its launcher run from the bundle in Applications, which you own, so a program running as your user can replace them before the next launch. A .pkg installer with a privileged helper is planned.
 - The repair step that re-reads the subscription goes through the tunnel being repaired; if every node address changed, press "Retry", which now fetches a fresh list.
 - Windows and Linux were tried live with 0.3.1 (VLESS); 0.3.2 and Hysteria2 locations have not been run on them yet.
 

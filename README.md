@@ -91,9 +91,14 @@ Cinnamon and MATE have one). Remove with `sudo apt remove proxys-vpn`.
 - **macOS:** after a crash or Force Quit the engines may keep running until
   ProxysVPN is opened again; opening it cleans them up.
 - **macOS:** the whole app runs as root (the price of not having a signed
-  privileged helper yet); the engines it runs are copied to a root-owned
-  folder at launch, so nothing in the user-writable app bundle runs as root
-  after the password prompt.
+  privileged helper yet). The engines it starts (xray, tun2socks, hysteria)
+  and their geo files are copied to a root-owned folder at launch and run only
+  from there, but the app itself (`Contents/MacOS/ProxysVPN-bin`) and its
+  launcher still run as root straight from the app bundle, which a drag
+  install leaves owned by your account. A program running as your user can
+  therefore replace them, and the replacement runs as root at the next launch
+  when you type your password. The planned fix is a `.pkg` installer with a
+  small privileged helper, so that the window no longer runs as root.
 
 ## Architecture
 
