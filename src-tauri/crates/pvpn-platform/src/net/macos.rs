@@ -20,12 +20,6 @@ use crate::net::PhysicalRoute;
 
 pub use plan::macos::DEVICE;
 
-/// tun2socks accepts `[driver://]name`; macOS has always been given the bare
-/// name and the utun driver is inferred.
-pub fn tun2socks_device_arg() -> String {
-    DEVICE.to_string()
-}
-
 pub async fn physical_route() -> Result<PhysicalRoute> {
     let text = p::default_route_query()
         .stdout_lossy()
@@ -106,24 +100,13 @@ pub async fn device_down() {
     p::device_down().run_best_effort().await;
 }
 
-pub async fn engine_alive(stem: &str) -> bool {
-    match p::process_alive(stem).output().await {
-        Ok(out) => !out.stdout.is_empty(),
-        Err(_) => false,
-    }
-}
-
 pub async fn kill_stray(stem: &str) {
     p::kill_stray(stem).run_best_effort().await;
 }
 
-pub async fn kill_stray_force(stem: &str) {
-    p::kill_stray_force(stem).run_best_effort().await;
-}
-
 /// Synchronous sweep for the exit/signal path, where there is no runtime to
 /// await on. Mirrors the pre-split `sync_cleanup`.
-pub fn sync_cleanup(stale_hosts: &[Ipv4Addr]) {
+fn sync_cleanup_inner(stale_hosts: &[Ipv4Addr]) {
     use std::process::Command;
 
     let run = |argv: crate::Argv| {
@@ -140,4 +123,121 @@ pub fn sync_cleanup(stale_hosts: &[Ipv4Addr]) {
         run(p::host_route_delete(*host));
     }
     log::info("net", "cleanup done");
+}
+
+// ===========================================================================
+// The contract
+// ===========================================================================
+//
+// macOS is a privileged-GUI platform: scripts/launcher.sh asks for the password
+// once via osascript and re-execs us through `launchctl asuser`, so the whole
+// process is root while staying inside the user's GUI session. The sequence
+// therefore runs in-process, and `net::local` holds it (shared with Windows).
+
+use std::net::IpAddr;
+use std::path::Path;
+
+use crate::net::local::{self, Privileged};
+use crate::net::TunPlan;
+use crate::process::Argv;
+
+struct MacOs;
+
+impl Privileged for MacOs {
+    const DEVICE: &'static str = DEVICE;
+
+    fn tun2socks_argv(bin: &Path, socks_port: u16) -> Argv {
+        p::tun2socks(bin, socks_port)
+    }
+
+    async fn physical_route() -> Result<PhysicalRoute> {
+        physical_route().await
+    }
+
+    async fn add_host_route(dest: Ipv4Addr, via: &PhysicalRoute) -> Result<()> {
+        add_host_route(dest, via).await
+    }
+
+    async fn delete_host_route(dest: Ipv4Addr) {
+        delete_host_route(dest).await
+    }
+
+    async fn host_route_ok(dest: Ipv4Addr) -> bool {
+        host_route_ok(dest).await
+    }
+
+    async fn add_split_defaults() -> Result<()> {
+        add_split_defaults().await
+    }
+
+    async fn delete_split_defaults() {
+        delete_split_defaults().await
+    }
+
+    async fn split_defaults_ok() -> bool {
+        split_defaults_ok().await
+    }
+
+    async fn wait_for_device(timeout: Duration) -> Result<()> {
+        wait_for_device(timeout).await
+    }
+
+    async fn configure_device() -> Result<()> {
+        configure_device().await
+    }
+
+    async fn device_down() {
+        device_down().await
+    }
+
+    /// Nothing to do, and that is deliberate.
+    ///
+    /// The macOS resolver keeps using the physical link's servers and those
+    /// queries are simply proxied, because their addresses fall under
+    /// 0.0.0.0/1 like all other traffic. Pointing the system resolver at an
+    /// address inside the tunnel would need `networksetup -setdnsservers` per
+    /// service plus a restore on every exit path, and would break name
+    /// resolution outright if we ever failed to restore it. The leak this
+    /// leaves — the physical resolver sees the names — is the same one the
+    /// shipping build has, and fixing it belongs with the `dns` section of the
+    /// generated xray config, not here.
+    async fn configure_dns(_servers: &[IpAddr]) -> Result<()> {
+        Ok(())
+    }
+
+    async fn restore_dns() {}
+
+    async fn kill_stray(stem: &str) {
+        kill_stray(stem).await
+    }
+
+}
+
+/// macOS needs root for `route` and `ifconfig`. The launcher provides it; if we
+/// are running without it, say so before touching anything.
+pub async fn preflight() -> Result<()> {
+    if crate::privilege::is_elevated() {
+        return Ok(());
+    }
+    Err(anyhow!("{}", crate::privilege::missing_privileges_message()))
+}
+
+pub async fn up(plan: &TunPlan) -> Result<()> {
+    local::up::<MacOs>(plan).await
+}
+
+pub async fn ensure(plan: &TunPlan) -> Result<()> {
+    local::ensure::<MacOs>(plan).await
+}
+
+pub async fn down(server_ip: Option<Ipv4Addr>) -> Result<()> {
+    local::down::<MacOs>(server_ip).await
+}
+
+pub async fn engine_alive() -> bool {
+    local::engine_alive().await
+}
+
+pub fn purge_stale(stale_hosts: &[Ipv4Addr]) {
+    sync_cleanup_inner(stale_hosts)
 }

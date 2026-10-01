@@ -1,41 +1,88 @@
 // src-tauri/crates/pvpn-platform/src/net/mod.rs
 //
-// The TUN device and the routing around it.
+// The TUN device and everything around it: routes, DNS, the engine process and
+// the privileges needed to touch them.
 //
-// CONTRACT — every platform module (`macos`, `windows`, `linux`) exports
-// exactly these items, and this file re-exports them one by one so that a
-// missing or mistyped implementation fails here instead of at some call site
-// in the GUI crate:
+// ---------------------------------------------------------------------------
+// THE CONTRACT
+// ---------------------------------------------------------------------------
+// Every platform module (`macos`, `windows`, `linux`) exports exactly these
+// items, and this file re-exports them one by one, so a missing or mistyped
+// implementation fails *here* rather than at a call site in the GUI crate:
 //
-//   const DEVICE: &str                    name of the TUN device
-//   fn  tun2socks_device_arg() -> String  value for tun2socks' `-device`
-//   async physical_route() -> Result<PhysicalRoute>
-//                                         how packets leave the machine
-//                                         *outside* the tunnel; reads the
-//                                         physical default route, which stays
-//                                         in the table while our two halves
-//                                         are installed
-//   async add_host_route(dest, &PhysicalRoute) -> Result<()>
-//   async delete_host_route(dest)         best effort
-//   async host_route_ok(dest) -> bool     still pointing outside the tunnel?
-//   async add_split_defaults() -> Result<()>
-//   async delete_split_defaults()         best effort
-//   async split_defaults_ok() -> bool
-//   async wait_for_device(Duration) -> Result<()>
-//                                         the device is created by tun2socks,
-//                                         not by us; this waits for it
-//   async configure_device() -> Result<()> address (+ platform extras)
-//   async device_down()                   best effort
-//   async engine_alive(stem) -> bool
-//   async kill_stray(stem) / kill_stray_force(stem)
-//   fn    sync_cleanup(&[Ipv4Addr])       blocking sweep for the exit path
+//   const DEVICE: &str                     name of the TUN device
+//   async preflight() -> Result<()>        fail before anything is changed:
+//                                          privileges, helper, authorization
+//   async up(&TunPlan) -> Result<()>       raise the tunnel; on failure it must
+//                                          leave nothing behind
+//   async ensure(&TunPlan) -> Result<()>   supervisor tick: re-assert routes
+//                                          and DNS that the OS dropped
+//   async down(Option<Ipv4Addr>) -> Result<()>
+//                                          tear down; idempotent, safe when
+//                                          nothing is up
+//   async engine_alive() -> bool           is tun2socks still running?
+//   fn    purge_stale(&[Ipv4Addr])         blocking crash recovery, for the
+//                                          startup and exit paths where there
+//                                          is no runtime to await on
 //
-// `stem` is always the plain sidecar name ("tun2socks", "xray", "hysteria");
-// the platform module appends ".exe" where that is what the OS expects.
+// ---------------------------------------------------------------------------
+// WHY THE CONTRACT IS COARSE
+// ---------------------------------------------------------------------------
+// An earlier draft of this layer exposed the individual steps (add_host_route,
+// add_split_defaults, configure_device, …) and let the GUI sequence them. That
+// is the right shape only while the GUI is the privileged process, which is
+// true on macOS (root via launchctl) and on Windows (requireAdministrator) but
+// *cannot* be true on Linux: a root process cannot connect to a Wayland
+// compositor, so the GUI stays unprivileged there and a small root helper owns
+// the device. Two consequences decide the granularity:
+//
+//   1. On Linux every step would be an IPC call across a privilege boundary.
+//      Three coarse operations keep that boundary narrow and auditable — the
+//      helper is told "raise a tunnel to this address", never "add this route
+//      to that interface", so a compromised GUI cannot aim root's `ip` at an
+//      arbitrary target. See helper/proto.rs for the validation.
+//   2. `up` has to be atomic: whatever it changed must be undone when a later
+//      step fails. That is only expressible where the steps live together.
+//
+// So the fine-grained steps still exist — they are each platform's private
+// vocabulary, in `macos.rs`, `windows.rs` and (behind the helper) `linux.rs`,
+// with their exact argv produced by `plan` and pinned by golden tests.
+//
+// ---------------------------------------------------------------------------
+// INVARIANTS THAT MUST SURVIVE REFACTORS
+// ---------------------------------------------------------------------------
+//   * macOS runs byte-for-byte the commands it ran before this layer existed.
+//     `plan::macos` produces them and golden tests compare the argv, so a typo
+//     cannot silently change behaviour for the users who are on it today.
+//   * This crate has no tauri/reqwest/rustls dependency and nothing in it needs
+//     a C compiler, so the Windows and Linux code type-checks from a Mac:
+//         cargo check -p pvpn-platform --target x86_64-pc-windows-msvc
+//         cargo check -p pvpn-platform --target x86_64-unknown-linux-gnu
+//     That is the only verification those two ports can get here, so it must
+//     not be given up for convenience.
 
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
+use std::path::PathBuf;
 
+pub mod linux_logic;
 pub mod plan;
+
+/// tun2socks plumbing shared by the platforms that spawn it themselves
+/// (macOS and Windows). On Linux the root helper owns the process instead.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod engine;
+
+/// The tunnel sequence for the platforms whose GUI is itself privileged, shared
+/// by macOS and Windows so the order of operations cannot drift between them.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod local;
+
+/// The privileged half of the Linux backend: what the root helper runs. Split
+/// from `linux` (the unprivileged client) because only one of the two is ever
+/// the right thing to call, and mixing them is how a GUI ends up trying to
+/// write a routing table it has no rights to.
+#[cfg(target_os = "linux")]
+pub mod linux_priv;
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -52,15 +99,39 @@ mod linux;
 #[cfg(target_os = "linux")]
 use linux as sys;
 
-pub use sys::{
-    add_host_route, add_split_defaults, configure_device, delete_host_route,
-    delete_split_defaults, device_down, engine_alive, host_route_ok, kill_stray,
-    kill_stray_force, physical_route, split_defaults_ok, sync_cleanup,
-    tun2socks_device_arg, wait_for_device, DEVICE,
-};
+pub use sys::{down, engine_alive, ensure, preflight, purge_stale, up, DEVICE};
 
 /// Address of the TUN device, identical on every platform.
 pub use plan::DEVICE_ADDR;
+
+/// Everything a platform needs to raise or re-assert the tunnel.
+///
+/// `server_ip` is an `Ipv4Addr` and not a string on purpose: it is resolved and
+/// validated once, at the edge, and can therefore never reach a command line as
+/// anything but four octets. The Linux wire protocol re-validates it anyway,
+/// because the helper must not trust its peer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TunPlan {
+    /// Resolved IPv4 address of the VPN node. Never logged: node addresses are
+    /// not public information.
+    pub server_ip: Ipv4Addr,
+    /// Loopback SOCKS5 port of the engine (xray or hysteria) in front of
+    /// tun2socks.
+    pub socks_port: u16,
+    /// Absolute path to the tun2socks sidecar.
+    pub tun2socks: PathBuf,
+    /// Resolvers to publish on the tunnel interface, where the platform needs
+    /// them. Linux does; macOS and Windows leave the system resolver alone (see
+    /// `configure_dns` in each module for why).
+    pub dns: Vec<IpAddr>,
+}
+
+impl TunPlan {
+    /// Resolvers as strings, for the Linux helper's JSON protocol.
+    pub fn dns_strings(&self) -> Vec<String> {
+        self.dns.iter().map(|ip| ip.to_string()).collect()
+    }
+}
 
 /// How traffic leaves the machine without going through the tunnel.
 ///
@@ -97,6 +168,8 @@ impl std::fmt::Display for PhysicalRoute {
 ///   * the host route to the node goes next: while the split defaults existed
 ///     it was the only thing keeping the node reachable, and removing it
 ///     earlier would cut the engines off mid-shutdown;
+///   * then DNS, which must not be left pointing into a tunnel that is going
+///     away, or every name lookup on the machine stops working;
 ///   * then the device itself;
 ///   * then the engine we own, by handle;
 ///   * and only then a sweep for strays, which is the fallback for a sidecar
@@ -105,14 +178,16 @@ impl std::fmt::Display for PhysicalRoute {
 pub enum TeardownStep {
     SplitDefaults,
     HostRoute,
+    RestoreDns,
     DeviceDown,
     KillOwnedEngine,
     KillStrayEngines,
 }
 
-pub const TEARDOWN_ORDER: [TeardownStep; 5] = [
+pub const TEARDOWN_ORDER: [TeardownStep; 6] = [
     TeardownStep::SplitDefaults,
     TeardownStep::HostRoute,
+    TeardownStep::RestoreDns,
     TeardownStep::DeviceDown,
     TeardownStep::KillOwnedEngine,
     TeardownStep::KillStrayEngines,
@@ -120,6 +195,9 @@ pub const TEARDOWN_ORDER: [TeardownStep; 5] = [
 
 /// Sidecars that must not survive a teardown, in kill order.
 pub const ENGINE_STEMS: [&str; 3] = ["tun2socks", "xray", "hysteria"];
+
+/// The engine the tunnel itself depends on; the other two carry traffic into it.
+pub const TUNNEL_ENGINE: &str = "tun2socks";
 
 /// Convenience for callers that only have the device name.
 pub fn is_our_device(name: &str) -> bool {
@@ -159,6 +237,8 @@ mod tests {
         assert!(pos(TeardownStep::HostRoute) < pos(TeardownStep::DeviceDown));
         // The node must stay reachable until the tunnel's defaults are gone.
         assert!(pos(TeardownStep::SplitDefaults) < pos(TeardownStep::HostRoute));
+        // A resolver on a device that no longer exists breaks every lookup.
+        assert!(pos(TeardownStep::RestoreDns) < pos(TeardownStep::DeviceDown));
         // Our own child first, the blunt sweep last.
         assert!(pos(TeardownStep::KillOwnedEngine) < pos(TeardownStep::KillStrayEngines));
         assert!(pos(TeardownStep::DeviceDown) < pos(TeardownStep::KillOwnedEngine));
@@ -179,6 +259,7 @@ mod tests {
         assert!(ENGINE_STEMS.contains(&"tun2socks"));
         assert!(ENGINE_STEMS.contains(&"xray"));
         assert!(ENGINE_STEMS.contains(&"hysteria"));
+        assert!(ENGINE_STEMS.contains(&TUNNEL_ENGINE));
     }
 
     #[test]
@@ -194,6 +275,9 @@ mod tests {
         assert!(parse_route_hint("").is_empty());
         assert!(parse_route_hint("pid=1\nserver_ip=not-an-ip\n").is_empty());
         assert!(parse_route_hint("server_ip=2001:db8::1\n").is_empty());
+        // Anything that could become an extra argument must not survive.
+        assert!(parse_route_hint("server_ip=; rm -rf /\n").is_empty());
+        assert!(parse_route_hint("server_ip=-net default\n").is_empty());
         assert_eq!(
             parse_route_hint("pid=1\nserver_ip=198.51.100.9\nserver_ip=203.0.113.7\n").len(),
             2
@@ -208,7 +292,11 @@ mod tests {
             if_index: Some(11),
         };
         assert_eq!(r.to_string(), "192.168.1.1 via en0");
-        let onlink = PhysicalRoute { next_hop: None, if_name: None, if_index: Some(7) };
+        let onlink = PhysicalRoute {
+            next_hop: None,
+            if_name: None,
+            if_index: Some(7),
+        };
         assert_eq!(onlink.to_string(), "on-link if#7");
     }
 
@@ -216,5 +304,30 @@ mod tests {
     fn device_name_is_recognised() {
         assert!(is_our_device(DEVICE));
         assert!(!is_our_device("en0"));
+    }
+
+    #[test]
+    fn device_name_fits_the_kernel_limit() {
+        // IFNAMSIZ is 16 including the NUL on Linux; utun names are shorter.
+        assert!(!DEVICE.is_empty());
+        assert!(DEVICE.len() < 16, "{} is too long for an interface", DEVICE);
+        assert!(DEVICE.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn plan_renders_dns_for_the_wire() {
+        let plan = TunPlan {
+            server_ip: Ipv4Addr::new(203, 0, 113, 7),
+            socks_port: 10808,
+            tun2socks: PathBuf::from("/opt/proxysvpn/tun2socks"),
+            dns: vec![
+                "1.1.1.1".parse().expect("ip"),
+                "2606:4700:4700::1111".parse().expect("ip"),
+            ],
+        };
+        assert_eq!(
+            plan.dns_strings(),
+            vec!["1.1.1.1".to_string(), "2606:4700:4700::1111".to_string()]
+        );
     }
 }

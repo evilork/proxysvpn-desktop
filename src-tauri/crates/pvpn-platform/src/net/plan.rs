@@ -8,7 +8,7 @@
 // The macOS plan is a transcription of the pre-split tun.rs. Its golden tests
 // are the proof that the refactor did not change a single argument.
 
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 
 use crate::net::PhysicalRoute;
 use crate::process::Argv;
@@ -33,6 +33,26 @@ pub mod macos {
     const ROUTE: &str = "/sbin/route";
     const IFCONFIG: &str = "/sbin/ifconfig";
     const PKILL: &str = "/usr/bin/pkill";
+
+    /// What tun2socks is told to open. On macOS the bare device name, exactly
+    /// as the pre-split build passed it.
+    pub const DEVICE_ARG: &str = DEVICE;
+
+    /// Argv for the engine, unchanged from the pre-split build: no `-mtu`, and
+    /// `-loglevel info`. tun2socks creates the device itself from `-device`.
+    pub fn tun2socks(bin: &std::path::Path, socks_port: u16) -> Argv {
+        Argv::new(
+            bin.to_string_lossy().to_string(),
+            [
+                "-device".to_string(),
+                DEVICE_ARG.to_string(),
+                "-proxy".to_string(),
+                format!("socks5://127.0.0.1:{}", socks_port),
+                "-loglevel".to_string(),
+                "info".to_string(),
+            ],
+        )
+    }
 
     pub fn default_route_query() -> Argv {
         // Deliberately `route` without a path: unchanged from the pre-split code.
@@ -179,6 +199,26 @@ pub mod windows {
     ///
     /// `store=active` keeps every change volatile: a reboot after a crash
     /// leaves no trace of the tunnel in the persistent route table.
+    /// tun2socks takes `[driver://]name`; the bare name selects the platform
+    /// default driver, which is Wintun here.
+    pub const DEVICE_ARG: &str = DEVICE;
+
+    /// Argv for the engine, unchanged from the pre-split build: no `-mtu`, and
+    /// `-loglevel info`. tun2socks creates the device itself from `-device`.
+    pub fn tun2socks(bin: &std::path::Path, socks_port: u16) -> Argv {
+        Argv::new(
+            bin.to_string_lossy().to_string(),
+            [
+                "-device".to_string(),
+                DEVICE_ARG.to_string(),
+                "-proxy".to_string(),
+                format!("socks5://127.0.0.1:{}", socks_port),
+                "-loglevel".to_string(),
+                "info".to_string(),
+            ],
+        )
+    }
+
     pub fn host_route_add(ip: Ipv4Addr, via: &PhysicalRoute) -> anyhow::Result<Argv> {
         let index = via.if_index.ok_or_else(|| {
             anyhow::anyhow!("no interface index for the host route to {}", ip)
@@ -336,32 +376,89 @@ pub mod windows {
 }
 
 // ===========================================================================
-// Linux — placeholder
+// Linux
 // ===========================================================================
 
-/// Linux lands on its own branch (feat/desktop-linux). The plan below exists
-/// so that this crate's module layout and contract are already final for it;
-/// `net::linux` refuses to start a tunnel rather than pretending to work.
+/// Everything the root helper runs, as pure values.
+///
+/// `ip` and `resolvectl` are looked up as absolute paths at call time (pkexec
+/// resets PATH, and distros disagree on /sbin vs /usr/sbin), so the programs
+/// here are bare names and `net::linux_priv::tool` resolves them. The argument
+/// lists are what matters and what these tests pin.
+///
+/// Routing shape is the same as macOS and Windows: two half-defaults on the
+/// tunnel plus a /32 host route to the node over the physical link. The halves
+/// beat the real 0.0.0.0/0 on prefix length without deleting it, so another
+/// VPN's default and the ISP's survive untouched and come back when we leave.
 pub mod linux {
     use super::*;
+    use crate::net::linux_logic::LinuxDefaultRoute;
 
     pub const DEVICE: &str = "proxysvpn0";
 
+    /// 198.18.0.0/15 (RFC 2544 benchmark range) — the subnet tun2socks' own
+    /// documentation uses, and not routed on the public internet.
+    pub const PREFIX: u8 = 15;
+
+    /// tun2socks terminates TCP locally and re-opens it towards the SOCKS
+    /// proxy, so the device is not an encapsulating tunnel and does not need a
+    /// reduced MTU.
+    pub const MTU: u32 = 1500;
+
+    const IP: &str = "ip";
+    const RESOLVECTL: &str = "resolvectl";
+
+    /// `ip -4 route replace <ip>/32 [via <gw>] dev <iface>`.
+    ///
+    /// A link-scoped default (no gateway, e.g. `ppp0`) must be expressed as
+    /// `dev <iface>` with no `via`, or `ip` rejects it.
+    pub fn host_route_add(ip: Ipv4Addr, via: &LinuxDefaultRoute) -> Argv {
+        let mut args = vec![
+            "-4".to_string(),
+            "route".to_string(),
+            "replace".to_string(),
+            format!("{}/32", ip),
+        ];
+        if let Some(gw) = via.gateway {
+            args.push("via".to_string());
+            args.push(gw.to_string());
+        }
+        args.push("dev".to_string());
+        args.push(via.iface.clone());
+        Argv::new(IP, args)
+    }
+
+    pub fn host_route_delete(ip: Ipv4Addr) -> Argv {
+        Argv::new(
+            IP,
+            ["-4", "route", "del", &format!("{}/32", ip)],
+        )
+    }
+
+    /// Asks the kernel which device would carry a packet to `ip`. Used to tell
+    /// "the host route is still outside the tunnel" from "it got swallowed".
+    pub fn host_route_query(ip: Ipv4Addr) -> Argv {
+        Argv::new(IP, ["-4", "route", "get", &ip.to_string()])
+    }
+
+    /// `replace`, not `add`: a half left over from a crashed run must not make
+    /// the whole connect fail.
     pub fn split_default_add(half: &str) -> Argv {
-        Argv::new("ip", ["route", "add", half, "dev", DEVICE])
+        Argv::new(IP, ["-4", "route", "replace", half, "dev", DEVICE])
     }
 
     pub fn split_default_delete(half: &str) -> Argv {
-        Argv::new("ip", ["route", "del", half, "dev", DEVICE])
+        Argv::new(IP, ["-4", "route", "del", half, "dev", DEVICE])
     }
 
-    pub fn device_configure() -> Argv {
+    pub fn device_set_address() -> Argv {
         Argv::new(
-            "ip",
+            IP,
             [
+                "-4",
                 "addr",
-                "add",
-                &format!("{}/24", DEVICE_ADDR),
+                "replace",
+                &format!("{}/{}", DEVICE_ADDR, PREFIX),
                 "dev",
                 DEVICE,
             ],
@@ -369,11 +466,67 @@ pub mod linux {
     }
 
     pub fn device_up() -> Argv {
-        Argv::new("ip", ["link", "set", DEVICE, "up"])
+        Argv::new(
+            IP,
+            ["link", "set", "dev", DEVICE, "up", "mtu", &MTU.to_string()],
+        )
     }
 
-    pub fn device_down() -> Argv {
-        Argv::new("ip", ["link", "set", DEVICE, "down"])
+    /// Deletes the device outright rather than downing it: it belongs to
+    /// tun2socks, and a leftover `proxysvpn0` would make the next run's
+    /// `wait_for_device` succeed before the new engine is actually listening.
+    pub fn device_delete() -> Argv {
+        Argv::new(IP, ["link", "del", DEVICE])
+    }
+
+    pub fn tun2socks(bin: &std::path::Path, socks_port: u16) -> Argv {
+        Argv::new(
+            bin.to_string_lossy().to_string(),
+            [
+                "-device".to_string(),
+                format!("tun://{}", DEVICE),
+                "-proxy".to_string(),
+                format!("socks5://127.0.0.1:{}", socks_port),
+                "-mtu".to_string(),
+                MTU.to_string(),
+                // `warn`, never `warning`: the long form makes tun2socks exit.
+                "-loglevel".to_string(),
+                "warn".to_string(),
+            ],
+        )
+    }
+
+    // ------------------------------------------------------------------ DNS
+
+    /// `resolvectl dns proxysvpn0 <servers…>`.
+    pub fn resolved_set_servers(servers: &[IpAddr]) -> Argv {
+        let mut args = vec!["dns".to_string(), DEVICE.to_string()];
+        args.extend(servers.iter().map(|ip| ip.to_string()));
+        Argv::new(RESOLVECTL, args)
+    }
+
+    /// `~.` makes the tunnel the resolver of last resort for every name, which
+    /// is what stops systemd-resolved from asking the LAN router in parallel.
+    pub fn resolved_set_domain() -> Argv {
+        Argv::new(RESOLVECTL, ["domain", DEVICE, "~."])
+    }
+
+    pub fn resolved_set_default_route() -> Argv {
+        Argv::new(RESOLVECTL, ["default-route", DEVICE, "yes"])
+    }
+
+    pub fn resolved_revert() -> Argv {
+        Argv::new(RESOLVECTL, ["revert", DEVICE])
+    }
+
+    pub fn resolved_flush() -> Argv {
+        Argv::new(RESOLVECTL, ["flush-caches"])
+    }
+
+    /// Crash sweep for a tun2socks the helper no longer has a handle for.
+    /// `-x` so it cannot match an unrelated command line.
+    pub fn kill_stray(stem: &str) -> Argv {
+        Argv::new("pkill", ["-9", "-x", stem])
     }
 }
 
@@ -600,18 +753,139 @@ mod tests {
 
     // ---------------------------------------------------------------- Linux
 
+    fn linux_route(gw: Option<[u8; 4]>, iface: &str) -> crate::net::linux_logic::LinuxDefaultRoute {
+        crate::net::linux_logic::LinuxDefaultRoute {
+            iface: iface.to_string(),
+            gateway: gw.map(Ipv4Addr::from),
+            metric: 100,
+        }
+    }
+
     #[test]
-    fn linux_plan_shape() {
+    fn linux_routes_have_the_expected_shape() {
         assert_eq!(
             linux::split_default_add(SPLIT_LOW).to_string(),
-            "ip route add 0.0.0.0/1 dev proxysvpn0"
+            "ip -4 route replace 0.0.0.0/1 dev proxysvpn0"
         );
         assert_eq!(
-            linux::device_configure().to_string(),
-            "ip addr add 198.18.0.1/24 dev proxysvpn0"
+            linux::split_default_delete(SPLIT_HIGH).to_string(),
+            "ip -4 route del 128.0.0.0/1 dev proxysvpn0"
         );
-        assert_eq!(linux::device_up().to_string(), "ip link set proxysvpn0 up");
-        assert_eq!(linux::device_down().to_string(), "ip link set proxysvpn0 down");
+        assert_eq!(
+            linux::device_set_address().to_string(),
+            "ip -4 addr replace 198.18.0.1/15 dev proxysvpn0"
+        );
+        assert_eq!(
+            linux::device_up().to_string(),
+            "ip link set dev proxysvpn0 up mtu 1500"
+        );
+        assert_eq!(linux::device_delete().to_string(), "ip link del proxysvpn0");
+    }
+
+    /// `replace` and not `add`: a half-default or address left over from a
+    /// crashed run must not make the next connect fail.
+    #[test]
+    fn linux_route_writes_are_idempotent() {
+        for argv in [
+            linux::split_default_add(SPLIT_LOW),
+            linux::device_set_address(),
+            linux::host_route_add(Ipv4Addr::new(203, 0, 113, 7), &linux_route(None, "eth0")),
+        ] {
+            assert!(
+                argv.args.contains(&"replace".to_string()),
+                "{} must be idempotent",
+                argv
+            );
+            assert!(!argv.args.contains(&"add".to_string()), "{}", argv);
+        }
+    }
+
+    #[test]
+    fn linux_host_route_uses_via_when_a_gateway_exists() {
+        assert_eq!(
+            linux::host_route_add(
+                Ipv4Addr::new(203, 0, 113, 7),
+                &linux_route(Some([10, 0, 2, 2]), "enp0s3")
+            )
+            .to_string(),
+            "ip -4 route replace 203.0.113.7/32 via 10.0.2.2 dev enp0s3"
+        );
+    }
+
+    /// A link-scoped default (mobile broadband, `default dev ppp0`) has no
+    /// gateway, and `ip` rejects a `via` with an empty argument.
+    #[test]
+    fn linux_host_route_falls_back_to_the_device_for_link_scoped_defaults() {
+        let argv = linux::host_route_add(
+            Ipv4Addr::new(203, 0, 113, 7),
+            &linux_route(None, "ppp0"),
+        );
+        assert_eq!(
+            argv.to_string(),
+            "ip -4 route replace 203.0.113.7/32 dev ppp0"
+        );
+        assert!(!argv.args.contains(&"via".to_string()));
+    }
+
+    #[test]
+    fn linux_host_route_delete_names_a_single_address() {
+        assert_eq!(
+            linux::host_route_delete(Ipv4Addr::new(203, 0, 113, 7)).to_string(),
+            "ip -4 route del 203.0.113.7/32"
+        );
+        assert_eq!(
+            linux::host_route_query(Ipv4Addr::new(203, 0, 113, 7)).to_string(),
+            "ip -4 route get 203.0.113.7"
+        );
+    }
+
+    #[test]
+    fn linux_tun2socks_argv_matches_the_device_and_port() {
+        let argv = linux::tun2socks(std::path::Path::new("/opt/pvpn/tun2socks"), 10808);
+        assert_eq!(argv.program, "/opt/pvpn/tun2socks");
+        assert_eq!(
+            argv.args,
+            vec![
+                "-device",
+                "tun://proxysvpn0",
+                "-proxy",
+                "socks5://127.0.0.1:10808",
+                "-mtu",
+                "1500",
+                "-loglevel",
+                "warn",
+            ]
+        );
+        // `warning` would make tun2socks exit immediately; only `warn` works.
+        assert!(!argv.args.contains(&"warning".to_string()));
+    }
+
+    #[test]
+    fn linux_dns_argv_covers_servers_domain_and_revert() {
+        let servers: Vec<IpAddr> = vec![
+            "1.1.1.1".parse().expect("ip"),
+            "1.0.0.1".parse().expect("ip"),
+        ];
+        assert_eq!(
+            linux::resolved_set_servers(&servers).to_string(),
+            "resolvectl dns proxysvpn0 1.1.1.1 1.0.0.1"
+        );
+        assert_eq!(
+            linux::resolved_set_domain().to_string(),
+            "resolvectl domain proxysvpn0 ~."
+        );
+        assert_eq!(
+            linux::resolved_revert().to_string(),
+            "resolvectl revert proxysvpn0"
+        );
+    }
+
+    #[test]
+    fn linux_kill_stray_is_exact_match_only() {
+        let argv = linux::kill_stray("tun2socks");
+        assert_eq!(argv.to_string(), "pkill -9 -x tun2socks");
+        // Without -x this would also kill, say, "tun2socks-wrapper".
+        assert!(argv.args.contains(&"-x".to_string()));
     }
 
     // ------------------------------------------------- cross-platform shape

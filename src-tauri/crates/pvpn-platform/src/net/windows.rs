@@ -54,12 +54,6 @@ pub use plan::windows::DEVICE;
 const PROBE_LOW: Ipv4Addr = Ipv4Addr::new(1, 0, 0, 1);
 const PROBE_HIGH: Ipv4Addr = Ipv4Addr::new(200, 0, 0, 1);
 
-/// tun2socks takes `[driver://]name`; the bare name selects the platform's
-/// default driver, which is Wintun on Windows.
-pub fn tun2socks_device_arg() -> String {
-    DEVICE.to_string()
-}
-
 // --------------------------------------------------------------------- reads
 
 fn sockaddr_v4(addr: Ipv4Addr) -> SOCKADDR_INET {
@@ -279,26 +273,12 @@ pub async fn device_down() {
     log::info("net", "device teardown is implicit on Windows (Wintun)");
 }
 
-pub async fn engine_alive(stem: &str) -> bool {
-    let image = p::image_name(stem);
-    match p::process_alive(&image).stdout_lossy().await {
-        Some(text) => p::parse_tasklist_alive(&text, &image),
-        None => false,
-    }
-}
-
 pub async fn kill_stray(stem: &str) {
     p::kill_stray(&p::image_name(stem)).run_best_effort().await;
 }
 
-pub async fn kill_stray_force(stem: &str) {
-    // taskkill /F is already a hard kill; there is no gentler variant to
-    // escalate from, so both entry points do the same thing.
-    kill_stray(stem).await;
-}
-
 /// Synchronous sweep for the exit path, where no runtime is available.
-pub fn sync_cleanup(stale_hosts: &[Ipv4Addr]) {
+fn sync_cleanup_inner(stale_hosts: &[Ipv4Addr]) {
     use std::process::Command;
 
     let run = |argv: crate::Argv| {
@@ -320,4 +300,129 @@ pub fn sync_cleanup(stale_hosts: &[Ipv4Addr]) {
         run(p::kill_stray(&p::image_name(stem)));
     }
     log::info("net", "cleanup done");
+}
+
+// ===========================================================================
+// The contract
+// ===========================================================================
+//
+// Windows is a privileged-GUI platform like macOS: the exe carries a manifest
+// with requestedExecutionLevel="requireAdministrator" (see build.rs and
+// windows-app.manifest), so there is one UAC prompt at launch and the whole
+// process tree — including the sidecars — is elevated. The sequence therefore
+// runs in-process, and `net::local` holds it (shared with macOS).
+//
+// The cost is documented in docs/WINDOWS.md: the WebView runs elevated too. An
+// unprivileged GUI plus a small elevated service is the next step, and it is
+// cheap from here — the contract in net/mod.rs is already the narrow,
+// three-operation shape that Linux puts behind IPC, so moving Windows behind
+// the same boundary does not touch any caller.
+
+use std::net::IpAddr;
+use std::path::Path;
+
+use crate::net::local::{self, Privileged};
+use crate::net::TunPlan;
+use crate::process::Argv;
+
+struct Windows;
+
+impl Privileged for Windows {
+    const DEVICE: &'static str = DEVICE;
+
+    fn tun2socks_argv(bin: &Path, socks_port: u16) -> Argv {
+        p::tun2socks(bin, socks_port)
+    }
+
+    async fn physical_route() -> Result<PhysicalRoute> {
+        physical_route().await
+    }
+
+    async fn add_host_route(dest: Ipv4Addr, via: &PhysicalRoute) -> Result<()> {
+        add_host_route(dest, via).await
+    }
+
+    async fn delete_host_route(dest: Ipv4Addr) {
+        delete_host_route(dest).await
+    }
+
+    async fn host_route_ok(dest: Ipv4Addr) -> bool {
+        host_route_ok(dest).await
+    }
+
+    async fn add_split_defaults() -> Result<()> {
+        add_split_defaults().await
+    }
+
+    async fn delete_split_defaults() {
+        delete_split_defaults().await
+    }
+
+    async fn split_defaults_ok() -> bool {
+        split_defaults_ok().await
+    }
+
+    async fn wait_for_device(timeout: Duration) -> Result<()> {
+        wait_for_device(timeout).await
+    }
+
+    async fn configure_device() -> Result<()> {
+        configure_device().await
+    }
+
+    async fn device_down() {
+        device_down().await
+    }
+
+    /// Deliberately nothing — and note that `configure_device` does the
+    /// *opposite*: it clears the resolver list on the tunnel adapter.
+    ///
+    /// Windows queries every adapter that has a resolver configured, in
+    /// parallel, and takes the first answer. Publishing a resolver on the
+    /// tunnel would therefore send a copy of each lookup into the tunnel, where
+    /// the generated xray config has no `dns` section and nothing answers; the
+    /// race would show up as names that resolve only sometimes. With no
+    /// resolver on the adapter, lookups go out over the physical link and their
+    /// packets are proxied like all other traffic under 0.0.0.0/1 — the same
+    /// behaviour as macOS. NRPT, which would scope DNS to the tunnel properly,
+    /// belongs with the `dns` work in the config builder.
+    async fn configure_dns(_servers: &[IpAddr]) -> Result<()> {
+        Ok(())
+    }
+
+    async fn restore_dns() {}
+
+    async fn kill_stray(stem: &str) {
+        kill_stray(stem).await
+    }
+
+}
+
+/// netsh and the Wintun driver both need elevation. The manifest should have
+/// got it for us at launch; check rather than fail halfway through.
+pub async fn preflight() -> Result<()> {
+    if crate::privilege::is_elevated() {
+        return Ok(());
+    }
+    Err(anyhow!("{}", crate::privilege::missing_privileges_message()))
+}
+
+pub async fn up(plan: &TunPlan) -> Result<()> {
+    local::up::<Windows>(plan).await
+}
+
+pub async fn ensure(plan: &TunPlan) -> Result<()> {
+    local::ensure::<Windows>(plan).await
+}
+
+pub async fn down(server_ip: Option<Ipv4Addr>) -> Result<()> {
+    local::down::<Windows>(server_ip).await
+}
+
+pub async fn engine_alive() -> bool {
+    local::engine_alive().await
+}
+
+pub fn purge_stale(stale_hosts: &[Ipv4Addr]) {
+    sync_cleanup_inner(stale_hosts)
 }

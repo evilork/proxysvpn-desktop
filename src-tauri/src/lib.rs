@@ -57,7 +57,7 @@ fn sync_cleanup() {
         .map(|c| net::parse_route_hint(&c))
         .unwrap_or_default();
 
-    net::sync_cleanup(&stale);
+    net::purge_stale(&stale);
 
     if let Some(path) = route_hint_path() {
         let _ = std::fs::remove_file(path);
@@ -347,6 +347,15 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Linux: when we were started as the privileged helper, become it and never
+    // return. This must come before anything else — the helper speaks a JSON
+    // protocol on stdout, so a single log line printed first would corrupt the
+    // pipe, and it must not build a webview it has no business owning as root.
+    if pvpn_platform::helper::is_helper_invocation() {
+        #[cfg(target_os = "linux")]
+        pvpn_platform::helper::run_helper();
+    }
+
     logger::init();
     // Route the platform layer's messages into the same ring buffer the
     // support UI reads; without this they would only reach stdout.

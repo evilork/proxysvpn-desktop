@@ -3,7 +3,7 @@
 // hysteria in client mode, exposing a SOCKS5 inbound that tun2socks consumes.
 
 use anyhow::{anyhow, Context, Result};
-use pvpn_platform::{net, paths, process as pprocess, triple};
+use pvpn_platform::{paths, process as pprocess, triple};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -118,7 +118,7 @@ pub async fn stop(state: &SharedHysteriaState) -> Result<()> {
         let _ = child.wait().await;
     }
     // A sidecar that outlived its handle still holds the SOCKS port.
-    net::kill_stray("hysteria").await;
+    pvpn_platform::process::kill_by_name("hysteria").await;
     Ok(())
 }
 

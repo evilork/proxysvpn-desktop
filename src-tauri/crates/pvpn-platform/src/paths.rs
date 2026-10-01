@@ -118,9 +118,25 @@ pub fn route_hint_file() -> Result<PathBuf> {
     let path = PathBuf::from("/tmp/proxysvpn-desktop.pid");
 
     #[cfg(not(target_os = "macos"))]
-    let path = state_dir()?.join("route-hint");
+    let path = state_dir()?.join(ROUTE_HINT_NAME);
 
     Ok(path)
+}
+
+/// Name of the route-hint file, shared by the GUI's state directory and the
+/// helper's runtime directory so both sides look for the same thing.
+pub const ROUTE_HINT_NAME: &str = "route-hint";
+
+/// Where the Linux root helper keeps its own state.
+///
+/// `/run` and not the user's state directory: the helper is root and must not
+/// write into a directory an unprivileged process controls — a symlink planted
+/// there would let any local user aim root's writes at an arbitrary file. /run
+/// is tmpfs, so the hint also disappears on reboot, which is exactly right for
+/// a breadcrumb about routes that did not survive either.
+#[cfg(target_os = "linux")]
+pub fn linux_runtime_dir() -> PathBuf {
+    PathBuf::from("/run/proxysvpn")
 }
 
 /// Restricts a file that contains a secret to the current user.

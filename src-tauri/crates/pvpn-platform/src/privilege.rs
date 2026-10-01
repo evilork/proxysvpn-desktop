@@ -13,11 +13,18 @@
 // helper service: one prompt, one process tree, no IPC surface, and the
 // existing supervisor/teardown logic keeps working untouched.
 //
-// The cost is real and documented in the PR: the WebView runs elevated too,
-// and tauri.conf.json still has `"csp": null`. A split helper
-// (unprivileged GUI + small elevated service) is the next step for both
-// Windows and Linux, and `net`'s contract is narrow enough to move behind an
-// IPC boundary later without touching callers.
+// Linux: the GUI stays unprivileged and a small root helper (this same
+// executable started with `--helper` through pkexec) owns the device, the routes
+// and DNS. That is not a preference, it is forced: a root process cannot connect
+// to a Wayland compositor, so an elevated GUI never shows a window. See
+// `net::linux` for the full reasoning, and note that this is the *stricter*
+// model — the webview never runs as root there.
+//
+// The cost on macOS and Windows is real and documented in docs/WINDOWS.md: the
+// WebView runs elevated too, and tauri.conf.json still has `"csp": null`.
+// Linux already demonstrates the fix, and `net`'s contract is deliberately the
+// same narrow three-operation shape on all three platforms, so moving Windows
+// behind an IPC boundary does not touch a single caller.
 
 /// True when the process may reconfigure interfaces and routes.
 pub fn is_elevated() -> bool {
@@ -69,6 +76,46 @@ fn windows_is_elevated() -> anyhow::Result<bool> {
     Ok(elevation.TokenIsElevated != 0)
 }
 
+/// Human-readable reason why we cannot gain privileges, or `None` when we can.
+///
+/// Linux only: it is the one platform where elevation happens at connect time
+/// rather than at launch, so the reason has to be reportable mid-session.
+#[cfg(target_os = "linux")]
+pub fn elevation_blocker() -> Option<String> {
+    if is_elevated() {
+        return None;
+    }
+    if which("pkexec").is_none() {
+        return Some(
+            "не найден pkexec (пакет polkit) — установите polkit или запустите приложение от root"
+                .to_string(),
+        );
+    }
+    None
+}
+
+/// Minimal `which`: a PATH lookup without pulling in a crate.
+///
+/// Also used by the helper to resolve `ip`/`resolvectl`, which is why it rejects
+/// anything that is not an executable regular file — a directory named `ip` on
+/// PATH would otherwise be returned and every route call would fail obscurely.
+#[cfg(target_os = "linux")]
+pub fn which(program: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(program))
+        .find(|candidate| is_executable(candidate))
+}
+
+#[cfg(target_os = "linux")]
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::metadata(path) {
+        Ok(meta) => meta.is_file() && meta.permissions().mode() & 0o111 != 0,
+        Err(_) => false,
+    }
+}
+
 /// Message shown when the app is started without the rights it needs.
 /// Russian, because it is surfaced in the UI.
 pub fn missing_privileges_message() -> &'static str {
@@ -94,6 +141,21 @@ mod tests {
     #[test]
     fn message_is_not_empty() {
         assert!(!missing_privileges_message().is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn which_finds_sh_and_misses_nonsense() {
+        assert!(which("sh").is_some());
+        assert!(which("definitely-not-a-real-binary-9f3a").is_none());
+    }
+
+    /// A directory on PATH named like the tool must not be mistaken for it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn which_refuses_a_directory() {
+        assert!(!is_executable(std::path::Path::new("/usr/bin")));
+        assert!(!is_executable(std::path::Path::new("/definitely/not/here")));
     }
 
     #[cfg(unix)]

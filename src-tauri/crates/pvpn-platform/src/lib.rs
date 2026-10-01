@@ -13,13 +13,18 @@
 //   1. macOS behaviour is byte-for-byte what shipped before the split. The
 //      exact argv of every command it runs is produced by `net::plan::macos`
 //      and pinned by golden tests, so a typo cannot silently change it.
-//   2. The crate has no tauri/reqwest/rustls dependency, so the Windows and
-//      Linux implementations can be type-checked from a Mac
-//      (`cargo check -p pvpn-platform --target x86_64-pc-windows-msvc`).
+//   2. The crate has no tauri/reqwest/rustls dependency and nothing in it needs
+//      a C compiler, so the Windows and Linux implementations — including the
+//      Linux root helper — can be type-checked and linted from a Mac:
+//          cargo check -p pvpn-platform --target x86_64-pc-windows-msvc
+//          cargo check -p pvpn-platform --target x86_64-unknown-linux-gnu
+//      That is the only verification those two ports get on the machine this
+//      was written on, so the dependency list must stay this short.
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 compile_error!("pvpn-platform supports macOS, Windows and Linux only");
 
+pub mod helper;
 pub mod log;
 pub mod net;
 pub mod paths;
