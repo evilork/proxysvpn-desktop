@@ -1,0 +1,36 @@
+[package]
+name = "pvpn-platform"
+version = "0.1.0"
+edition = "2021"
+description = "Platform layer for ProxysVPN Desktop: elevation, paths, TUN device and route plumbing"
+authors = ["ProxysVPN"]
+publish = false
+
+# Deliberately free of tauri/reqwest/rustls so that
+#   cargo check -p pvpn-platform --target x86_64-pc-windows-msvc
+# works on a machine without the MSVC toolchain (nothing here needs a C
+# compiler, unlike `ring`). See scripts/check-platform.sh.
+[dependencies]
+anyhow = "1"
+# The Linux helper protocol. Pure Rust, no build script, no C — so the crate
+# still cross-compiles from a Mac, which is the whole point of keeping this
+# dependency list short.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["process", "time", "rt", "sync", "io-util"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Threading",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_NetworkManagement_Ndis",
+  "Win32_Networking_WinSock",
+] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

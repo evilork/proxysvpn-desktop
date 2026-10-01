@@ -1,0 +1,319 @@
+// src-tauri/crates/pvpn-platform/src/net/linux.rs
+//
+// Linux backend, GUI side. Nothing here is privileged.
+//
+// Every operation is a line of JSON sent to the root helper (crate::helper),
+// which is this very executable restarted through pkexec with `--helper`. The
+// helper is spawned once and kept for the whole app session, so the user sees a
+// single authorization dialog — the same feel as the macOS launcher. It is our
+// child, so when we die its stdin reaches EOF and it tears the tunnel down by
+// itself; that is the crash path, and it needs no cooperation from us.
+//
+// Why a helper instead of an elevated GUI, as on macOS and Windows:
+//
+//   1. A root process cannot connect to a Wayland compositor, so an elevated
+//      GUI simply never shows a window. On X11 it would need
+//      `xhost +si:localuser:root`. macOS has no equivalent problem because
+//      `launchctl asuser` keeps the root process inside the GUI session.
+//   2. File capabilities (`setcap cap_net_admin+ep`) are not inherited by child
+//      processes, so tun2socks would still lack them, and capabilities are lost
+//      inside an AppImage mount — the .deb and the AppImage would need two
+//      different privilege models.
+//   3. It is also simply better: the webview, which renders remote content,
+//      never runs as root. That is stricter than what macOS and Windows do
+//      today, and the contract is shaped so they can follow.
+
+use std::net::Ipv4Addr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
+use anyhow::{anyhow, Context, Result};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::Mutex;
+
+use crate::helper::proto::{self, Frame, Request, UpParams};
+use crate::helper::{DEV_ENV, HELPER_DEV_FLAG, HELPER_FLAG};
+use crate::net::TunPlan;
+use crate::privilege;
+
+pub use crate::net::plan::linux::DEVICE;
+
+/// The user may need a while to type the password into the polkit dialog.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(180);
+/// Ordinary requests: the helper only runs `ip`/`resolvectl`.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+
+struct Link {
+    child: Child,
+    stdin: ChildStdin,
+    out: Lines<BufReader<ChildStdout>>,
+    next_id: u64,
+}
+
+static LINK: OnceLock<Mutex<Option<Link>>> = OnceLock::new();
+
+/// Last known answer to "is tun2socks alive". Read when the pipe is busy, so a
+/// status poll never waits behind the authorization dialog.
+static ENGINE_UP: AtomicBool = AtomicBool::new(false);
+
+fn link_slot() -> &'static Mutex<Option<Link>> {
+    LINK.get_or_init(|| Mutex::new(None))
+}
+
+fn up_params(plan: &TunPlan) -> UpParams {
+    UpParams {
+        server_ip: plan.server_ip.to_string(),
+        socks_port: plan.socks_port,
+        tun2socks: plan.tun2socks.to_string_lossy().to_string(),
+        dns: plan.dns_strings(),
+    }
+}
+
+/// Send one request and wait for its answer, mirroring the helper's log frames
+/// into the app log on the way.
+async fn request(link: &mut Link, req: Request, timeout: Duration) -> Result<bool> {
+    link.next_id += 1;
+    let id = link.next_id;
+    let line = proto::encode(&Frame::Request { id, req }).context("encode helper request")?;
+    link.stdin
+        .write_all(line.as_bytes())
+        .await
+        .context("write to helper")?;
+    link.stdin.flush().await.context("flush helper pipe")?;
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(anyhow!("helper did not answer within {:?}", timeout));
+        }
+        let read = tokio::time::timeout(left, link.out.next_line()).await;
+        let raw = match read {
+            Err(_) => return Err(anyhow!("helper did not answer within {:?}", timeout)),
+            Ok(Err(e)) => return Err(anyhow!("helper pipe error: {}", e)),
+            Ok(Ok(None)) => return Err(anyhow!("helper closed the pipe")),
+            Ok(Ok(Some(line))) => line,
+        };
+        if raw.trim().is_empty() {
+            continue;
+        }
+        match proto::decode(&raw) {
+            Ok(Frame::Log {
+                level,
+                source,
+                message,
+            }) => crate::log::log(&level, &source, &message),
+            Ok(Frame::Response {
+                id: rid,
+                ok,
+                error,
+                engine_alive,
+            }) if rid == id => {
+                return if ok {
+                    Ok(engine_alive)
+                } else {
+                    Err(anyhow!(
+                        "{}",
+                        error.unwrap_or_else(|| "helper reported a failure".to_string())
+                    ))
+                };
+            }
+            // A stale answer to a request that already timed out.
+            Ok(Frame::Response { .. }) | Ok(Frame::Request { .. }) => {}
+            Err(e) => crate::log::warn("helper", &format!("unparsable frame from helper: {}", e)),
+        }
+    }
+}
+
+fn spawn_command() -> Result<Command> {
+    let exe = std::env::current_exe().context("locate our own executable")?;
+    // Debug builds only. The helper ignores the flag in a release build anyway
+    // (helper/proto.rs::dev_mode_allowed), but a release argv should not even
+    // contain it.
+    let dev = cfg!(debug_assertions)
+        && std::env::var(DEV_ENV).map(|v| v == "1").unwrap_or(false);
+
+    let mut cmd = if privilege::is_elevated() {
+        // Already root (the user ran us with sudo on X11): no dialog needed,
+        // just fork the helper.
+        Command::new(&exe)
+    } else {
+        if let Some(reason) = privilege::elevation_blocker() {
+            return Err(anyhow!("{}", reason));
+        }
+        let pkexec =
+            privilege::which("pkexec").ok_or_else(|| anyhow!("pkexec not found in PATH"))?;
+        let mut c = Command::new(pkexec);
+        c.arg(&exe);
+        c
+    };
+    cmd.arg(HELPER_FLAG);
+    if dev {
+        cmd.arg(HELPER_DEV_FLAG);
+    }
+    Ok(cmd)
+}
+
+async fn spawn_helper() -> Result<Link> {
+    use std::process::Stdio;
+
+    let mut cmd = spawn_command()?;
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawn the privileged helper")?;
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("helper stdin not captured"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("helper stdout not captured"))?;
+    if let Some(err) = child.stderr.take() {
+        // pkexec reports authorization problems on stderr.
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(err).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                crate::log::warn("helper", &line);
+            }
+        });
+    }
+
+    let mut link = Link {
+        child,
+        stdin,
+        out: BufReader::new(stdout).lines(),
+        next_id: 0,
+    };
+
+    match request(&mut link, Request::Hello, HANDSHAKE_TIMEOUT).await {
+        Ok(_) => Ok(link),
+        Err(e) => Err(describe_handshake_failure(&mut link, e).await),
+    }
+}
+
+/// Turn a dead pkexec child into something a user can act on.
+async fn describe_handshake_failure(link: &mut Link, cause: anyhow::Error) -> anyhow::Error {
+    let code = match link.child.try_wait() {
+        Ok(Some(status)) => status.code(),
+        _ => None,
+    };
+    match code {
+        // pkexec(1): 126 — the dialog was dismissed or authorization failed.
+        Some(126) => anyhow!("запрос прав отменён — без пароля администратора туннель не поднять"),
+        // 127 — pkexec could not run at all (no polkit agent, no policy, …).
+        Some(127) => anyhow!(
+            "polkit отказал в правах (нет агента авторизации?) — запустите приложение из рабочего стола или от root"
+        ),
+        _ => cause.context("helper handshake failed"),
+    }
+}
+
+/// Make sure a live helper is on the other end of the pipe.
+async fn ensure_link() -> Result<()> {
+    let mut slot = link_slot().lock().await;
+    if let Some(link) = slot.as_mut() {
+        match link.child.try_wait() {
+            Ok(None) => return Ok(()),
+            _ => {
+                crate::log::warn("helper", "helper is gone, starting a new one");
+                *slot = None;
+            }
+        }
+    }
+    *slot = Some(spawn_helper().await?);
+    Ok(())
+}
+
+async fn send(req: Request) -> Result<bool> {
+    ensure_link().await?;
+    let mut slot = link_slot().lock().await;
+    let link = slot
+        .as_mut()
+        .ok_or_else(|| anyhow!("helper link disappeared"))?;
+    request(link, req, REQUEST_TIMEOUT).await
+}
+
+// ----------------------------------------------------------------- contract
+
+/// Start the helper and let the user authorize it *before* anything else
+/// happens, so a dismissed dialog is a clean "not connected" rather than a
+/// half-built tunnel.
+pub async fn preflight() -> Result<()> {
+    ensure_link().await
+}
+
+pub async fn up(plan: &TunPlan) -> Result<()> {
+    let result = send(Request::Up(up_params(plan))).await.map(|_| ());
+    ENGINE_UP.store(result.is_ok(), Ordering::Relaxed);
+    result
+}
+
+pub async fn ensure(plan: &TunPlan) -> Result<()> {
+    send(Request::Ensure(up_params(plan))).await.map(|_| ())
+}
+
+/// Tear the tunnel down but keep the helper alive: a reconnect must not ask for
+/// the password again.
+pub async fn down(_server_ip: Option<Ipv4Addr>) -> Result<()> {
+    ENGINE_UP.store(false, Ordering::Relaxed);
+    let mut slot = link_slot().lock().await;
+    let Some(link) = slot.as_mut() else {
+        return Ok(());
+    };
+    if matches!(link.child.try_wait(), Ok(None)) {
+        request(link, Request::Down, REQUEST_TIMEOUT)
+            .await
+            .map(|_| ())
+    } else {
+        // The helper died; it already took the tunnel with it.
+        *slot = None;
+        Ok(())
+    }
+}
+
+pub async fn engine_alive() -> bool {
+    // Never block here: the UI polls this, and a request in flight may be the
+    // pkexec dialog waiting for a password (up to three minutes).
+    let Ok(mut slot) = link_slot().try_lock() else {
+        return ENGINE_UP.load(Ordering::Relaxed);
+    };
+    let Some(link) = slot.as_mut() else {
+        ENGINE_UP.store(false, Ordering::Relaxed);
+        return false;
+    };
+    if !matches!(link.child.try_wait(), Ok(None)) {
+        ENGINE_UP.store(false, Ordering::Relaxed);
+        return false;
+    }
+    let alive = match request(link, Request::Status, REQUEST_TIMEOUT).await {
+        Ok(alive) => alive,
+        Err(e) => {
+            crate::log::warn("helper", &format!("status request failed: {}", e));
+            false
+        }
+    };
+    ENGINE_UP.store(alive, Ordering::Relaxed);
+    alive
+}
+
+/// Synchronous crash recovery at startup.
+///
+/// The unprivileged GUI cannot undo routes, so normally there is nothing to do
+/// here: the helper purges on its own startup, before it touches anything. When
+/// the app itself was started as root (sudo on X11) we do the purge inline.
+///
+/// `stale_hosts` is ignored on purpose — the helper writes its hint under /run,
+/// reads it back from there, and the two sides must not disagree about who owns
+/// the cleanup.
+pub fn purge_stale(_stale_hosts: &[Ipv4Addr]) {
+    if privilege::is_elevated() {
+        crate::net::linux_priv::purge_stale_sync();
+    }
+}

@@ -87,3 +87,7 @@ src-tauri/scripts/bench-configs.sh
 # Build/release temp
 scripts/release-templates/
 src-tauri/binaries/hysteria-*
+
+# Windows TUN driver — fetched via scripts/fetch-binaries.sh (do not commit)
+src-tauri/binaries/wintun.dll
+src-tauri/binaries/wintun-LICENSE.txt

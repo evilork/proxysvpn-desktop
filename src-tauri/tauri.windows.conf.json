@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": ["nsis"],
+    "publisher": "ProxysVPN",
+    "resources": {
+      "binaries/geoip.dat": "binaries/geoip.dat",
+      "binaries/geosite.dat": "binaries/geosite.dat",
+      "binaries/wintun.dll": "wintun.dll",
+      "binaries/wintun-LICENSE.txt": "wintun-LICENSE.txt"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "perMachine",
+        "languages": ["English", "Russian"],
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

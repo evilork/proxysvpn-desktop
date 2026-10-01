@@ -1,3 +1,6 @@
+[workspace]
+members = ["crates/pvpn-platform"]
+
 [package]
 name = "proxysvpn-desktop"
 version = "0.3.1"
@@ -48,6 +51,11 @@ tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
 # for the same reason as the tray - iOS has no window to hide behind and the
 # Network Extension has its own OS-level lifecycle notices.
 tauri-plugin-notification = "2.5"
+# The platform layer: elevation, paths, the TUN device and its routes on
+# macOS, Windows and Linux, and the Linux root helper. Desktop-only — the crate
+# refuses to compile for anything else, and iOS has its own tunnel in the
+# Network Extension (src/ios_vpn.rs).
+pvpn-platform = { path = "crates/pvpn-platform" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # SCDynamicStore: the system resolver pointed into the tunnel (src/sysdns.rs).

@@ -13,12 +13,12 @@
 // VPN stops it — a hysteria that outlived the app kept port 10809 and was the
 // whole of "it will not connect a second time".
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tauri::Manager;
+use pvpn_platform::{paths, process as pprocess, triple};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -31,18 +31,11 @@ use crate::subscription::Hy2Config;
 /// at the same time, which is the point of the unified layer.
 pub const HY2_SOCKS_PORT: u16 = 10809;
 
-/// Where the client config goes.
-///
-/// A fixed path on purpose: under `sudo` and under `launchctl asuser` the
-/// process has two different `TMPDIR`s, and a config written to one of them
-/// would be invisible to a later run trying to clean it up.
-const CONFIG_PATH: &str = "/tmp/proxysvpn-hy2.yaml";
-
-/// The file holds the node's auth password and its address, so it is readable
-/// by its owner and nobody else. Everything on this machine runs as root, so
-/// 0600 costs nothing and keeps the secret off a shared Mac.
-#[cfg(unix)]
-const CONFIG_MODE: u32 = 0o600;
+// Where the client config goes: `pvpn_platform::paths::hy2_config_file`.
+// On macOS that is still the fixed `/tmp/proxysvpn-hy2.yaml` — under `sudo`
+// and under `launchctl asuser` the process has two different `TMPDIR`s, and a
+// config written to one of them would be invisible to a later run trying to
+// clean it up. Windows and Linux keep it in the per-user state directory.
 
 /// How long the SOCKS listener gets to appear before we call the start a
 /// failure. Measured, not guessed: on this machine the listener is up in
@@ -62,53 +55,16 @@ pub fn new_state() -> SharedHysteriaState {
     Arc::new(Mutex::new(HysteriaState::default()))
 }
 
-fn current_target_triple() -> &'static str {
-    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        "aarch64-apple-darwin"
-    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-        "x86_64-apple-darwin"
-    } else {
-        "unknown"
-    }
-}
-
+/// The hysteria sidecar, found by the same ordered directory list as every
+/// other sidecar (`crate::tun::sidecar_dirs`) and named by the platform
+/// layer's one rule (`hysteria`, `hysteria-<triple>`, `.exe` on Windows).
 pub fn hysteria_path(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
-    let triple = current_target_triple();
-    let mut candidates: Vec<PathBuf> = Vec::new();
-
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("hysteria"));
-            candidates.push(dir.join(format!("hysteria-{}", triple)));
-        }
-    }
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(resource_dir.join("hysteria"));
-        candidates.push(resource_dir.join(format!("hysteria-{}", triple)));
-        candidates.push(resource_dir.join("binaries").join("hysteria"));
-        candidates.push(
-            resource_dir
-                .join("binaries")
-                .join(format!("hysteria-{}", triple)),
-        );
-    }
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        let base = PathBuf::from(manifest_dir);
-        candidates.push(base.join("binaries").join(format!("hysteria-{}", triple)));
-    }
-
-    candidates
-        .iter()
-        .find(|p| p.exists())
-        .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
-        .ok_or_else(|| {
-            crate::logger::log(
-                "error",
-                "hysteria",
-                &format!("binary not found; tried: {:?}", candidates),
-            );
-            AppError::new(ErrorCode::EngineStartFailed)
-        })
+    triple::find_sidecar("hysteria", &crate::tun::sidecar_dirs(app)).map_err(|e| {
+        // The list of paths is a diagnostic for the log; the person sees the
+        // translated phrase for ENGINE_START_FAILED.
+        crate::logger::log("error", "hysteria", &format!("{e:#}"));
+        AppError::new(ErrorCode::EngineStartFailed)
+    })
 }
 
 /// Build the hysteria client YAML config.
@@ -133,26 +89,38 @@ pub fn build_config(cfg: &Hy2Config) -> String {
     yaml
 }
 
+/// Write the config owner-only and never through a symlink.
+///
+/// It holds the node's auth password and its address, and on macOS the path
+/// is a fixed name in mode-1777 `/tmp` written by root: a plain `fs::write`
+/// would follow a link any local user planted there and hand them a root-owned
+/// write to a file of their choice, and the old write-then-chmod left the
+/// password world-readable for the moment in between. See
+/// `pvpn_platform::paths::write_private_file`.
 fn write_config(yaml: &str) -> Result<PathBuf, AppError> {
-    let path = PathBuf::from(CONFIG_PATH);
-    std::fs::write(&path, yaml).map_err(|e| {
-        crate::logger::log("error", "hysteria", &format!("config write failed: {e}"));
+    let path = paths::hy2_config_file().map_err(|e| {
+        crate::logger::log("error", "hysteria", &format!("no config location: {e:#}"));
         AppError::new(ErrorCode::EngineStartFailed)
     })?;
+    paths::write_private_file(&path, yaml.as_bytes()).map_err(|e| {
+        crate::logger::log("error", "hysteria", &format!("config write failed: {e:#}"));
+        AppError::new(ErrorCode::EngineStartFailed)
+    })?;
+    Ok(path)
+}
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // Best effort: a config we could write but not lock down still starts
-        // the tunnel, and refusing to connect over file permissions would be a
-        // worse trade for the person in front of the screen.
-        if let Err(e) =
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(CONFIG_MODE))
-        {
-            crate::logger::log("warn", "hysteria", &format!("chmod failed: {e}"));
+/// The config is the node password at rest; nothing reads it once hysteria
+/// stopped. On Windows and Linux it lives in the user's profile, where it
+/// would otherwise sit until the next connect overwrote it.
+fn remove_config() {
+    let Ok(path) = paths::hy2_config_file() else {
+        return;
+    };
+    if let Err(e) = std::fs::remove_file(&path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            crate::logger::log("warn", "hysteria", &format!("config not removed: {e}"));
         }
     }
-    Ok(path)
 }
 
 pub async fn start(
@@ -192,6 +160,8 @@ pub async fn start(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // Without this a console window pops up on Windows for every engine start.
+    pprocess::no_window(&mut cmd);
 
     let mut child = Engine::spawn("hysteria", &mut cmd, &bin).map_err(|e| {
         crate::logger::log("error", "hysteria", &format!("spawn failed: {e}"));
@@ -268,7 +238,7 @@ pub async fn stop(state: &SharedHysteriaState) -> Result<(), AppError> {
     // fail for a reason nobody can see, so the sweep is unconditional — over
     // the hysterias WE started, not every process of that name on the Mac.
     crate::pidfile::sweep("hysteria").await;
-    let _ = std::fs::remove_file(Path::new(CONFIG_PATH));
+    remove_config();
     Ok(())
 }
 
@@ -332,5 +302,63 @@ mod tests {
     #[test]
     fn the_two_engines_never_share_a_port() {
         assert_ne!(HY2_SOCKS_PORT, crate::xray_manager::FRONT_SOCKS_PORT);
+    }
+
+    /// The YAML is hand-built, so its exact shape is worth pinning: hysteria
+    /// silently ignores keys it does not understand, which turns a typo into a
+    /// connection that "works" without TLS pinning.
+    #[test]
+    fn config_yaml_is_stable() {
+        let mut c = cfg();
+        c.insecure = true;
+        c.pin_sha256 = "AA:BB:CC".into();
+        assert_eq!(
+            build_config(&c),
+            concat!(
+                "server: node.example:443\n",
+                "auth: secret\n",
+                "tls:\n",
+                "  sni: sni.example\n",
+                "  insecure: true\n",
+                "  pinSHA256: AA:BB:CC\n",
+                "socks5:\n",
+                "  listen: 127.0.0.1:10809\n",
+                "fastOpen: true\n",
+            )
+        );
+    }
+
+    /// The config carries the node password, so it must never land somewhere a
+    /// different local user could read or replace it.
+    ///
+    /// The path differs per platform, and deliberately so: macOS keeps the
+    /// fixed literal in /tmp (TMPDIR changes under sudo) and relies on
+    /// `write_private_file`, while Windows and Linux put it in a per-user
+    /// directory, which is strictly better. So this asserts the invariant that
+    /// actually matters rather than one hard-coded string.
+    #[test]
+    fn config_path_is_app_private() {
+        let path = paths::hy2_config_file().expect("config path");
+        let text = path.to_string_lossy().to_ascii_lowercase();
+
+        #[cfg(target_os = "macos")]
+        assert_eq!(path, PathBuf::from("/tmp/proxysvpn-hy2.yaml"));
+
+        #[cfg(target_os = "windows")]
+        {
+            assert!(text.contains("proxysvpn"), "{}", text);
+            assert!(!text.starts_with(r"c:\windows\temp"), "{}", text);
+        }
+
+        // Linux must not fall back to a world-writable directory: a
+        // predictable name in /tmp invites a symlink swap by another user.
+        #[cfg(target_os = "linux")]
+        {
+            assert!(text.contains("proxysvpn"), "{}", text);
+            assert!(!text.starts_with("/tmp/"), "{}", text);
+        }
+
+        assert!(path.is_absolute(), "{}", text);
+        assert_eq!(path.extension().and_then(|e| e.to_str()), Some("yaml"));
     }
 }

@@ -31,6 +31,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
+use pvpn_platform::{net, paths, privilege, triple};
 use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -39,7 +40,10 @@ use tokio::sync::Mutex;
 use crate::errors::{AppError, ErrorCode};
 use crate::pidfile::Engine;
 
-pub const TUN_NAME: &str = "utun225";
+/// Name of the TUN device. The platform layer owns the value (`utun225` on
+/// macOS) and a test below pins it, so this file cannot address one interface
+/// while the platform layer configures another.
+pub const TUN_NAME: &str = net::DEVICE;
 pub const TUN_ADDR: &str = "198.18.0.1";
 
 /// The only SOCKS port tun2socks ever speaks to. xray listens here for both
@@ -97,61 +101,51 @@ impl PhysicalRoute {
 // Binary and privileges
 // ───────────────────────────────────────────────────────────────────────────
 
-pub fn tun2socks_path(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
-    let triple = current_target_triple();
-    let mut candidates: Vec<PathBuf> = Vec::new();
+/// Directories a sidecar may live in, most specific first: next to the
+/// executable (how a bundle ships it), then Tauri's resource directory, then
+/// the repo layout used by `cargo tauri dev`. xray, hysteria and tun2socks all
+/// resolve through this one list.
+pub fn sidecar_dirs(app: &tauri::AppHandle) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("tun2socks"));
-            candidates.push(dir.join(format!("tun2socks-{}", triple)));
+            dirs.push(dir.to_path_buf());
+            // In a macOS bundle the sidecars sit in Contents/MacOS next to the
+            // executable, while Tauri's own resources land in Contents/Resources.
+            if let Some(contents) = dir.parent() {
+                dirs.push(contents.join("Resources"));
+                dirs.push(contents.join("Resources").join("_up_").join("binaries"));
+            }
         }
     }
-
     if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(resource_dir.join("tun2socks"));
-        candidates.push(resource_dir.join(format!("tun2socks-{}", triple)));
-        candidates.push(resource_dir.join("binaries").join("tun2socks"));
-        candidates.push(
-            resource_dir
-                .join("binaries")
-                .join(format!("tun2socks-{}", triple)),
-        );
+        dirs.push(resource_dir.clone());
+        dirs.push(resource_dir.join("binaries"));
+        dirs.push(resource_dir.join("_up_").join("binaries"));
     }
-
+    // Debug builds only. This reads an environment variable at *runtime*, so in
+    // a shipped build anyone who can set CARGO_MANIFEST_DIR in our environment
+    // could add a directory to the sidecar search — and on macOS and Windows
+    // the process that execs from it is root/administrator.
+    #[cfg(debug_assertions)]
     if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        let base = PathBuf::from(manifest_dir);
-        candidates.push(base.join("binaries").join(format!("tun2socks-{}", triple)));
+        dirs.push(PathBuf::from(manifest_dir).join("binaries"));
     }
-
-    candidates
-        .iter()
-        .find(|p| p.exists())
-        .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
-        .ok_or_else(|| {
-            crate::logger::log(
-                "error",
-                "tun",
-                &format!("tun2socks not found; tried: {:?}", candidates),
-            );
-            AppError::new(ErrorCode::EngineStartFailed)
-        })
+    dirs
 }
 
-fn current_target_triple() -> &'static str {
-    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        "aarch64-apple-darwin"
-    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-        "x86_64-apple-darwin"
-    } else {
-        "unknown"
-    }
+pub fn tun2socks_path(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
+    triple::find_sidecar("tun2socks", &sidecar_dirs(app)).map_err(|e| {
+        crate::logger::log("error", "tun", &format!("{e:#}"));
+        AppError::new(ErrorCode::EngineStartFailed)
+    })
 }
 
+/// May this process reconfigure interfaces and routes? Root on macOS (the
+/// launcher arranges it); see `pvpn_platform::privilege` for the others.
 pub fn is_root() -> bool {
-    // SAFETY: getuid is always safe; it reads a process credential and cannot
-    // fail or touch memory we own.
-    unsafe { libc::getuid() == 0 }
+    privilege::is_elevated()
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -663,26 +657,21 @@ pub async fn stop(state: &SharedTunState) -> Result<(), AppError> {
 /// program has no business learning a node address it cannot use.
 const ROUTE_HINT_PATH: &str = "/tmp/proxysvpn-route-hint";
 
-#[cfg(unix)]
-const ROUTE_HINT_MODE: u32 = 0o600;
-
 /// Write down the host route of the current session.
+///
+/// Not `fs::write`: this is a fixed name in mode-1777 `/tmp`, written by root,
+/// so following a symlink a local user planted there would be a root-owned
+/// write to whatever they pointed it at. `write_private_file` unlinks, then
+/// creates with `O_EXCL | O_NOFOLLOW` and mode 0600 in one step.
 pub async fn persist_route_hint(state: &SharedTunState) {
     let Some(ip) = state.lock().await.server_ip.clone() else {
         return;
     };
-    if std::fs::write(ROUTE_HINT_PATH, format!("{ip}\n")).is_err() {
+    let path = std::path::Path::new(ROUTE_HINT_PATH);
+    if let Err(e) = paths::write_private_file(path, format!("{ip}\n").as_bytes()) {
         // A hint we could not write only costs a stale route on the next cold
         // start, which `sync_cleanup` also handles by other means.
-        return;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(
-            ROUTE_HINT_PATH,
-            std::fs::Permissions::from_mode(ROUTE_HINT_MODE),
-        );
+        crate::logger::log("warn", "tun", &format!("route hint not written: {e:#}"));
     }
 }
 
@@ -705,6 +694,16 @@ pub fn purge_stale_routes() {
         .args([TUN_NAME, "down"])
         .status();
 
+    // Only a plain file is believed: a symlink in its place was not written by
+    // us (`persist_route_hint` never writes through one), so it is removed
+    // unread rather than followed by root.
+    let is_plain_file = std::fs::symlink_metadata(ROUTE_HINT_PATH)
+        .map(|m| m.file_type().is_file())
+        .unwrap_or(false);
+    if !is_plain_file {
+        let _ = std::fs::remove_file(ROUTE_HINT_PATH);
+        return;
+    }
     if let Ok(contents) = std::fs::read_to_string(ROUTE_HINT_PATH) {
         for ip in contents.lines().map(str::trim).filter(|l| !l.is_empty()) {
             // Validated before it reaches a command line: the file is ours,
@@ -816,6 +815,42 @@ default            192.168.1.1        UGScg                 en0
         let table = "0/1                10.0.0.1           USc                   en0\n\
                      128.0/1            10.0.0.1           USc                   en0\n";
         assert!(!parse_split_defaults(table));
+    }
+
+    /// The device name in this module and the one the platform layer knows
+    /// must be the same string, and on macOS it must stay the one every
+    /// installed copy already cleans up after.
+    #[test]
+    fn device_name_comes_from_the_platform_layer() {
+        assert_eq!(TUN_NAME, net::DEVICE);
+        assert!(net::is_our_device(TUN_NAME));
+        assert_eq!(TUN_NAME, "utun225");
+    }
+
+    #[test]
+    fn device_address_is_the_shared_one() {
+        assert_eq!(TUN_ADDR, net::DEVICE_ADDR.to_string());
+    }
+
+    /// The Linux helper refuses any SOCKS port that is not one of this app's
+    /// own engine ports, because the port is where every packet on the machine
+    /// ends up once the half-defaults are installed. The allow-list lives in
+    /// the platform crate, which cannot see these constants, so nothing but
+    /// this test keeps the values together.
+    #[test]
+    fn engine_ports_are_the_ones_the_helper_accepts() {
+        use pvpn_platform::helper::proto::ALLOWED_SOCKS_PORTS;
+        assert!(
+            ALLOWED_SOCKS_PORTS.contains(&SOCKS_PORT),
+            "xray's inbound {} is not in {:?}",
+            SOCKS_PORT,
+            ALLOWED_SOCKS_PORTS
+        );
+        assert!(
+            ALLOWED_SOCKS_PORTS.contains(&crate::hysteria_manager::HY2_SOCKS_PORT),
+            "hysteria's inbound is not in {:?}",
+            ALLOWED_SOCKS_PORTS
+        );
     }
 
     #[test]

@@ -40,8 +40,8 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
+use pvpn_platform::{process as pprocess, triple};
 use serde_json::{json, Value};
-use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -74,80 +74,31 @@ pub fn new_state() -> SharedXrayState {
     Arc::new(Mutex::new(XrayState::default()))
 }
 
+/// Locates the xray binary and the directory holding geoip.dat/geosite.dat.
+///
+/// Both come from the same ordered directory list as every other sidecar
+/// (`crate::tun::sidecar_dirs`), so a bundle, a dev checkout and a Windows or
+/// Linux install all resolve with one rule instead of three hand-written lists.
 pub fn xray_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), AppError> {
-    let triple = current_target_triple();
-    let mut bin_candidates: Vec<PathBuf> = Vec::new();
-    let mut asset_dirs: Vec<PathBuf> = Vec::new();
+    let dirs = crate::tun::sidecar_dirs(app);
+    let bin = triple::find_sidecar("xray", &dirs).map_err(|e| {
+        // The list of paths is a diagnostic, not a sentence for a person:
+        // it goes to the log, and the user sees the translated phrase for
+        // ENGINE_START_FAILED with one button.
+        crate::logger::log("error", "xray", &format!("{e:#}"));
+        AppError::new(ErrorCode::EngineStartFailed)
+    })?;
 
-    // 1. Directory of the current executable (in .app: Contents/MacOS/)
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            bin_candidates.push(dir.join("xray"));
-            bin_candidates.push(dir.join(format!("xray-{}", triple)));
-            asset_dirs.push(dir.to_path_buf());
-            // And sibling Resources/ — Tauri puts geoip.dat/geosite.dat there
-            if let Some(contents) = dir.parent() {
-                asset_dirs.push(contents.join("Resources"));
-                asset_dirs.push(contents.join("Resources").join("_up_").join("binaries"));
-            }
-        }
-    }
-
-    // 2. Tauri-provided resource_dir (Resources folder)
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        bin_candidates.push(resource_dir.join("xray"));
-        bin_candidates.push(resource_dir.join(format!("xray-{}", triple)));
-        bin_candidates.push(resource_dir.join("binaries").join("xray"));
-        bin_candidates.push(resource_dir.join("binaries").join(format!("xray-{}", triple)));
-        asset_dirs.push(resource_dir.clone());
-        asset_dirs.push(resource_dir.join("binaries"));
-        // Tauri resource paths with _up_ prefix
-        asset_dirs.push(resource_dir.join("_up_").join("binaries"));
-    }
-
-    // 3. Dev mode — look relative to Cargo manifest
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        let base = PathBuf::from(manifest_dir);
-        bin_candidates.push(base.join("binaries").join(format!("xray-{}", triple)));
-        asset_dirs.push(base.join("binaries"));
-    }
-
-    let bin = bin_candidates
+    let assets = dirs
         .iter()
-        .find(|p| p.exists())
-        .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
-        .ok_or_else(|| {
-            // The list of paths is a diagnostic, not a sentence for a person:
-            // it goes to the log, and the user sees the translated phrase for
-            // ENGINE_START_FAILED with one button.
-            crate::logger::log(
-                "error",
-                "xray",
-                &format!("binary not found; tried: {:?}", bin_candidates),
-            );
-            AppError::new(ErrorCode::EngineStartFailed)
-        })?;
-
-    let assets = asset_dirs
-        .iter()
-        .find(|p| p.join("geoip.dat").exists())
-        .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
+        .find(|d| d.join("geoip.dat").is_file())
+        .map(|d| std::fs::canonicalize(d).unwrap_or_else(|_| d.clone()))
         // The binary's own directory is the last resort: xray starts without
         // the geo files and only fails on the first rule that needs them, so a
         // wrong guess here is recoverable while refusing to start is not.
         .unwrap_or_else(|| bin.parent().map(Path::to_path_buf).unwrap_or_default());
 
     Ok((bin, assets))
-}
-
-fn current_target_triple() -> &'static str {
-    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        "aarch64-apple-darwin"
-    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-        "x86_64-apple-darwin"
-    } else {
-        "unknown"
-    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -430,6 +381,8 @@ pub async fn start(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // Without this a console window pops up on Windows for every engine start.
+    pprocess::no_window(&mut cmd);
 
     let mut child = Engine::spawn("xray", &mut cmd, bin).map_err(|e| {
         crate::logger::log("error", "xray", &format!("spawn failed: {e}"));

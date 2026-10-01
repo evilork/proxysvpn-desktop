@@ -19,7 +19,9 @@
 //
 // ── Platform split ─────────────────────────────────────────────────────────
 //   macOS — spawns xray / hysteria / tun2socks and edits the routing table
-//           (root; see tun.rs).
+//           (root; see tun.rs). Paths, sidecar lookup, elevation and the
+//           privileged-file rules come from the pvpn-platform crate, which
+//           also carries the Windows and Linux backends.
 //   iOS   — the tunnel lives in a Network Extension driven through
 //           NETunnelProviderManager (ios_vpn.rs).
 // The command set and the event set are IDENTICAL on both, because the same
@@ -4246,7 +4248,23 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Linux: when we were started as the privileged helper, become it and never
+    // return. This must come before anything else — the helper speaks a JSON
+    // protocol on stdout, so a single log line printed first would corrupt the
+    // pipe, and it must not build a webview it has no business owning as root.
+    // `is_helper_invocation` is `false` on macOS and Windows, which have no
+    // helper to become.
+    #[cfg(desktop)]
+    if pvpn_platform::helper::is_helper_invocation() {
+        #[cfg(target_os = "linux")]
+        pvpn_platform::helper::run_helper();
+    }
+
     logger::init();
+    // Route the platform layer's messages into the same ring buffer and file
+    // the support UI reads; without this they would only reach stdout.
+    #[cfg(desktop)]
+    pvpn_platform::log::set_sink(logger::log);
 
     #[cfg(target_os = "macos")]
     sync_cleanup();

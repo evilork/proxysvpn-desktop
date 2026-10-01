@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<!--
+  Installed by the .deb to /usr/share/polkit-1/actions/.
+
+  It gives the one authorization dialog a readable message and, through
+  auth_admin_keep, lets a reconnect reuse it instead of asking again. The app
+  does not depend on this file: pkexec falls back to the built-in
+  org.freedesktop.policykit.exec action (a generic prompt) when no action
+  matches the program path, which is what happens in the AppImage and in dev.
+
+  The exec.path below must be the installed path of the main binary. It is
+  /usr/bin/proxysvpn-desktop: Tauri names the binary after the Cargo package
+  (`name = "proxysvpn-desktop"`), not after productName — productName only names
+  the .desktop entry and /usr/lib/ProxysVPN. Verified against the first CI build
+  by unpacking the .deb:
+
+    usr/bin/proxysvpn-desktop                     (root:root 0755)
+    usr/share/applications/ProxysVPN.desktop      Exec=proxysvpn-desktop
+
+  If the package name ever changes, correct this line; a mismatch costs the nice
+  message and nothing else, because pkexec then falls back to the generic action.
+-->
+<policyconfig>
+  <vendor>ProxysVPN</vendor>
+  <vendor_url>https://proxysvpn.com</vendor_url>
+
+  <action id="com.proxysvpn.desktop.helper">
+    <description>Set up the ProxysVPN tunnel</description>
+    <description xml:lang="ru">Настройка туннеля ProxysVPN</description>
+    <message>Authentication is required to create the VPN network interface and its routes.</message>
+    <message xml:lang="ru">Для создания сетевого интерфейса VPN и маршрутов нужны права администратора.</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/proxysvpn-desktop</annotate>
+    <!--
+      argv1 pins the action to the helper invocation. Without it, the
+      auth_admin_keep grant earned by one connect would also cover
+      `pkexec /usr/bin/proxysvpn-desktop <anything else>` for the rest of the
+      keep window. It does not make `--helper` itself unreachable — nothing
+      can — which is why the helper re-validates everything it is told; see
+      helper/proto.rs.
+    -->
+    <annotate key="org.freedesktop.policykit.exec.argv1">--helper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>

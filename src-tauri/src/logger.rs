@@ -23,6 +23,11 @@
 //
 // All four are fixed here. The public API is unchanged, because lib.rs is not
 // ours to edit; everything new is additive.
+//
+// Where the file lives is the platform layer's answer
+// (`pvpn_platform::paths::log_file`): ~/Library/Logs/ProxysVPN/app.log on
+// macOS as before, %LOCALAPPDATA%\ProxysVPN\logs\app.log on Windows,
+// $XDG_STATE_HOME (or ~/.local/state)/ProxysVPN/app.log on Linux.
 
 use std::collections::VecDeque;
 use std::fs::{create_dir_all, File, OpenOptions};
@@ -687,7 +692,7 @@ impl FileSink {
         if let Some(dir) = path.parent() {
             create_dir_all(dir)?;
         }
-        let handle = OpenOptions::new().create(true).append(true).open(&path)?;
+        let handle = log_file_options().append(true).open(&path)?;
         let meta = handle.metadata()?;
         // Adopt the existing file's day, not today's: a machine started the
         // next morning must roll yesterday's file rather than append to it.
@@ -716,8 +721,7 @@ impl FileSink {
         let archives = self.keep.saturating_sub(1);
         if archives == 0 {
             // Degenerate configuration: keep only the live file.
-            self.handle = OpenOptions::new()
-                .create(true)
+            self.handle = log_file_options()
                 .write(true)
                 .truncate(true)
                 .open(&self.path)?;
@@ -735,7 +739,7 @@ impl FileSink {
         // Rename, do not copy: the old handle keeps pointing at the renamed
         // inode, so nothing is lost if another write is already in flight.
         std::fs::rename(&self.path, archive_path(&self.path, 1))?;
-        self.handle = OpenOptions::new().create(true).append(true).open(&self.path)?;
+        self.handle = log_file_options().append(true).open(&self.path)?;
         self.written = 0;
         self.day = day_of(now_ms);
         Ok(())
@@ -756,6 +760,29 @@ impl FileSink {
         self.written += text.len() as u64 + 1;
         Ok(())
     }
+}
+
+/// How the mirror file is created.
+///
+/// Linux gets mode 0600 on creation. There the GUI is unprivileged, so the file
+/// belongs to the user who runs it and `~/.local/state/ProxysVPN/app.log` would
+/// otherwise be created world-readable at the usual umask — the log carries
+/// sidecar paths, interface names and whatever a node sends us.
+///
+/// macOS is deliberately left alone: the process is root there and the file
+/// sits in the user's own `~/Library/Logs`, so a root-owned 0600 file would stop
+/// the owner from opening the log the support UI points them at. Windows needs
+/// nothing — `%LOCALAPPDATA%` already inherits an owner-only ACL — and iOS keeps
+/// it inside the app sandbox.
+fn log_file_options() -> OpenOptions {
+    let mut opts = OpenOptions::new();
+    opts.create(true);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts
 }
 
 fn archive_path(base: &Path, n: usize) -> PathBuf {
@@ -882,10 +909,12 @@ impl LoggerState {
     }
 }
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(desktop)]
 fn compute_log_path() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join("Library/Logs/ProxysVPN/app.log"))
+    // macOS: $HOME/Library/Logs/ProxysVPN/app.log (unchanged)
+    // Windows: %LOCALAPPDATA%\ProxysVPN\logs\app.log
+    // Linux: $XDG_STATE_HOME (or ~/.local/state)/ProxysVPN/app.log
+    pvpn_platform::paths::log_file()
 }
 
 #[cfg(target_os = "ios")]

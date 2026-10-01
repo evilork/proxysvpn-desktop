@@ -2905,6 +2905,7 @@ dependencies = [
  "core-foundation",
  "ed25519-dalek",
  "libc",
+ "pvpn-platform",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -2918,6 +2919,18 @@ dependencies = [
  "tokio",
  "url",
  "urlencoding",
+]
+
+[[package]]
+name = "pvpn-platform"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "serde",
+ "serde_json",
+ "tokio",
+ "windows 0.62.2",
 ]
 
 [[package]]
