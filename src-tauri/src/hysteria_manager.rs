@@ -101,26 +101,23 @@ fn client_command(bin: &std::path::Path, cfg_arg: &str) -> Command {
     cmd
 }
 
-/// One value of the hand-built YAML.
+/// One value of the hand-built YAML, always as a double-quoted scalar.
 ///
 /// Every value comes from a subscription line, and `query_pairs` decodes
 /// percent-escapes: a `pinSHA256=%0A...` used to put a newline, and with it any
 /// top-level key the line liked, into the config of a process that runs as
-/// root (macOS) or administrator (Windows). Ordinary values — host:port, hex,
-/// a UUID password — are written bare exactly as before; anything else is
-/// written as a JSON string, which YAML reads as a double-quoted scalar, so it
-/// can never end the line or start a key.
+/// root (macOS) or administrator (Windows). A JSON string is a valid YAML
+/// double-quoted scalar, so it can never end the line or start a key.
+///
+/// Always quoted, not only when a value looks odd: plain YAML does not read
+/// back every "ordinary" value as the same string. `[2001:db8::1]:443` opens
+/// a flow sequence, `AA:BB:` ends in a mapping indicator (both make hysteria
+/// refuse its config), and a password like `true` or `12:30` would be read as
+/// a bool or a number.
 fn yaml_scalar(value: &str) -> String {
-    let plain = !value.is_empty()
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b':' | b'[' | b']'))
-        && value.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric() || b == b'[');
-    if plain {
-        value.to_string()
-    } else {
-        serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
-    }
+    // A &str always serialises; the fallback is unreachable but still a valid,
+    // empty scalar rather than a panic in the connect path.
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 /// Write the config owner-only and never through a symlink.
@@ -308,7 +305,7 @@ mod tests {
     fn config_listens_where_xray_will_dial() {
         let yaml = build_config(&cfg());
         assert!(yaml.contains(&format!("listen: 127.0.0.1:{HY2_SOCKS_PORT}")));
-        assert!(yaml.contains("server: node.example:443"));
+        assert!(yaml.contains("server: \"node.example:443\"\n"));
     }
 
     #[test]
@@ -326,7 +323,7 @@ mod tests {
         c.pin_sha256 = "AA:BB".into();
         let yaml = build_config(&c);
         assert!(yaml.contains("insecure: true"));
-        assert!(yaml.contains("pinSHA256: AA:BB"));
+        assert!(yaml.contains("pinSHA256: \"AA:BB\"\n"));
     }
 
     /// A percent-encoded newline in a subscription value must not become a
@@ -347,15 +344,32 @@ mod tests {
         assert!(yaml.contains(r#"auth: "p\r\nhttp:\n  listen: 0.0.0.0:8080""#), "{yaml}");
     }
 
+    /// Every value is a double-quoted scalar, so YAML reads back exactly the
+    /// string it was given — including the forms plain YAML misreads.
     #[test]
-    fn ordinary_values_are_written_bare_as_before() {
-        assert_eq!(yaml_scalar("node.example:443"), "node.example:443");
-        assert_eq!(yaml_scalar("[2001:db8::1]:443"), "[2001:db8::1]:443");
-        assert_eq!(yaml_scalar("11111111-2222-3333-4444-555555555555"), "11111111-2222-3333-4444-555555555555");
-        assert_eq!(yaml_scalar("AA:BB:CC"), "AA:BB:CC");
+    fn every_value_is_quoted_so_yaml_reads_back_the_same_string() {
+        assert_eq!(yaml_scalar("node.example:443"), "\"node.example:443\"");
+        // A bare `[...]` opens a flow sequence: "did not find expected key".
+        assert_eq!(yaml_scalar("[2001:db8::1]:443"), "\"[2001:db8::1]:443\"");
+        // A trailing ':' makes a mapping: "mapping values are not allowed".
+        assert_eq!(yaml_scalar("AA:BB:"), "\"AA:BB:\"");
+        // Bare, these would be a bool and a sexagesimal number.
+        assert_eq!(yaml_scalar("true"), "\"true\"");
+        assert_eq!(yaml_scalar("12:30"), "\"12:30\"");
+        assert_eq!(yaml_scalar("11111111-2222-3333-4444-555555555555"), "\"11111111-2222-3333-4444-555555555555\"");
         assert_eq!(yaml_scalar("a b"), "\"a b\"");
         assert_eq!(yaml_scalar("#comment"), "\"#comment\"");
         assert_eq!(yaml_scalar(""), "\"\"");
+    }
+
+    #[test]
+    fn an_ipv6_node_and_a_trailing_colon_pin_make_a_readable_config() {
+        let mut c = cfg();
+        c.host = "[2001:db8::1]".into();
+        c.pin_sha256 = "AA:BB:".into();
+        let yaml = build_config(&c);
+        assert!(yaml.contains("server: \"[2001:db8::1]:"), "{yaml}");
+        assert!(yaml.contains("  pinSHA256: \"AA:BB:\"\n"), "{yaml}");
     }
 
     #[test]
@@ -386,12 +400,12 @@ mod tests {
         assert_eq!(
             build_config(&c),
             concat!(
-                "server: node.example:443\n",
-                "auth: secret\n",
+                "server: \"node.example:443\"\n",
+                "auth: \"secret\"\n",
                 "tls:\n",
-                "  sni: sni.example\n",
+                "  sni: \"sni.example\"\n",
                 "  insecure: true\n",
-                "  pinSHA256: AA:BB:CC\n",
+                "  pinSHA256: \"AA:BB:CC\"\n",
                 "socks5:\n",
                 "  listen: 127.0.0.1:10809\n",
                 "fastOpen: true\n",
