@@ -57,6 +57,12 @@ export type ErrorCode =
   | "DEVICE_TAKEN"
   | "NO_DEVICES"
   | "SUB_NOTICE"
+  // Pair code answers (pair_code.rs). Met under the code field on the sign-in
+  // screen, never on a failure screen. PAIR_RATE_LIMITED carries the
+  // Retry-After seconds in `detail`.
+  | "PAIR_CODE_MALFORMED"
+  | "PAIR_CODE_NOT_FOUND"
+  | "PAIR_RATE_LIMITED"
   | "PERMISSION_DENIED"
   | "ENGINE_START_FAILED"
   | "ENGINE_DIED"
@@ -206,6 +212,13 @@ const DIRECT_ERROR_ACTION: Record<ErrorCode, ErrorAction> = {
   DEVICE_TAKEN: "openCabinet",
   NO_DEVICES: "openCabinet",
   SUB_NOTICE: "openCabinet",
+
+  // The sign-in screen says these under the code field itself. Should one
+  // ever reach a failure screen, the way out is the same: a new code there.
+  PAIR_CODE_MALFORMED: "addLink",
+  PAIR_CODE_NOT_FOUND: "addLink",
+  // The limiter decides when; there is nothing to press before that.
+  PAIR_RATE_LIMITED: "waitAndSee",
 
   PERMISSION_DENIED: "retry",
   ENGINE_START_FAILED: "retry",

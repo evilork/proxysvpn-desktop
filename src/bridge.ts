@@ -34,6 +34,7 @@
 //   sub_refresh    -> SubMeta
 //   pair_start     -> PairSession
 //   pair_poll{ token } -> PairStatus
+//   redeem_pair_code{ code } -> ()   pair code v1; rejects with PAIR_* codes
 //   routing_get    -> RoutingState
 //   routing_set{ inRussia } -> ()
 //   traffic_split  -> TrafficSplit | null   connection counts, never addresses
@@ -57,6 +58,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { IS_APPSTORE } from "./dist";
 import { isAllowedExternal } from "./externalUrl";
+import { normalisePairCode } from "./pairCode";
 import {
   ERROR_ACTION,
   EV,
@@ -318,6 +320,13 @@ export interface CoreBridge {
 
   pairStart(): Promise<PairSession>;
   pairPoll(token: string): Promise<PairStatus>;
+  /**
+   * Redeem the eight-character code from the cabinet or the bot. Resolves
+   * once the link is stored, exactly as a scanned QR stores it; rejects with
+   * PAIR_CODE_NOT_FOUND, PAIR_CODE_MALFORMED, PAIR_RATE_LIMITED (Retry-After
+   * seconds in `detail`), SUB_UNREACHABLE or SUB_INVALID.
+   */
+  redeemPairCode(code: string): Promise<void>;
 
   routing(): Promise<RoutingState>;
   setRouting(inRussia: boolean): Promise<void>;
@@ -485,6 +494,9 @@ class TauriBridge implements CoreBridge {
   }
   pairPoll(token: string): Promise<PairStatus> {
     return call<PairStatus>("pair_poll", { token });
+  }
+  redeemPairCode(code: string): Promise<void> {
+    return call<void>("redeem_pair_code", { code });
   }
   routing(): Promise<RoutingState> {
     return call<RoutingState>("routing_get");
@@ -1093,6 +1105,22 @@ class MockBridge implements CoreBridge {
       return "linked";
     }
     return "waiting";
+  }
+
+  /**
+   * Any well-formed code signs in after a pause, except two that play the
+   * refusals: ZZZZ-ZZZZ (wrong, expired or used) and RRRR-RRRR (too many
+   * attempts). `?mock=SUB_UNREACHABLE` plays every site name being down.
+   */
+  async redeemPairCode(code: string): Promise<void> {
+    await this.pause(900);
+    const normal = normalisePairCode(code);
+    if (normal === null) throw new CoreError({ code: "PAIR_CODE_MALFORMED" });
+    if (this.scenario === "SUB_UNREACHABLE") throw new CoreError({ code: "SUB_UNREACHABLE" });
+    if (normal === "ZZZZZZZZ") throw new CoreError({ code: "PAIR_CODE_NOT_FOUND" });
+    if (normal === "RRRRRRRR") throw new CoreError({ code: "PAIR_RATE_LIMITED", detail: "60" });
+    this.hasLink = true;
+    this.lastUpdatedAt = Date.now();
   }
 
   async routing(): Promise<RoutingState> {

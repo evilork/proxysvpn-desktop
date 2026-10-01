@@ -169,6 +169,18 @@ const ru = {
   "pair.keychain": "Ссылка хранится в папке приложения на этом устройстве",
   "pair.qrAlt": "Код привязки",
   "pair.scan": "Навести камеру",
+  // Pair code v1: eight characters from the cabinet or the bot ("Код для
+  // приложения" there), for when the cabinet is on this same phone and there
+  // is nothing to point a camera at. Wording fixed by the contract.
+  "pair.code.open": "Ввести код с сайта",
+  "pair.code.label": "Код для приложения",
+  "pair.code.placeholder": "XXXX-XXXX",
+  "pair.code.submit": "Подключить",
+  "pair.code.notFound":
+    "Код не подошёл. Он действует 10 минут и срабатывает один раз — возьмите новый в кабинете или в боте.",
+  "pair.code.rateLimited": "Слишком много попыток. Подождите минуту.",
+  "pair.code.network": "Не удалось связаться с сервисом. Проверьте интернет и попробуйте ещё раз.",
+  "pair.code.failed": "Не получилось. Попробуйте ещё раз — или напишите в поддержку.",
   // App Store builds: signing in to an existing ProxysVPN account, never
   // entering a key and never the bot (it sells top-ups).
   "pair.appstore.title": "Войдите в аккаунт ProxysVPN",
@@ -177,6 +189,10 @@ const ru = {
   "pair.appstore.paste": "Войти по скопированной ссылке",
   "pair.appstore.notOurLink": "Это не ссылка ProxysVPN. Скопируйте её в своём аккаунте ProxysVPN",
   "pair.appstore.done": "Готово, вы вошли",
+  "pair.appstore.code.open": "Войти по коду из аккаунта",
+  "pair.appstore.code.submit": "Войти",
+  "pair.appstore.code.notFound":
+    "Код не подошёл. Он действует 10 минут и срабатывает один раз — возьмите новый в своём аккаунте ProxysVPN.",
 
   // ── [3] Details sheet ─────────────────────────────────────────────────────
   "details.title": "Подробности",
@@ -342,6 +358,16 @@ const ru = {
   "err.NO_DEVICES.body": "Добавьте устройство в кабинете — ссылка заработает сразу.",
   "err.SUB_NOTICE.title": "Сообщение от сервиса",
   "err.SUB_NOTICE.body": "Сервис ответил вместо списка локаций. Вот что он пишет:",
+  // Pair code answers. Said under the code field on the sign-in screen; these
+  // exist for completeness of the code map and name neither the cabinet nor
+  // the bot, so App Store builds can use them as they are.
+  "err.PAIR_CODE_MALFORMED.title": "Это не код для приложения",
+  "err.PAIR_CODE_MALFORMED.body": "В коде восемь знаков, латинские буквы и цифры: XXXX-XXXX.",
+  "err.PAIR_CODE_NOT_FOUND.title": "Код не подошёл",
+  "err.PAIR_CODE_NOT_FOUND.body":
+    "Он действует 10 минут и срабатывает один раз. Возьмите новый там же, где брали этот.",
+  "err.PAIR_RATE_LIMITED.title": "Слишком много попыток",
+  "err.PAIR_RATE_LIMITED.body": "Подождите минуту и попробуйте снова.",
   "err.PERMISSION_DENIED.title": "Нужно разрешение системы",
   "err.PERMISSION_DENIED.body":
     "Без него приложение не может направить интернет через защищённое соединение. Нажмите «Повторить» и разрешите в системном окне.",
@@ -708,12 +734,25 @@ const en: Partial<Record<MsgKey, string>> = {
   "pair.keychain": "The link is stored in the app's folder on this device",
   "pair.qrAlt": "Pairing code",
   "pair.scan": "Point the camera",
+  "pair.code.open": "Enter a code from the website",
+  "pair.code.label": "Code for the app",
+  "pair.code.placeholder": "XXXX-XXXX",
+  "pair.code.submit": "Connect",
+  "pair.code.notFound":
+    "The code did not work. It is valid for 10 minutes and works once — get a new one in your account or in the bot.",
+  "pair.code.rateLimited": "Too many attempts. Please wait a minute.",
+  "pair.code.network": "Could not reach the service. Check your internet and try again.",
+  "pair.code.failed": "That did not work. Try again — or write to support.",
   "pair.appstore.title": "Sign in to your ProxysVPN account",
   "pair.appstore.body":
     "Open your ProxysVPN account on another device, tap the code icon next to the link and point the camera at this screen.",
   "pair.appstore.paste": "Sign in with a copied link",
   "pair.appstore.notOurLink": "This is not a ProxysVPN link. Copy it from your ProxysVPN account",
   "pair.appstore.done": "Done, you are signed in",
+  "pair.appstore.code.open": "Sign in with a code from your account",
+  "pair.appstore.code.submit": "Sign in",
+  "pair.appstore.code.notFound":
+    "The code did not work. It is valid for 10 minutes and works once — get a new one in your ProxysVPN account.",
 
   "details.title": "Details",
   "details.change": "Change",
@@ -863,6 +902,13 @@ const en: Partial<Record<MsgKey, string>> = {
   "err.SUB_NOTICE.title": "A message from the service",
   "err.SUB_NOTICE.body":
     "The service answered instead of sending the list. Here is what it says:",
+  "err.PAIR_CODE_MALFORMED.title": "This is not a code for the app",
+  "err.PAIR_CODE_MALFORMED.body": "The code has eight characters, Latin letters and digits: XXXX-XXXX.",
+  "err.PAIR_CODE_NOT_FOUND.title": "The code did not work",
+  "err.PAIR_CODE_NOT_FOUND.body":
+    "It is valid for 10 minutes and works once. Get a new one where you got this one.",
+  "err.PAIR_RATE_LIMITED.title": "Too many attempts",
+  "err.PAIR_RATE_LIMITED.body": "Please wait a minute and try again.",
   "err.PERMISSION_DENIED.title": "The system needs your permission",
   "err.PERMISSION_DENIED.body":
     "Without it we cannot route the internet through a secure connection. Tap Retry and allow it in the system dialog.",

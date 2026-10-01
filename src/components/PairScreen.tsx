@@ -17,18 +17,44 @@
 // paid features, and the app ships without in-app purchases, so the screen
 // must read as a sign-in, never as entering a key, and never mention the bot
 // (it sells top-ups). The mechanics do not change.
+//
+// Pair code v1 sits under the QR as a second way in: the eight characters the
+// cabinet or the bot shows as "Код для приложения", for when the cabinet is
+// open on this same phone and there is nothing to point a camera at. A code
+// that works ends exactly like a scanned QR - the same "done" line, the same
+// pause, the same `onDone` - and the QR keeps polling meanwhile, untouched.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ClipboardEvent,
+} from "react";
 import QRCode from "qrcode";
 
 import { bridge, toAppError, type PairSession } from "../bridge";
 import { IS_APPSTORE } from "../dist";
 import { formatCountdown, type MsgKey } from "../i18n";
 import { privacyUrl } from "../legal";
+import {
+  editPairCode,
+  isCompletePairCode,
+  normalisePairCode,
+  pairCodeProblemKey,
+  pastedPairCode,
+  rateLimitPauseMs,
+  type PairCodeField,
+} from "../pairCode";
 import { Screen, Spinner, useLatest, useNow, useUi } from "./ui";
 
 const POLL_MS = 2000;
 const DONE_PAUSE_MS = 600;
+
+const CODE_FORM_ID = "pair-code-form";
+const CODE_ERROR_ID = "pair-code-error";
 
 type Phase = "preparing" | "waiting" | "expired" | "failed" | "linked";
 
@@ -48,6 +74,11 @@ const COPY: Record<"title" | "body" | "paste" | "notOurLink" | "done", MsgKey> =
       notOurLink: "pair.notOurLink",
       done: "pair.done",
     };
+
+/** The code entry's own two lines: a sign-in in App Store builds, too. */
+const CODE_COPY: Record<"open" | "submit", MsgKey> = IS_APPSTORE
+  ? { open: "pair.appstore.code.open", submit: "pair.appstore.code.submit" }
+  : { open: "pair.code.open", submit: "pair.code.submit" };
 
 export default function PairScreen({
   onDone,
@@ -74,6 +105,18 @@ export default function PairScreen({
   const [lastPoll, setLastPoll] = useState<string>("—");
   const started = useRef(false);
   const doneRef = useLatest(onDone);
+  const phaseRef = useLatest(phase);
+
+  // Pair code entry. Closed until asked for: the QR is still the first way in.
+  const [codeOpen, setCodeOpen] = useState(false);
+  const [codeField, setCodeField] = useState<PairCodeField>({ value: "", caret: 0 });
+  const [codeBusy, setCodeBusy] = useState(false);
+  const [codeError, setCodeError] = useState<string | null>(null);
+  // After a 429 the button rests until the service's Retry-After, at most the
+  // minute the sentence asks for.
+  const [codePausedUntil, setCodePausedUntil] = useState(0);
+  const codeInput = useRef<HTMLInputElement>(null);
+  const codeErrorLine = useRef<HTMLParagraphElement>(null);
 
   const start = useCallback(async () => {
     setPhase("preparing");
@@ -158,6 +201,72 @@ export default function PairScreen({
     }
   }, [doneRef, t]);
 
+  // The field reformats as it is typed (XXXX-XXXX); put the caret back where
+  // the person was typing rather than at the end.
+  useLayoutEffect(() => {
+    const input = codeInput.current;
+    if (!input || document.activeElement !== input) return;
+    input.setSelectionRange(codeField.caret, codeField.caret);
+  }, [codeField]);
+
+  // A refusal nobody sees is a silence: with the keyboard up the body is
+  // short, so bring the line into view (no animation, nothing to switch off
+  // for reduced motion).
+  useEffect(() => {
+    if (codeError !== null) codeErrorLine.current?.scrollIntoView({ block: "nearest" });
+  }, [codeError]);
+
+  const onCodeChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const input = event.currentTarget;
+      const native = event.nativeEvent;
+      const backspace =
+        typeof InputEvent !== "undefined" &&
+        native instanceof InputEvent &&
+        native.inputType === "deleteContentBackward";
+      const caret = input.selectionStart ?? input.value.length;
+      setCodeField(editPairCode(codeField.value, input.value, caret, backspace));
+      setCodeError(null);
+    },
+    [codeField.value],
+  );
+
+  const onCodePaste = useCallback((event: ClipboardEvent<HTMLInputElement>) => {
+    // A whole code replaces whatever the field held; anything else is pasted
+    // as usual and tidied by onCodeChange.
+    const whole = pastedPairCode(event.clipboardData.getData("text"));
+    if (whole === null) return;
+    event.preventDefault();
+    setCodeField({ value: whole, caret: whole.length });
+    setCodeError(null);
+  }, []);
+
+  const codeResting = now < codePausedUntil;
+  const canRedeem = isCompletePairCode(codeField.value) && !codeBusy && !codeResting;
+
+  const redeem = useCallback(async () => {
+    const code = normalisePairCode(codeField.value);
+    if (code === null || codeBusy || Date.now() < codePausedUntil) return;
+    setCodeBusy(true);
+    setCodeError(null);
+    try {
+      await bridge.redeemPairCode(code);
+      // The QR may have got there first; it is the same link, and onDone
+      // connects, so it must run once.
+      if (phaseRef.current === "linked") return;
+      setPhase("linked");
+      window.setTimeout(() => doneRef.current(), DONE_PAUSE_MS);
+    } catch (err) {
+      const app = toAppError(err);
+      setCodeError(t(pairCodeProblemKey(app.code, IS_APPSTORE)));
+      if (app.code === "PAIR_RATE_LIMITED") {
+        setCodePausedUntil(Date.now() + rateLimitPauseMs(app));
+      }
+    } finally {
+      setCodeBusy(false);
+    }
+  }, [codeField.value, codeBusy, codePausedUntil, doneRef, phaseRef, t]);
+
   const body = () => {
     if (phase === "linked") {
       return (
@@ -206,6 +315,78 @@ export default function PairScreen({
           ) : null}
           {phase === "expired" ? <p className="body">{t("pair.expired")}</p> : null}
           {notice ? <p className="body danger">{notice}</p> : null}
+        </div>
+
+        {/* The second way in. In the scrolling body, not the pinned footer,
+            for the same reason as the links below; and it stays usable
+            whatever the QR is doing - a QR that failed to load is exactly
+            when a code helps. */}
+        <div className="code-entry">
+          <button
+            type="button"
+            className="btn btn-quiet"
+            aria-expanded={codeOpen}
+            aria-controls={CODE_FORM_ID}
+            onClick={() => setCodeOpen((open) => !open)}
+          >
+            {t(CODE_COPY.open)}
+          </button>
+          {codeOpen ? (
+            <form
+              id={CODE_FORM_ID}
+              className="code-form"
+              noValidate
+              onSubmit={(event) => {
+                event.preventDefault();
+                void redeem();
+              }}
+            >
+              <input
+                ref={codeInput}
+                type="text"
+                className="code-field"
+                value={codeField.value}
+                placeholder={t("pair.code.placeholder")}
+                aria-label={t("pair.code.label")}
+                aria-invalid={codeError !== null}
+                aria-describedby={codeError !== null ? CODE_ERROR_ID : undefined}
+                // Opened by a tap, so the keyboard may come up with it.
+                autoFocus
+                autoComplete="off"
+                autoCapitalize="characters"
+                autoCorrect="off"
+                spellCheck={false}
+                enterKeyHint="go"
+                // Read-only rather than disabled while busy: disabling drops
+                // the focus, and with it the keyboard, before a wrong code
+                // can be corrected.
+                readOnly={codeBusy}
+                onChange={onCodeChange}
+                onPaste={onCodePaste}
+              />
+              {/* Under the field it is about, above the button: below the
+                  button it fell under the fold on a phone. */}
+              {codeError !== null ? (
+                <p
+                  ref={codeErrorLine}
+                  id={CODE_ERROR_ID}
+                  className="small danger code-error"
+                  role="alert"
+                >
+                  {codeError}
+                </p>
+              ) : null}
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={!canRedeem}
+                aria-busy={codeBusy}
+              >
+                {codeBusy ? <Spinner /> : null}
+                {t(CODE_COPY.submit)}
+              </button>
+            </form>
+          ) : null}
         </div>
 
         {/* Before there is a link this screen is the whole app, and More,

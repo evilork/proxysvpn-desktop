@@ -1239,6 +1239,59 @@ button.row:hover {
   image-rendering: pixelated;
 }
 
+/* Pair code on the sign-in screen: the quiet "enter a code" row and, once
+   opened, the field, its button and the refusal line. Centred like the QR
+   and no wider than a phone column: on an iPad eight characters do not need
+   the 720 px the column grows to. */
+.code-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 360px;
+  margin: 4px auto 0;
+}
+
+.code-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.code-field {
+  width: 100%;
+  min-height: 52px;
+  padding: 10px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--mono);
+  /* Above 16 px at every text size, so iOS never zooms into it. */
+  font-size: calc(22 * var(--type-px));
+  letter-spacing: 0.12em;
+  text-align: center;
+  /* The body forbids selection; a field someone pastes into must allow it,
+     or the long-press "Paste" never appears on iOS. */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.code-field::placeholder {
+  color: var(--text-faint);
+}
+
+.code-field[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.code-error {
+  margin: 0;
+  text-align: center;
+}
+
 .mono-box {
   font-family: var(--mono);
   font-size: calc(12 * var(--type-px));
