@@ -878,6 +878,9 @@ mod tests {
         ]
     }
 
+    // Unix only, like the function's one caller: "/tmp/…" is not an absolute
+    // path on Windows, where the Windows CI jobs run these tests too.
+    #[cfg(unix)]
     #[test]
     fn only_an_executable_inside_appdir_is_the_appimage() {
         let image = Some(OsStr::new("/home/deck/Applications/ProxysVPN.AppImage"));
@@ -902,6 +905,7 @@ mod tests {
 
     /// The extracted form (--appimage-extract-and-run) is an AppImage too,
     /// and must not fall back to running a user-owned file as root.
+    #[cfg(unix)]
     #[test]
     fn an_extracted_appimage_is_still_the_appimage() {
         let image = Some(OsStr::new("/home/deck/ProxysVPN.AppImage"));
@@ -1043,8 +1047,10 @@ mod tests {
     /// the device — and quotes nothing it was not sure of.
     #[test]
     fn the_rule_allows_exactly_the_installed_helper() {
-        let helper = installed_helper(Path::new(INSTALL_DIR));
-        let rule = polkit_rule("deck", &helper).expect("rule");
+        // A literal, not installed_helper(): a joined path has backslashes on
+        // Windows, where this test runs as well.
+        let helper = Path::new("/home/.proxysvpn/bin/proxysvpn-helper");
+        let rule = polkit_rule("deck", helper).expect("rule");
         assert!(rule.contains(r#"action.id === "org.freedesktop.policykit.exec""#));
         assert!(rule.contains(r#"action.lookup("program") === "/home/.proxysvpn/bin/proxysvpn-helper""#));
         assert!(rule.contains(r#"action.lookup("command_line") === "/home/.proxysvpn/bin/proxysvpn-helper --helper""#));
@@ -1054,7 +1060,7 @@ mod tests {
         assert_eq!(rule.matches("polkit.Result.YES").count(), 1);
         assert!(!rule.contains("Result.AUTH"), "it never changes how anything else is asked");
 
-        assert_eq!(polkit_rule("de\"ck", &helper), None);
+        assert_eq!(polkit_rule("de\"ck", helper), None);
         assert_eq!(polkit_rule("deck", Path::new("/home/x\"/proxysvpn-helper")), None);
     }
 
