@@ -32,14 +32,45 @@ fi
 
 USER_UID="$(/usr/bin/id -u)"
 PROMPT='ProxysVPN запрашивает права администратора для создания VPN-туннеля.'
-SHELL_CMD="/bin/launchctl asuser $USER_UID '$BIN' >/dev/null 2>&1 &"
 
 # osascript "with administrator privileges" displays the system password
-# dialog. After auth, the inner shell runs with sudo, allowing
+# dialog. After auth, the inner shell runs as root, allowing
 # launchctl asuser to spawn the binary in the user's GUI session.
 # We background (&) the launchctl call so osascript exits cleanly and our
 # launcher script terminates — the real binary keeps running.
-if ! /usr/bin/osascript -e "do shell script \"$SHELL_CMD\" with prompt \"$PROMPT\" with administrator privileges" 2>/dev/null; then
-    # User cancelled dialog or wrong password — silent exit
-    exit 0
-fi
+#
+# The path and the uid travel as arguments and are quoted by AppleScript's
+# `quoted form of`. They used to be spliced into the AppleScript string inside
+# single quotes, so an install path with ' or " in it (a folder called
+# "Alexej's Apps") broke the command, and the failure was swallowed as if the
+# person had pressed Cancel.
+RESULT="$(/usr/bin/osascript - "$BIN" "$USER_UID" "$PROMPT" 2>/dev/null <<'APPLESCRIPT'
+on run argv
+    set binPath to item 1 of argv
+    set userId to item 2 of argv
+    set promptText to item 3 of argv
+    try
+        do shell script "/bin/launchctl asuser " & quoted form of userId & " " & quoted form of binPath & " >/dev/null 2>&1 &" with prompt promptText with administrator privileges
+        return "ok"
+    on error errText number errNum
+        if errNum is -128 then return "cancelled"
+        return "failed: " & errText
+    end try
+end run
+APPLESCRIPT
+)" || RESULT="failed: osascript did not run"
+
+case "$RESULT" in
+    ok|cancelled)
+        # Cancel in the password dialog is a choice, not an error: silent exit.
+        exit 0
+        ;;
+    *)
+        /usr/bin/osascript - "$RESULT" >/dev/null 2>&1 <<'APPLESCRIPT' || true
+on run argv
+    display dialog "ProxysVPN не удалось запустить: " & (item 1 of argv) buttons {"OK"} default button 1 with icon stop
+end run
+APPLESCRIPT
+        exit 1
+        ;;
+esac
