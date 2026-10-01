@@ -259,6 +259,19 @@ fn dns_up(backend: DnsBackend, servers: &[IpAddr]) -> Result<()> {
     }
 }
 
+/// `dns_up` for the supervisor tick: with the resolv.conf backend, a file
+/// that replaced ours mid-session becomes the new original
+/// (`linux_logic::resolv_reapply`).
+fn dns_reapply(backend: DnsBackend, servers: &[IpAddr]) -> Result<()> {
+    match backend {
+        DnsBackend::Resolved => dns_up(backend, servers),
+        DnsBackend::ResolvConf => {
+            logic::resolv_reapply(&paths::linux_persistent_dir(), Path::new(RESOLV_CONF), servers)
+                .context("rewrite /etc/resolv.conf")
+        }
+    }
+}
+
 fn dns_down(backend: DnsBackend) {
     match backend {
         DnsBackend::Resolved => {
@@ -386,10 +399,10 @@ pub fn ensure(tunnel: &Tunnel) -> Result<()> {
         add_split_defaults()?;
         log("warn", "re-added the split-default routes");
         // The device was rebuilt, so per-link resolver settings are gone too.
-        dns_up(tunnel.backend, &tunnel.dns)?;
+        dns_reapply(tunnel.backend, &tunnel.dns)?;
     } else if tunnel.backend == DnsBackend::ResolvConf && !resolv_conf_is_ours() {
-        dns_up(tunnel.backend, &tunnel.dns)?;
-        log("warn", "/etc/resolv.conf was rewritten, reapplied ours");
+        dns_reapply(tunnel.backend, &tunnel.dns)?;
+        log("warn", "/etc/resolv.conf was rewritten, reapplied ours and kept the new one for Disconnect");
     }
     Ok(())
 }
