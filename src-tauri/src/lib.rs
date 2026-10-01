@@ -26,6 +26,10 @@
 // window renders both. Where a platform genuinely cannot answer, it answers
 // "we do not know" rather than growing a command the other one lacks.
 
+// A lock guard in an `if let` / `match` scrutinee lives through the whole
+// block, and the repair ladder once deadlocked on exactly that (see `climb`).
+#![warn(clippy::significant_drop_in_scrutinee)]
+
 mod consent;
 mod errors;
 mod events;
@@ -2658,7 +2662,13 @@ impl Core {
         // C2 — another node, same protocol. The old one is marked as "does not
         // get through on this network" rather than as broken.
         self.session.lock().await.demote(current);
-        if let Some(next) = self.session.lock().await.next_server(current, true) {
+        // Bound first, so the guard is gone before `switch_to`: a guard in an
+        // `if let` scrutinee lives to the end of the block, and `start_on`
+        // takes the same lock. Written inline, this step hung the whole core
+        // (found 01.10.2026 on the Android emulator: every command waiting on
+        // the session, the shield frozen on "healing").
+        let next = self.session.lock().await.next_server(current, true);
+        if let Some(next) = next {
             if self.switch_to(next, generation).await.is_ok() {
                 if let Some(phase) = self.try_probe(generation).await {
                     return Some(phase);
@@ -2674,7 +2684,9 @@ impl Core {
         // it: bytes leave and nothing returns is how a provider strangles a
         // UDP stream, and TCP is the answer to exactly that.
         if cause.code == ErrorCode::Blocked {
-            if let Some(other) = self.session.lock().await.next_server(current, false) {
+            // Bound first, for the reason C2 gives.
+            let other = self.session.lock().await.next_server(current, false);
+            if let Some(other) = other {
                 if self.switch_to(other, generation).await.is_ok() {
                     if let Some(phase) = self.try_probe(generation).await {
                         return Some(phase);
