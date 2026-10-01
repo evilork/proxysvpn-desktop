@@ -70,9 +70,12 @@ on:
 permissions:
   contents: read
 
+# A manual run (the one that may upload release installers) gets a group of
+# its own and is never cancelled: before, a docs merge to main landed in the
+# same group and cancelled a release build halfway.
 concurrency:
-  group: desktop-build-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: desktop-build-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -158,8 +161,17 @@ jobs:
         run: npm run build
 
       - name: JS tests
-        # No-op until a test script exists in package.json.
-        run: npm test --if-present
+        # package.json has no test script (it stays as it is), so the suite is
+        # run directly. The flag strips the TypeScript types on Node 22; newer
+        # Node does that by default and accepts the flag.
+        run: node --experimental-strip-types --test tests/*.test.ts
+
+      - name: Third-party notices are up to date
+        # One runner is enough: cargo metadata --filter-platform gives the same
+        # answer everywhere. A stale file means the licences screen of some
+        # build misses what it ships.
+        if: runner.os == 'Linux'
+        run: node scripts/gen-notices.mjs --check
 
       - name: Rust lints
         run: cargo clippy --workspace --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings
@@ -195,6 +207,13 @@ jobs:
           find src-tauri/target/release/bundle -maxdepth 2 -type f \
             \( -name '*.dmg' -o -name '*.exe' -o -name '*.deb' \) \
             -print0 | while IFS= read -r -d '' f; do sha256 "$f"; done
+          # The same sums as a file that travels in the artifact, so they do
+          # not expire with the log. Bare file names, so `sha256sum -c` works
+          # in the folder the installers are downloaded to.
+          for dir in src-tauri/target/release/bundle/dmg src-tauri/target/release/bundle/nsis src-tauri/target/release/bundle/deb; do
+            [ -d "$dir" ] || continue
+            ( cd "$dir" && for f in *.dmg *.exe *.deb; do if [ -f "$f" ]; then sha256 "$f"; fi; done ) >> "$dir/SHA256SUMS-${{ matrix.artifact }}.txt"
+          done
 
       - name: Upload installers
         # Only on a manual run that asked for it: see the header.
@@ -202,7 +221,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact_path }}
+          path: |
+            ${{ matrix.artifact_path }}
+            src-tauri/target/release/bundle/*/SHA256SUMS-${{ matrix.artifact }}.txt
           if-no-files-found: error
           retention-days: 14
 
