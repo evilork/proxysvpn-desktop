@@ -165,7 +165,10 @@ table and the pids of its own engines (`net/windows.rs`).
 * GUI crash or SIGKILL — the pipe hits EOF, same path;
 * helper killed — `purge_stale_sync()` on the next start removes the leftover
   device, the host route (remembered in `/run/proxysvpn/route-hint`) and the
-  `/etc/resolv.conf` backup, and kills orphaned tun2socks processes;
+  `/etc/resolv.conf` backup, and kills the tun2socks the previous helper
+  recorded in the route hint (`engine_pid=`), only while that pid still runs
+  the helper's own binary — never every root `tun2socks` by name, which would
+  stop another VPN client's engine;
 * reboot — the route hint is in `/run`, a tmpfs, and that is right: routes do
   not survive a reboot either, so a hint that did would name entries that no
   longer exist. The `/etc/resolv.conf` backup is the opposite case and lives in

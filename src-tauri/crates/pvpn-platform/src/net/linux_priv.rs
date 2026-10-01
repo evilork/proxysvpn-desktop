@@ -300,13 +300,13 @@ fn resolv_conf_is_ours() -> bool {
 
 // ----------------------------------------------------------------- the hint
 
-fn write_hint(server_ip: Ipv4Addr) {
+fn write_hint(server_ip: Ipv4Addr, engine_pid: u32) {
     let dir = paths::linux_runtime_dir();
     if let Err(e) = std::fs::create_dir_all(&dir) {
         log("warn", &format!("could not create {}: {}", dir.display(), e));
         return;
     }
-    let hint = crate::net::format_route_hint(std::process::id(), server_ip);
+    let hint = crate::net::format_route_hint_with_engine(std::process::id(), server_ip, engine_pid);
     let path = dir.join(paths::ROUTE_HINT_NAME);
     if let Err(e) = std::fs::write(&path, hint) {
         log("warn", &format!("could not write the route hint: {}", e));
@@ -375,7 +375,7 @@ pub fn up(params: &ValidUp, tun2socks: &Path) -> Result<Tunnel> {
         return Err(e);
     }
 
-    write_hint(params.server_ip);
+    write_hint(params.server_ip, child.id());
     log("info", &format!("tunnel up on {} ({:?} DNS)", DEVICE, backend));
 
     Ok(Tunnel {
@@ -419,7 +419,7 @@ pub fn retarget(tunnel: &mut Tunnel, new_ip: Ipv4Addr) -> Result<()> {
     add_host_route(new_ip, &route)?;
     del_host_route(tunnel.server_ip);
     tunnel.server_ip = new_ip;
-    write_hint(new_ip);
+    write_hint(new_ip, tunnel.child.id());
     // The addresses are not logged: node addresses are not public information.
     log("info", "host route moved to the new node");
     Ok(())
@@ -449,7 +449,11 @@ pub fn down(mut tunnel: Tunnel) {
                 let _ = tunnel.child.kill();
                 let _ = tunnel.child.wait();
             }
-            TeardownStep::KillStrayEngines => run_ok(&p::kill_stray(TUNNEL_ENGINE)),
+            // Nothing to sweep: the engine this tunnel owns was killed by
+            // handle in the step before. `pkill -u 0 tun2socks` here used to
+            // kill any root tun2socks on the machine — another VPN client's
+            // privileged service included — on every Disconnect.
+            TeardownStep::KillStrayEngines => {}
         }
     }
     let _ = std::fs::remove_file(hint_path());
@@ -463,15 +467,23 @@ pub fn purge_stale_sync() {
     // the table even when the device is already gone, and then the machine has
     // no IPv4 until something removes them.
     del_split_defaults();
-    run_ok(&p::kill_stray(TUNNEL_ENGINE));
+    let hint = hint_path();
+    let hint_text = std::fs::read_to_string(&hint).ok();
+    // Only the tun2socks the previous helper recorded, and only while that
+    // pid still runs our own binary: a name sweep (`pkill -u 0 tun2socks`)
+    // also killed another VPN client's root engine at every helper start.
+    if let Some(text) = &hint_text {
+        for pid in crate::net::parse_engine_pids(text) {
+            kill_own_engine(pid);
+        }
+    }
 
     if device_exists() {
         run_ok(&p::device_delete());
     }
 
-    let hint = hint_path();
-    if let Ok(text) = std::fs::read_to_string(&hint) {
-        for ip in crate::net::parse_route_hint(&text) {
+    if let Some(text) = &hint_text {
+        for ip in crate::net::parse_route_hint(text) {
             del_host_route(ip);
         }
         let _ = std::fs::remove_file(&hint);
@@ -482,6 +494,29 @@ pub fn purge_stale_sync() {
     run_ok(&p::resolved_revert());
     if logic::resolv_backup_exists(&paths::linux_persistent_dir()) {
         dns_down(DnsBackend::ResolvConf);
+    }
+}
+
+/// SIGKILL `pid` if, and only if, it still runs the helper's own tun2socks.
+fn kill_own_engine(pid: u32) {
+    let Ok(raw) = libc::pid_t::try_from(pid) else {
+        return;
+    };
+    let own_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let image = std::fs::read_link(format!("/proc/{pid}/exe")).ok();
+    let ours = match (image, own_dir) {
+        (Some(image), Some(own)) => crate::net::is_own_engine_image(&image, &own),
+        _ => false,
+    };
+    if !ours {
+        return;
+    }
+    // SAFETY: kill(2) takes two integers; `raw` is a single pid above 1
+    // (parse_engine_pids), never a group or "everyone".
+    if unsafe { libc::kill(raw, libc::SIGKILL) } == 0 {
+        log("info", "stopped the tun2socks a previous helper left running");
     }
 }
 

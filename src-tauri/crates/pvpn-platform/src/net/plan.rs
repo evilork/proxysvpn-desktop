@@ -627,16 +627,6 @@ pub mod linux {
         Argv::new(RESOLVECTL, ["flush-caches"])
     }
 
-    /// Crash sweep for a tun2socks the helper no longer has a handle for.
-    ///
-    /// `-x` so it cannot match an unrelated command line, and `-u 0` because
-    /// this one runs as root on a machine that may have other users logged in.
-    /// The helper spawns tun2socks itself, so every process it is entitled to
-    /// reap is root-owned, while another user's VPN client is not — without the
-    /// filter, one user's reconnect killed everybody else's tunnel.
-    pub fn kill_stray(stem: &str) -> Argv {
-        Argv::new("pkill", ["-9", "-x", "-u", "0", stem])
-    }
 }
 
 // ===========================================================================
@@ -1114,19 +1104,6 @@ mod tests {
             linux::resolved_revert().to_string(),
             "resolvectl revert proxysvpn0"
         );
-    }
-
-    /// This sweep runs as root in the helper, so it needs two limits, not one:
-    /// exact name, and root-owned only. Another logged-in user's tun2socks is
-    /// not ours to kill.
-    #[test]
-    fn linux_kill_stray_matches_only_our_own_root_processes() {
-        let argv = linux::kill_stray("tun2socks");
-        assert_eq!(argv.to_string(), "pkill -9 -x -u 0 tun2socks");
-        // Without -x this would also kill, say, "tun2socks-wrapper".
-        assert!(argv.args.contains(&"-x".to_string()));
-        let uid_filter = argv.args.windows(2).any(|w| w == ["-u", "0"]);
-        assert!(uid_filter, "the sweep must be limited to root's processes");
     }
 
     // ------------------------------------------------- cross-platform shape
