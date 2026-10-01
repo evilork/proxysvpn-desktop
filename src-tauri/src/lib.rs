@@ -574,6 +574,17 @@ struct Session {
     protection_drop_notified: bool,
 }
 
+/// Whether a location change on a live tunnel must move the node's host route
+/// BEFORE the engine starts. Hysteria dials its server while it starts (the
+/// start waits for its SOCKS port); xray dials only on the first connection,
+/// which comes after the route has moved. Without this, hysteria's dial went
+/// into our own tunnel and through the old engine, and the switch timed out
+/// (Linux VM, 02.10.2026). The old engine loses its route a few seconds early,
+/// but it is being replaced anyway.
+fn retarget_before_engine(keep_tunnel: bool, server: &ServerConfig) -> bool {
+    keep_tunnel && matches!(server, ServerConfig::Hy2(_))
+}
+
 /// A phase where traffic is actually believed to cross the tunnel — the two
 /// phases a "protection dropped" notice can fall FROM and a "restored" one
 /// can return TO. Deliberately excludes `Unconfirmed`'s cousin-in-spirit
@@ -2093,6 +2104,10 @@ impl Core {
             let creds = if partner.is_some() { s.race_credentials.clone() } else { None };
             (partner, creds)
         };
+        let route_first = retarget_before_engine(keep_tunnel, &server);
+        if route_first {
+            self.tunnel_up(&server, true).await?;
+        }
         self.engine_start(&server, partner.as_ref(), race_creds.as_ref()).await?;
         if !self.is_current(generation).await {
             return Ok(());
@@ -2102,7 +2117,9 @@ impl Core {
             // one worth naming separately to a person who is waiting.
             self.set_step(VpnStep::RaisingTun).await;
         }
-        self.tunnel_up(&server, keep_tunnel).await?;
+        if !route_first {
+            self.tunnel_up(&server, keep_tunnel).await?;
+        }
         if !self.is_current(generation).await {
             return Ok(());
         }
@@ -5434,6 +5451,14 @@ mod tests {
         let mut s = Session::new();
         s.servers = servers;
         s
+    }
+
+    #[test]
+    fn only_a_hysteria_switch_on_a_live_tunnel_moves_the_route_first() {
+        assert!(retarget_before_engine(true, &hy2("🇳🇱 Нидерланды")));
+        assert!(!retarget_before_engine(false, &hy2("🇳🇱 Нидерланды")));
+        assert!(!retarget_before_engine(true, &vless("🇩🇪 Германия")));
+        assert!(!retarget_before_engine(false, &vless("🇩🇪 Германия")));
     }
 
     // ── labels and ids ─────────────────────────────────────────────────────
