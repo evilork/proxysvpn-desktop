@@ -2128,6 +2128,11 @@ impl Core {
         // second rather than after the ladder finishes.
         self.bump_generation().await;
         let _op = self.operation.lock().await;
+        // And again once the lock is ours: a location switch that was already
+        // queued on it got in first and opened a generation of its own after
+        // the bump above. Retiring that one too keeps its late probe from
+        // painting "Protected" over this Disconnect (`select_location`).
+        self.bump_generation().await;
         self.engine_down().await;
         {
             let mut s = self.session.lock().await;
@@ -3116,11 +3121,18 @@ async fn select_location(core: tauri::State<'_, Arc<Core>>, id: Option<String>) 
 
     let Some(index) = target else { return Ok(()) };
     let phase = core.session.lock().await.phase;
-    if matches!(phase, VpnPhase::Off | VpnPhase::Failed) {
+    if !switch_moves_the_tunnel(phase) {
         return Ok(());
     }
 
     let _op = core.operation.lock().await;
+    // Again, now that the lock is ours: a Disconnect that was still running
+    // when the click passed the check above (the phase stays On until its
+    // last line) has finished by now, and a click must not raise again the
+    // tunnel the person just turned off.
+    if !switch_moves_the_tunnel(core.session.lock().await.phase) {
+        return Ok(());
+    }
     // A repair ladder may be climbing right now — the main screen says it is
     // healing, which is exactly when people open the list. Both restart the
     // engines, on different nodes, and the ladder never took this lock: the
@@ -3139,18 +3151,23 @@ async fn select_location(core: tauri::State<'_, Arc<Core>>, id: Option<String>) 
         return Err(err.to_payload());
     }
 
-    match core.probe(ProbeReason::AfterConnect).await {
-        Some(ProbeVerdict::Passed) => core.settle(VpnPhase::On).await,
-        Some(ProbeVerdict::Unconfirmed) => core.settle(VpnPhase::Unconfirmed).await,
-        Some(other) => {
-            let cause = other
-                .as_error()
-                .unwrap_or_else(|| AppError::new(ErrorCode::Unknown));
-            core.spawn_heal(generation, cause);
-        }
-        None => {
+    let verdict = core.probe(ProbeReason::AfterConnect).await;
+    // The lock is gone by now, so anything may have happened meanwhile: a
+    // Disconnect (which retires this generation), or the engine dying, in
+    // which case the probe went out of the real interface and proves nothing.
+    let still_current = core.is_current(generation).await;
+    #[cfg(desktop)]
+    let carrying = core.tunnel_is_up().await && core.engines_alive().await;
+    #[cfg(target_os = "ios")]
+    let carrying = true;
+    match after_switch(still_current, carrying, verdict) {
+        AfterSwitch::Retired => {}
+        AfterSwitch::Settle(phase) => core.settle(phase).await,
+        AfterSwitch::Heal(code) => core.spawn_heal(generation, AppError::new(code)),
+        AfterSwitch::NoVerdict => {
             // No verdict, and a ladder that was running is retired: do not
-            // leave the screen on "healing" with nobody working on it.
+            // leave the screen on "healing" with nobody working on it. A dead
+            // engine is the supervisor's (it revives it on its next tick).
             let (phase, cause) = {
                 let s = core.session.lock().await;
                 (s.phase, s.error.clone())
@@ -3161,6 +3178,42 @@ async fn select_location(core: tauri::State<'_, Arc<Core>>, id: Option<String>) 
         }
     }
     Ok(())
+}
+
+/// Does a location picked in this phase move a live tunnel? Not when there is
+/// none: Off waits for Connect, and Failed for Retry, both of which then
+/// start on the pinned location.
+fn switch_moves_the_tunnel(phase: VpnPhase) -> bool {
+    !matches!(phase, VpnPhase::Off | VpnPhase::Failed)
+}
+
+/// What `select_location` does with the probe it ran after the switch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AfterSwitch {
+    /// A Disconnect, a connect or another switch has taken over since:
+    /// nothing here may change the phase any more.
+    Retired,
+    Settle(VpnPhase),
+    Heal(ErrorCode),
+    /// No verdict that counts.
+    NoVerdict,
+}
+
+/// Pure, so each case is testable. A pass only counts while the tunnel is
+/// there to carry it (`healing_verdict` applies the same rule to repairs).
+fn after_switch(still_current: bool, carrying: bool, verdict: Option<ProbeVerdict>) -> AfterSwitch {
+    if !still_current {
+        return AfterSwitch::Retired;
+    }
+    if !carrying {
+        return AfterSwitch::NoVerdict;
+    }
+    match verdict {
+        Some(ProbeVerdict::Passed) => AfterSwitch::Settle(VpnPhase::On),
+        Some(ProbeVerdict::Unconfirmed) => AfterSwitch::Settle(VpnPhase::Unconfirmed),
+        Some(other) => AfterSwitch::Heal(other.error_code().unwrap_or(ErrorCode::Unknown)),
+        None => AfterSwitch::NoVerdict,
+    }
 }
 
 #[tauri::command]
@@ -4818,6 +4871,41 @@ mod tests {
 
         let empty = Session::new();
         assert_eq!(empty.reusable_sub_age(0), None);
+    }
+
+    /// A switch whose probe comes back after a Disconnect (or any newer
+    /// operation) changes nothing, and a pass that went out of the real
+    /// interface — the tunnel gone — is not "Protected".
+    #[test]
+    fn a_location_switch_settles_only_its_own_live_tunnel() {
+        for verdict in [
+            Some(ProbeVerdict::Passed),
+            Some(ProbeVerdict::Unconfirmed),
+            Some(ProbeVerdict::NoRoute),
+            None,
+        ] {
+            assert_eq!(after_switch(false, true, verdict), AfterSwitch::Retired, "{verdict:?}");
+        }
+        assert_eq!(after_switch(true, false, Some(ProbeVerdict::Passed)), AfterSwitch::NoVerdict);
+        assert_eq!(after_switch(true, true, Some(ProbeVerdict::Passed)), AfterSwitch::Settle(VpnPhase::On));
+        assert_eq!(
+            after_switch(true, true, Some(ProbeVerdict::Unconfirmed)),
+            AfterSwitch::Settle(VpnPhase::Unconfirmed)
+        );
+        assert_eq!(after_switch(true, true, Some(ProbeVerdict::Blocked)), AfterSwitch::Heal(ErrorCode::Blocked));
+        assert_eq!(after_switch(true, true, Some(ProbeVerdict::NoRoute)), AfterSwitch::Heal(ErrorCode::NoRoute));
+        assert_eq!(after_switch(true, true, None), AfterSwitch::NoVerdict);
+    }
+
+    /// Checked before and again under the operation lock: a click during a
+    /// Disconnect finds Off there and raises nothing.
+    #[test]
+    fn a_location_picked_without_a_live_tunnel_moves_nothing() {
+        assert!(!switch_moves_the_tunnel(VpnPhase::Off));
+        assert!(!switch_moves_the_tunnel(VpnPhase::Failed));
+        for live in [VpnPhase::Starting, VpnPhase::On, VpnPhase::Unconfirmed, VpnPhase::Healing] {
+            assert!(switch_moves_the_tunnel(live), "{live:?}");
+        }
     }
 
     /// Retry after a Failed must fetch, but when no site can be reached the
