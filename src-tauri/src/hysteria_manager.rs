@@ -38,10 +38,13 @@ pub const HY2_SOCKS_PORT: u16 = 10809;
 // clean it up. Windows and Linux keep it in the per-user state directory.
 
 /// How long the SOCKS listener gets to appear before we call the start a
-/// failure. Measured, not guessed: on this machine the listener is up in
-/// 150-250 ms, and the old blind 600 ms sleep reported success even when
-/// hysteria had already exited on a bad config.
-const LISTEN_TIMEOUT: Duration = Duration::from_millis(3000);
+/// failure. On the owner's Mac the listener is up in 150-250 ms, and the old
+/// blind 600 ms sleep reported success even when hysteria had already exited
+/// on a bad config. Three seconds were too few elsewhere: hysteria listens
+/// only after its QUIC handshake, and on a Windows 11 VM (x64 emulated on
+/// ARM, 02.10.2026) the first start took 14 s to "client mode" and a Debian
+/// VM missed 3 s too. A start that dies still fails at once (`try_wait`).
+const LISTEN_TIMEOUT: Duration = Duration::from_secs(10);
 const LISTEN_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Default)]
