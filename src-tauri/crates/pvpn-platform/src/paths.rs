@@ -237,8 +237,14 @@ pub fn linux_persistent_dir() -> PathBuf {
 /// write-then-chmod, which left the hysteria config holding the node password
 /// world-readable for the moment in between.
 ///
-/// Windows: `%LOCALAPPDATA%` already inherits an owner-only ACL and has no
-/// symlink exposure of this kind, so the write is plain.
+/// Windows: NOT the same protection, and this is a known gap rather than a
+/// property of the folder. `%LOCALAPPDATA%\ProxysVPN` is the person's own
+/// folder: their unelevated processes may rename it away and put a junction
+/// in its place, and the elevated app then follows it — this function's
+/// delete, like every plain `fs::write` of the 0.3.1 stores (network memory,
+/// tunnel and notification settings, the subscription link, the manifest
+/// cache, the device id), lands wherever the junction points. The fix is a
+/// folder only administrators can change (docs/WINDOWS.md, "Known gaps").
 pub fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
     use std::io::Write;
 

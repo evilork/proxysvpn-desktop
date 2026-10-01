@@ -96,6 +96,32 @@ grants every local user read access.
 (`pvpn_platform::process::no_window`); without it each engine start would flash
 or keep a console window.
 
+## Known gaps
+
+Not fixed in this branch, each for the reason given; none of them is in the
+0.3.1 macOS build.
+
+* **The elevated app writes into a folder the person's unelevated processes
+  control.** `%LOCALAPPDATA%\ProxysVPN` can be renamed away by any process of
+  the same user and replaced with a junction (to `\RPC Control`, plus an object
+  manager link per file name). The elevated app then deletes and overwrites
+  through it: the route hint and the hysteria config (`write_private_file`
+  unlinks first), and since the 0.3.1 merge every plain `fs::write` of the
+  network memory, the tunnel and notification settings, the subscription link,
+  the manifest cache and the device id. That is an unelevated-to-administrator
+  file write and delete, the same class PR #3 closed for `netsh.exe`. The fix is
+  a folder only administrators can change — `%ProgramData%\ProxysVPN` created
+  by the elevated process with a protected DACL for SYSTEM and Administrators,
+  checking ownership and reparse points of a folder that already exists (Users
+  may create folders in ProgramData) — or every write opened with
+  `FILE_FLAG_OPEN_REPARSE_POINT` and checked with `GetFinalPathNameByHandle`.
+  Either needs a Windows machine to get right; nothing of the Windows build has
+  shipped, so moving the folder needs no migration. Until then the honest
+  statement is: on Windows, malware already running as the person can use the
+  app to write as administrator.
+* **DNS and IPv6 go past the tunnel** (see above). The data notice and the
+  Tunnel screen say so on Windows (`src/platformCopy.ts`).
+
 ## Building
 
 ```sh
