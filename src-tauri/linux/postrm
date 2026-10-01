@@ -1,0 +1,67 @@
+#!/bin/sh
+# src-tauri/linux/postrm — Debian maintainer script of the proxys-vpn .deb.
+#
+# While the tunnel is up on a machine without systemd-resolved, the root
+# helper replaces /etc/resolv.conf with its own file and keeps the original in
+# /var/lib/proxysvpn (net/linux_logic.rs resolv_apply). Normally the helper
+# puts it back on Disconnect, or on the next start after a crash. If the
+# machine lost power while connected and the person then removes the package
+# instead of starting it again, nothing would ever put it back: DNS would stay
+# pointed at the tunnel's address for good. This does what the helper's
+# restore does, once, at removal.
+#
+# Never fails the removal: every step is best effort and the script exits 0.
+# The two paths can be overridden for the unit test (pvpn-platform
+# net/linux_logic.rs); dpkg never sets these variables.
+
+STATE="${PROXYSVPN_STATE_DIR:-/var/lib/proxysvpn}"
+RESOLV="${PROXYSVPN_RESOLV_CONF:-/etc/resolv.conf}"
+RUNTIME="${PROXYSVPN_RUNTIME_DIR:-/run/proxysvpn}"
+MARKER="$STATE/resolv-backup"
+OURS="# ProxysVPN: tunnel resolvers, original backed up by the helper"
+
+restore_resolv() {
+    [ -f "$MARKER" ] || return 0
+    # Only our own file is replaced: NetworkManager or resolvconf may have
+    # rewritten it since, and theirs is newer than any backup.
+    if [ -f "$RESOLV" ] && [ ! -L "$RESOLV" ] && grep -qF "$OURS" "$RESOLV" 2>/dev/null; then
+        kind=""
+        rest=""
+        read -r kind rest < "$MARKER" || true
+        case "$kind" in
+            symlink)
+                if [ -n "$rest" ]; then
+                    rm -f "$RESOLV" && ln -s "$rest" "$RESOLV"
+                fi
+                ;;
+            file)
+                case "$rest" in
+                    "" | */*) ;;
+                    *)
+                        if [ -f "$STATE/$rest" ]; then
+                            rm -f "$RESOLV" && cp "$STATE/$rest" "$RESOLV" && chmod 0644 "$RESOLV"
+                        fi
+                        ;;
+                esac
+                ;;
+            absent)
+                rm -f "$RESOLV"
+                ;;
+        esac
+    fi
+    # Done with, either way: a backup left behind would be restored over a
+    # newer file by a later install's crash recovery.
+    rm -f "$MARKER" "$STATE/resolv.conf.orig"
+}
+
+case "$1" in
+    remove | purge)
+        restore_resolv || true
+        ;;
+esac
+
+if [ "$1" = "purge" ]; then
+    rm -rf "$STATE" "$RUNTIME" || true
+fi
+
+exit 0

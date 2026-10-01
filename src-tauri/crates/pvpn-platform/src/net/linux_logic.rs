@@ -820,6 +820,79 @@ proxysvpn0\t00000000\t00000000\t0001\t0\t0\t0\t00000080\t0\t0\t0
             );
         }
 
+        /// The .deb's postrm, run as `apt remove` would run it.
+        fn run_postrm(s: &Scratch, action: &str) {
+            let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../linux/postrm");
+            let status = std::process::Command::new("sh")
+                .arg(&script)
+                .arg(action)
+                .env("PROXYSVPN_STATE_DIR", s.path("backup"))
+                .env("PROXYSVPN_RESOLV_CONF", s.path("resolv.conf"))
+                .env("PROXYSVPN_RUNTIME_DIR", s.path("run"))
+                .status()
+                .expect("sh runs");
+            assert!(status.success(), "postrm must never fail a removal");
+        }
+
+        /// A power cut while connected, then `apt remove` instead of a
+        /// relaunch: nothing else would ever put the resolver back.
+        #[test]
+        fn removing_the_package_puts_back_the_original_resolver() {
+            let s = Scratch::new("postrm-file");
+            let backup = s.path("backup");
+            let resolv = s.path("resolv.conf");
+            fs::write(&resolv, "nameserver 192.168.1.1\n").expect("seed");
+            resolv_apply(&backup, &resolv, &servers()).expect("apply");
+
+            run_postrm(&s, "remove");
+            assert_eq!(fs::read_to_string(&resolv).expect("read"), "nameserver 192.168.1.1\n");
+            assert!(!resolv_backup_exists(&backup), "a leftover backup would be restored over a newer file later");
+        }
+
+        #[test]
+        fn removing_the_package_restores_a_symlink_and_an_absent_file() {
+            let s = Scratch::new("postrm-link");
+            let backup = s.path("backup");
+            let resolv = s.path("resolv.conf");
+            let stub = s.path("stub-resolv.conf");
+            fs::write(&stub, "nameserver 127.0.0.53\n").expect("stub");
+            std::os::unix::fs::symlink(&stub, &resolv).expect("link");
+            resolv_apply(&backup, &resolv, &servers()).expect("apply");
+            run_postrm(&s, "remove");
+            assert_eq!(fs::read_link(&resolv).expect("a link again"), stub);
+
+            let s = Scratch::new("postrm-absent");
+            let backup = s.path("backup");
+            let resolv = s.path("resolv.conf");
+            resolv_apply(&backup, &resolv, &servers()).expect("apply");
+            run_postrm(&s, "purge");
+            assert!(!resolv.exists());
+            assert!(!backup.exists(), "purge removes the state folder");
+        }
+
+        /// NetworkManager already rewrote the file: it is newer than any
+        /// backup and is left alone; the stale backup goes.
+        #[test]
+        fn removing_the_package_leaves_a_rewritten_resolver_alone() {
+            let s = Scratch::new("postrm-nm");
+            let backup = s.path("backup");
+            let resolv = s.path("resolv.conf");
+            fs::write(&resolv, "nameserver 192.168.1.1\n").expect("seed");
+            resolv_apply(&backup, &resolv, &servers()).expect("apply");
+            fs::write(&resolv, "nameserver 10.0.0.1\n").expect("NM");
+
+            run_postrm(&s, "remove");
+            assert_eq!(fs::read_to_string(&resolv).expect("read"), "nameserver 10.0.0.1\n");
+            assert!(!resolv_backup_exists(&backup));
+        }
+
+        #[test]
+        fn the_postrm_knows_our_marker_line() {
+            let script = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../linux/postrm"))
+                .expect("postrm");
+            assert!(script.contains(RESOLV_MARKER), "the script must recognise the file the helper writes");
+        }
+
         /// Connect at home, NetworkManager rewrites the file on the office
         /// network, the supervisor puts ours back, Disconnect: the machine
         /// must get the office resolver, not the unreachable home one.
