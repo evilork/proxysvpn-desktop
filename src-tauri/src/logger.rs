@@ -685,9 +685,34 @@ const SITE_LINE_MARKERS: [&str; 6] = [
 /// File names engines print next to a message: not sites, and useful.
 const NOT_A_SITE_SUFFIXES: [&str; 9] = ["go", "dat", "json", "yaml", "yml", "log", "txt", "exe", "dll"];
 
-/// Is `token` shaped like a DNS name: dot-separated labels of letters, digits
-/// and hyphens, at least two of them, ending in an alphabetic (or punycode)
-/// top label, which leaves dotted IPv4 and version numbers to their own rules?
+/// Public resolvers an engine names when a lookup through it fails. Which
+/// resolver timed out is what support needs to read, and it says nothing
+/// about the sites the person opened.
+const RESOLVER_HOSTS: [&str; 7] = [
+    "dns.google",
+    "cloudflare-dns.com",
+    "one.one.one.one",
+    "dns.quad9.net",
+    "doh.opendns.com",
+    "dns.adguard-dns.com",
+    "common.dot.dns.yandex.net",
+];
+
+/// `RESOLVER_HOSTS`, plus the per-service names under Cloudflare's and
+/// Quad9's resolver domains (`security.cloudflare-dns.com`, `dns11.quad9.net`).
+fn is_public_resolver(token: &str) -> bool {
+    let name = token.strip_suffix('.').unwrap_or(token).to_ascii_lowercase();
+    RESOLVER_HOSTS.contains(&name.as_str())
+        || name.ends_with(".cloudflare-dns.com")
+        || name.ends_with(".quad9.net")
+}
+
+/// Is `token` shaped like a DNS name: dot-separated labels of letters, digits,
+/// hyphens and underscores (`_xmpp-client._tcp`, `my_host` — real names in
+/// lookups), at least two of them, ending in an alphabetic (or punycode) top
+/// label, which leaves dotted IPv4 and version numbers to their own rules?
+/// A top label that is a file extension (`nameserver_doh.go`) is a code
+/// location, not a host.
 fn looks_like_a_site(token: &str) -> bool {
     let name = token.strip_suffix('.').unwrap_or(token);
     let mut labels = name.split('.');
@@ -695,7 +720,7 @@ fn looks_like_a_site(token: &str) -> bool {
         return false;
     };
     let well_formed = labels.all(|l| {
-        !l.is_empty() && l.len() <= 63 && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        !l.is_empty() && l.len() <= 63 && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
     });
     well_formed
         && name.contains('.')
@@ -707,11 +732,16 @@ fn looks_like_a_site(token: &str) -> bool {
 /// Replace every DNS name in an engine line that can name a visited site.
 /// Lines without one of `SITE_LINE_MARKERS` are left alone: our own lines
 /// ("proxysvpn.com unreachable") are what support needs to read.
+///
+/// A name is masked wherever it stands — after `://`, before a `/`, next to
+/// an underscore: `Get https://cdn.site.io/x` names the site as plainly as
+/// `reqAddr` does. Only code locations (`nameserver_doh.go`, a top label in
+/// `NOT_A_SITE_SUFFIXES`) and the public resolvers keep their names.
 fn mask_visited_sites(input: &str) -> String {
     if !SITE_LINE_MARKERS.iter().any(|m| input.contains(m)) {
         return input.to_string();
     }
-    let is_name_char = |c: char| c.is_ascii_alphanumeric() || c == '.' || c == '-';
+    let is_name_char = |c: char| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_';
     let mut out = String::with_capacity(input.len());
     let mut rest = input;
     while let Some(start) = rest.find(is_name_char) {
@@ -719,11 +749,13 @@ fn mask_visited_sites(input: &str) -> String {
         let tail = &rest[start..];
         let end = tail.find(|c: char| !is_name_char(c)).unwrap_or(tail.len());
         let token = &tail[..end];
-        // A token glued to a path or an identifier (`app/dns`, `nameserver_doh`)
-        // is a code location, not a host.
-        let glued = out.ends_with(['/', '_']) || tail[end..].starts_with(['/', '_']);
-        if !glued && looks_like_a_site(token) {
+        if looks_like_a_site(token) && !is_public_resolver(token) {
             out.push_str(MASK_SITE);
+            // A trailing dot is the name's root, not the sentence's end, but
+            // a masked name keeps it so the line still reads the same.
+            if token.ends_with('.') {
+                out.push('.');
+            }
         } else {
             out.push_str(token);
         }
@@ -1927,12 +1959,69 @@ mod tests {
 
     #[test]
     fn the_site_shape_is_strict() {
-        for site in ["example.com", "a-b.c-d.example.org.", "xn--80ak6aa92e.xn--p1ai", "DNS.Google"] {
+        for site in [
+            "example.com",
+            "a-b.c-d.example.org.",
+            "xn--80ak6aa92e.xn--p1ai",
+            "DNS.Google",
+            "my_host.private-site.org",
+            "_xmpp-client._tcp.jabber-site.ru.",
+        ] {
             assert!(looks_like_a_site(site), "{site}");
         }
-        for not_site in ["1.2.3.4", "v2.9.3", "dns.go", "geoip.dat", "a..b", ".com", "localhost", "a.b1"] {
+        for not_site in [
+            "1.2.3.4",
+            "v2.9.3",
+            "dns.go",
+            "geoip.dat",
+            "a..b",
+            ".com",
+            "localhost",
+            "a.b1",
+            "nameserver_doh.go",
+            "my_host",
+        ] {
             assert!(!looks_like_a_site(not_site), "{not_site}");
         }
+    }
+
+    /// A name glued to an underscore label or sitting inside a URL is still
+    /// the site the person opened.
+    #[test]
+    fn site_names_next_to_underscores_and_inside_urls_are_masked() {
+        let underscore = "[Error] app/dns: failed to retrieve response for my_host.private-site.org.";
+        let out = redact(underscore, &[]);
+        assert!(!out.contains("private-site"), "{out}");
+        assert!(out.ends_with("failed to retrieve response for <site>."), "{out}");
+
+        let srv = "[Error] app/dns: failed to retrieve response for _xmpp-client._tcp.jabber-site.ru.";
+        let out = redact(srv, &[]);
+        assert!(!out.contains("jabber-site"), "{out}");
+        assert!(!out.contains("xmpp"), "{out}");
+
+        let url = r#"WARN	TCP error	{"reqAddr": "cdn.site.io:443", "error": "Get https://cdn.site.io/x?y=1: EOF"}"#;
+        let out = redact(url, &[]);
+        assert!(!out.contains("site.io"), "{out}");
+        assert!(out.contains("https://<site>/x"), "{out}");
+    }
+
+    /// Which resolver failed is support's business and nobody's browsing.
+    #[test]
+    fn public_resolvers_and_code_locations_keep_their_names() {
+        let doh = r#"[Error] app/dns: failed to retrieve response for private.example. > Post "https://dns.google/dns-query": context deadline exceeded"#;
+        let out = redact(doh, &[]);
+        assert!(out.contains("https://dns.google/dns-query"), "{out}");
+        assert!(!out.contains("private.example"), "{out}");
+        for resolver in ["cloudflare-dns.com", "security.cloudflare-dns.com", "dns.quad9.net", "dns11.quad9.net", "DNS.Google."] {
+            assert!(is_public_resolver(resolver), "{resolver}");
+        }
+        assert!(!is_public_resolver("quad9.net.example.com"));
+        assert!(!is_public_resolver("notcloudflare-dns.com"));
+
+        let located = "[Warning] app/dns: nameserver_doh.go:207 github_com_xtls.dns.go query failed";
+        let out = redact(located, &[]);
+        assert!(out.contains("nameserver_doh.go:207"), "{out}");
+        assert!(out.contains("github_com_xtls.dns.go"), "{out}");
     }
 
     #[test]
