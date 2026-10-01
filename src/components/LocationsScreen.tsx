@@ -27,7 +27,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { bridge, type LocationEntry, type LocationQuality } from "../bridge";
-import { flagFor } from "../flags";
+import { flagFor, rendersFlagEmoji } from "../flags";
 import { displayLocation } from "../locationName";
 import { formatTime, type MsgKey } from "../i18n";
 import { Screen, Spinner, useLatest, useUi } from "./ui";
@@ -129,6 +129,8 @@ export default function LocationsScreen({
     [pickedRef],
   );
 
+  // Windows draws flag emoji as two boxed letters (src/flags.ts).
+  const showFlags = rendersFlagEmoji(navigator.userAgent);
   const pinned = items?.find((entry) => entry.selected) ?? null;
   const recent = items?.filter((entry) => entry.recent) ?? [];
   const all = items ?? [];
@@ -149,9 +151,11 @@ export default function LocationsScreen({
       data-selected={entry.selected ? "true" : undefined}
       aria-current={entry.selected ? "true" : undefined}
     >
-      <span className="row-flag" aria-hidden="true">
-        {entry.flag ?? flagFor(entry.label)}
-      </span>
+      {showFlags ? (
+        <span className="row-flag" aria-hidden="true">
+          {entry.flag ?? flagFor(entry.label)}
+        </span>
+      ) : null}
       <span className="row-main">
         <span className="row-title">{titleOf(entry, index)}</span>
         <span className="row-sub">

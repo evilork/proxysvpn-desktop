@@ -60,3 +60,14 @@ export function flagFor(remark: string, host = ""): string {
   }
   return "🌐";
 }
+
+/**
+ * Whether this system draws regional-indicator pairs as flags at all.
+ *
+ * Windows does not: Segoe UI Emoji has no flag glyphs, so WebView2 draws the
+ * two letters ("DE", "GB") boxed and squeezed into the 28 px flag column. The
+ * Countries list leaves the column out there; the name says the country.
+ */
+export function rendersFlagEmoji(userAgent: string): boolean {
+  return !/\bWindows\b/.test(userAgent);
+}
