@@ -2676,8 +2676,12 @@ impl Core {
 
         // C1 — same node, engine restarted. TUN and routes untouched while
         // they are there; raised again when tun2socks took them down with it.
-        let keep = self.tunnel_is_up().await;
-        if self.start_on(current, generation, keep).await.is_ok() {
+        let restarted = {
+            let _step = self.repair_step(generation).await?;
+            let keep = self.tunnel_is_up().await;
+            self.start_on(current, generation, keep).await.is_ok()
+        };
+        if restarted {
             if let Some(phase) = self.try_probe(generation).await {
                 return Some(phase);
             }
@@ -2696,7 +2700,7 @@ impl Core {
         // the session, the shield frozen on "healing").
         let next = self.session.lock().await.next_server(current, true);
         if let Some(next) = next {
-            if self.switch_to(next, generation).await.is_ok() {
+            if self.repair_switch(next, generation).await? {
                 if let Some(phase) = self.try_probe(generation).await {
                     return Some(phase);
                 }
@@ -2714,7 +2718,7 @@ impl Core {
             // Bound first, for the reason C2 gives.
             let other = self.session.lock().await.next_server(current, false);
             if let Some(other) = other {
-                if self.switch_to(other, generation).await.is_ok() {
+                if self.repair_switch(other, generation).await? {
                     if let Some(phase) = self.try_probe(generation).await {
                         return Some(phase);
                     }
@@ -2731,7 +2735,7 @@ impl Core {
         if self.refresh_subscription().await.is_ok() {
             let next = self.session.lock().await.choose_server(tunnel_prefs::load().transport);
             if let Some(next) = next {
-                if self.switch_to(next, generation).await.is_ok() {
+                if self.repair_switch(next, generation).await? {
                     if let Some(phase) = self.try_probe(generation).await {
                         return Some(phase);
                     }
@@ -2744,6 +2748,29 @@ impl Core {
         // hold a subscription token; see DESIGN.md M6. Pretending to try it
         // would only spend the person's time.
         None
+    }
+
+    /// The operation lock for one engine-touching step of a repair, or `None`
+    /// when this ladder was retired while it waited for it.
+    ///
+    /// Not held for the whole climb — a person pressing "Cancel" on step four
+    /// must not wait for the ladder to finish — only around each restart, so
+    /// a location chosen by hand (`select_location`, which holds this lock
+    /// across its own switch and then retires the ladder) and a repair never
+    /// restart the engines at the same time.
+    async fn repair_step(&self, generation: u64) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+        let guard = self.operation.lock().await;
+        if !self.is_current(generation).await {
+            return None;
+        }
+        Some(guard)
+    }
+
+    /// `switch_to` as a repair step: `None` when the ladder was retired,
+    /// otherwise whether the switch worked.
+    async fn repair_switch(self: &Arc<Self>, index: usize, generation: u64) -> Option<bool> {
+        let _step = self.repair_step(generation).await?;
+        Some(self.switch_to(index, generation).await.is_ok())
     }
 
     async fn try_probe(self: &Arc<Self>, generation: u64) -> Option<VpnPhase> {
@@ -3052,11 +3079,23 @@ async fn select_location(core: tauri::State<'_, Arc<Core>>, id: Option<String>) 
     }
 
     let _op = core.operation.lock().await;
-    let generation = core.session.lock().await.generation;
-    core.switch_to(index, generation)
-        .await
-        .map_err(|e| e.to_payload())?;
+    // A repair ladder may be climbing right now — the main screen says it is
+    // healing, which is exactly when people open the list. Both restart the
+    // engines, on different nodes, and the ladder never took this lock: the
+    // two interleaved, the ladder could override the choice a moment later,
+    // or one restart failed with "already running". A new generation retires
+    // that ladder and the supervisor that runs it (both stop at their next
+    // check, and the ladder's engine steps wait for this lock — see
+    // `repair_step`); a fresh supervisor follows this switch.
+    let generation = core.bump_generation().await;
+    core.spawn_supervisor(generation);
+    let switched = core.switch_to(index, generation).await;
     drop(_op);
+    if let Err(err) = switched {
+        // The retired ladder will not finish what it started; this one does.
+        core.spawn_heal(generation, err.clone());
+        return Err(err.to_payload());
+    }
 
     match core.probe(ProbeReason::AfterConnect).await {
         Some(ProbeVerdict::Passed) => core.settle(VpnPhase::On).await,
@@ -3067,7 +3106,17 @@ async fn select_location(core: tauri::State<'_, Arc<Core>>, id: Option<String>) 
                 .unwrap_or_else(|| AppError::new(ErrorCode::Unknown));
             core.spawn_heal(generation, cause);
         }
-        None => {}
+        None => {
+            // No verdict, and a ladder that was running is retired: do not
+            // leave the screen on "healing" with nobody working on it.
+            let (phase, cause) = {
+                let s = core.session.lock().await;
+                (s.phase, s.error.clone())
+            };
+            if phase == VpnPhase::Healing {
+                core.spawn_heal(generation, cause.unwrap_or_else(|| AppError::new(ErrorCode::Unknown)));
+            }
+        }
     }
     Ok(())
 }
