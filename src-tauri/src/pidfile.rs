@@ -277,6 +277,24 @@ impl PidFile {
         self.save(&all);
     }
 
+    /// The folders the recorded engines that are still alive run from: a
+    /// line whose pid now runs another binary, or nothing, does not count.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn live_dirs(&self) -> Vec<PathBuf> {
+        let entries = {
+            let _guard = lock();
+            self.load()
+        };
+        let mut dirs: Vec<PathBuf> = entries
+            .into_iter()
+            .filter(|e| exe_of(e.pid).as_deref() == Some(e.path.as_path()))
+            .filter_map(|e| e.path.parent().map(Path::to_path_buf))
+            .collect();
+        dirs.sort();
+        dirs.dedup();
+        dirs
+    }
+
     fn forget(&self, pid: u32) {
         let _guard = lock();
         let mut all = self.load();
@@ -695,6 +713,14 @@ pub async fn sweep(name: &'static str) {
             &format!("sweep of {name} did not finish: {e}"),
         );
     }
+}
+
+/// Folders that recorded engines — of this copy of the app or of any other —
+/// are running from right now. engine_stage.rs leaves those alone when it
+/// clears the staged folders of copies that are gone.
+#[cfg(target_os = "macos")]
+pub fn live_engine_dirs() -> Vec<PathBuf> {
+    PidFile::system().live_dirs()
 }
 
 /// Stop every recorded engine that is ours. Synchronous on purpose: it runs
@@ -1116,6 +1142,30 @@ mod tests {
     }
 
     // ── Real processes ─────────────────────────────────────────────────────
+
+    #[test]
+    fn only_folders_of_engines_still_running_count_as_live() {
+        let base = temp_dir("live");
+        let busy_dir = base.join("busy");
+        let idle_dir = base.join("idle");
+        std::fs::create_dir_all(&busy_dir).expect("busy");
+        std::fs::create_dir_all(&idle_dir).expect("idle");
+        let busy_bin = install_stand_in(&busy_dir, "xray");
+        let idle_bin = install_stand_in(&idle_dir, "xray");
+
+        let running = StandIn::start(&busy_bin, "plain");
+        let mut stopped = StandIn::start(&idle_bin, "plain");
+        let file = file_at(&base.join("state"));
+        file.record("xray", running.pid(), &busy_bin);
+        file.record("xray", stopped.pid(), &idle_bin);
+        let _ = stopped.0.kill();
+        let _ = stopped.0.wait();
+
+        let busy_dir = std::fs::canonicalize(&busy_dir).expect("canonical");
+        assert_eq!(file.live_dirs(), vec![busy_dir]);
+        drop(running);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn a_recorded_engine_is_stopped_and_an_unrelated_namesake_survives() {

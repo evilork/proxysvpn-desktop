@@ -78,6 +78,13 @@ pub enum ErrorCode {
     ElevationUnavailable,
     /// Engine binary missing or refused to start.
     EngineStartFailed,
+    /// macOS: the engines could not be copied into the root-owned folder at
+    /// launch (`engine_stage.rs`), so none will start until a relaunch that
+    /// succeeds. Not ENGINE_START_FAILED, whose "press again" cannot help:
+    /// the cause is on the machine (a full disk, a folder of another owner)
+    /// and the log names it.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    EngineStageFailed,
     /// Engine was running and died under us.
     EngineDied,
     /// A previous run left a process holding our SOCKS port.
@@ -280,6 +287,15 @@ mod tests {
         assert_eq!(
             AppError::new(ErrorCode::ElevationUnavailable).to_payload(),
             r#"{"code":"ELEVATION_UNAVAILABLE"}"#
+        );
+    }
+
+    #[test]
+    fn a_failed_engine_copy_keeps_its_wire_name() {
+        // src/types.ts and src/i18n.ts match on this exact string.
+        assert_eq!(
+            AppError::new(ErrorCode::EngineStageFailed).to_payload(),
+            r#"{"code":"ENGINE_STAGE_FAILED"}"#
         );
     }
 

@@ -717,6 +717,43 @@ impl HostAnswer {
             _ => false,
         }
     }
+
+    /// Whether this is the Watafast manifest endpoint's OWN refusal of the
+    /// token (MANIFEST-v1.md): a 403 `{"error":"second_device"}` or a 404
+    /// `{"error":"not_found"}`.
+    ///
+    /// Only that exact pair counts. A hosting shield's 403 (with or without
+    /// `x-vercel-mitigated`), a Cloudflare or nginx 403 page, or a 404 from a
+    /// reserve deployment that has no `/api/watafast/v1` route at all are a
+    /// PLATFORM speaking about one address, not the service about this
+    /// person — and treating one of those as a refusal would delete the very
+    /// cache that exists to cover a blocked site.
+    fn is_manifest_refusal(&self) -> bool {
+        if self.headers.contains_key("x-vercel-mitigated") {
+            return false;
+        }
+        let expected = match self.status {
+            403 => "second_device",
+            404 => "not_found",
+            _ => return false,
+        };
+        serde_json::from_str::<Value>(self.body.trim())
+            .ok()
+            .and_then(|v| v.get("error").and_then(Value::as_str).map(|code| code == expected))
+            .unwrap_or(false)
+    }
+
+    /// `is_final` for the manifest's own ladder: a signed 200, or the
+    /// endpoint's own refusal. Every other 403/404 keeps the race going, so a
+    /// reserve deployment without the manifest route cannot end the round
+    /// before an address that has it gets to answer.
+    fn is_final_for_manifest(&self) -> bool {
+        match self.status {
+            200 => !self.body.trim().is_empty(),
+            403 | 404 => self.is_manifest_refusal(),
+            _ => false,
+        }
+    }
 }
 
 type Headers = HashMap<String, String>;
@@ -906,8 +943,9 @@ async fn fetch_manifest_servers(sub_url: &str, lang_en: bool) -> Option<manifest
 enum FreshManifest {
     /// A fresh, verified manifest and the site that served it.
     Got(manifest::Verified, String),
-    /// The endpoint's final "no" for this token (403 second device, 404
-    /// unknown or deleted).
+    /// The endpoint's final "no" for this token, in its own words: 403
+    /// `{"error":"second_device"}` or 404 `{"error":"not_found"}`. Nothing
+    /// else — a shield or a foreign error page is `Failed`.
     Refused,
     /// Anything else: unreachable, 429/5xx, an empty body, a failed check.
     Failed,
@@ -926,16 +964,16 @@ async fn fetch_fresh_manifest(
     let Ok(urls) = manifest_urls(sub_url, extra_hosts) else {
         return FreshManifest::Failed;
     };
-    let Ok(answer) = race_hosts(&urls).await else {
+    let Ok(answer) = race_hosts_until(&urls, HostAnswer::is_final_for_manifest).await else {
         return FreshManifest::Failed;
     };
-    if matches!(answer.status(), 403 | 404) {
-        return FreshManifest::Refused;
-    }
-    if answer.status() != 200 || answer.body().trim().is_empty() {
-        // 429/5xx already exhausted the whole ladder inside `race_hosts`
-        // before landing here: no fresh manifest, the cache may stand in.
-        return FreshManifest::Failed;
+    match manifest_answer_kind(&answer) {
+        ManifestAnswerKind::Refused => return FreshManifest::Refused,
+        // A 429/5xx, a shield or a foreign 403/404 page already exhausted the
+        // whole ladder inside `race_hosts_until` before landing here as its
+        // fallback: no fresh manifest, and the cache may stand in.
+        ManifestAnswerKind::Unusable => return FreshManifest::Failed,
+        ManifestAnswerKind::Body => {}
     }
     match manifest::verify_envelope(
         answer.body().as_bytes(),
@@ -965,6 +1003,27 @@ async fn fetch_fresh_manifest(
     }
 }
 
+/// How `fetch_fresh_manifest` reads the answer its ladder settled on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManifestAnswerKind {
+    /// A non-empty 200: hand it to the signature check.
+    Body,
+    /// The endpoint's own final "no" — see `HostAnswer::is_manifest_refusal`.
+    Refused,
+    /// Anything else, including every non-final fallback of the race.
+    Unusable,
+}
+
+fn manifest_answer_kind(answer: &HostAnswer) -> ManifestAnswerKind {
+    if answer.is_manifest_refusal() {
+        ManifestAnswerKind::Refused
+    } else if answer.status() == 200 && !answer.body().trim().is_empty() {
+        ManifestAnswerKind::Body
+    } else {
+        ManifestAnswerKind::Unusable
+    }
+}
+
 fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -975,6 +1034,16 @@ fn now_millis() -> u64 {
 /// Run the ladder: start the first address now, let each next one join 1.2 s
 /// later, and take the first answer that settles the question.
 async fn race_hosts(urls: &[String]) -> Result<HostAnswer, AppError> {
+    race_hosts_until(urls, HostAnswer::is_final).await
+}
+
+/// `race_hosts` with the caller's own idea of a settling answer: the
+/// subscription and the manifest endpoints refuse with different bodies, and
+/// only the endpoint's own refusal may end the manifest's race early.
+async fn race_hosts_until(
+    urls: &[String],
+    is_final: fn(&HostAnswer) -> bool,
+) -> Result<HostAnswer, AppError> {
     let client = http_client()?;
     let mut tasks = tokio::task::JoinSet::new();
 
@@ -1003,7 +1072,7 @@ async fn race_hosts(urls: &[String]) -> Result<HostAnswer, AppError> {
             // A task that panicked tells us nothing; the others still run.
             Ok(Some(Err(_))) => continue,
             Ok(Some(Ok(Ok(answer)))) => {
-                if answer.is_final() {
+                if is_final(&answer) {
                     return Ok(answer);
                 }
                 if fallback.is_none() {
@@ -2762,6 +2831,75 @@ mod tests {
         assert!(!answer(403, headers(&[("x-vercel-mitigated", "x")]), "").is_final());
         assert!(!answer(429, headers(&[]), "").is_final());
         assert!(!answer(502, headers(&[]), "").is_final());
+    }
+
+    fn manifest_answer(status: u16, h: Headers, body: &str) -> HostAnswer {
+        HostAnswer {
+            url: "https://proxysvpn.com/api/watafast/v1/t".into(),
+            host: "proxysvpn.com".into(),
+            status,
+            headers: h,
+            body: body.into(),
+        }
+    }
+
+    #[test]
+    fn only_the_manifest_endpoints_own_words_refuse_the_token() {
+        let refused = [
+            manifest_answer(403, headers(&[]), r#"{"error":"second_device"}"#),
+            manifest_answer(404, headers(&[]), " {\"error\": \"not_found\"}\n"),
+        ];
+        for answer in &refused {
+            assert!(answer.is_manifest_refusal(), "{answer:?}");
+            assert!(answer.is_final_for_manifest(), "{answer:?}");
+            assert_eq!(manifest_answer_kind(answer), ManifestAnswerKind::Refused);
+        }
+    }
+
+    #[test]
+    fn a_shield_or_a_foreign_error_page_never_refuses_the_manifest() {
+        // Each of these must leave the cached manifest alone: the hosting
+        // firewall, a reserve's nginx/Cloudflare page, a deployment without
+        // the route, or the right code on the wrong status.
+        let platform = [
+            // The Vercel shield, even when it happens to carry a JSON body.
+            manifest_answer(
+                403,
+                headers(&[("x-vercel-mitigated", "deny")]),
+                r#"{"error":"second_device"}"#,
+            ),
+            manifest_answer(403, headers(&[("x-vercel-mitigated", "challenge")]), ""),
+            manifest_answer(403, headers(&[]), "This request was blocked"),
+            manifest_answer(403, headers(&[]), "<html><h1>403 Forbidden</h1></html>"),
+            manifest_answer(404, headers(&[]), "The page could not be found\n\nNOT_FOUND"),
+            manifest_answer(404, headers(&[]), r#"{"error":"something_else"}"#),
+            manifest_answer(404, headers(&[]), r#"{"error":"second_device"}"#),
+            manifest_answer(403, headers(&[]), r#"{"error":"not_found"}"#),
+            manifest_answer(429, headers(&[]), r#"{"error":"rate_limited"}"#),
+            manifest_answer(503, headers(&[]), r#"{"error":"unavailable"}"#),
+            manifest_answer(200, headers(&[]), "   "),
+        ];
+        for answer in &platform {
+            assert!(!answer.is_manifest_refusal(), "{answer:?}");
+            assert!(!answer.is_final_for_manifest(), "{answer:?}");
+            assert_eq!(manifest_answer_kind(answer), ManifestAnswerKind::Unusable, "{answer:?}");
+        }
+    }
+
+    #[test]
+    fn a_manifest_body_goes_to_the_signature_check() {
+        let answer = manifest_answer(200, headers(&[]), r#"{"v":1}"#);
+        assert!(answer.is_final_for_manifest());
+        assert_eq!(manifest_answer_kind(&answer), ManifestAnswerKind::Body);
+    }
+
+    #[test]
+    fn the_subscription_race_keeps_its_own_finality() {
+        // The manifest's stricter rule must not leak into the subscription's
+        // ladder, where a plain 403/404 is the backend's verdict.
+        let plain_404 = manifest_answer(404, headers(&[]), "Token not found");
+        assert!(plain_404.is_final());
+        assert!(!plain_404.is_final_for_manifest());
     }
 
     // ── The ladder ─────────────────────────────────────────────────────────

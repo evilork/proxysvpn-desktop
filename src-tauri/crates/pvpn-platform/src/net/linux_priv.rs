@@ -196,17 +196,50 @@ fn configure_device() -> Result<()> {
 
 fn spawn_tun2socks(params: &ValidUp, tun2socks: &Path) -> Result<Child> {
     let argv = p::tun2socks(tun2socks, params.socks_port);
-    let mut child = Command::new(tun2socks)
-        .args(&argv.args)
+    let mut cmd = Command::new(tun2socks);
+    cmd.args(&argv.args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    die_with_parent(&mut cmd);
+    let mut child = cmd
         .spawn()
         .with_context(|| format!("spawn {}", tun2socks.display()))?;
 
     pump(child.stdout.take(), "info");
     pump(child.stderr.take(), "warn");
     Ok(child)
+}
+
+/// The child gets SIGKILL when the thread that spawned it ends
+/// (PR_SET_PDEATHSIG), so a helper that is SIGKILLed or panics takes its
+/// root tun2socks with it instead of leaving an orphan until reboot.
+///
+/// "The thread", not "the process": that is the kernel's rule, and why this
+/// is only used from `up`, which the helper runs on its main thread (the
+/// request loop in `helper::server`) — that thread ends only with the
+/// process. If the helper already died before the child got this far, the
+/// signal would never come, so the child checks its parent and refuses to
+/// start.
+fn die_with_parent(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    // SAFETY: getpid(2) has no preconditions.
+    let parent = unsafe { libc::getpid() };
+    // SAFETY: the closure runs in the forked child before exec and calls
+    // only prctl(2) and getppid(2), both async-signal-safe system calls; it
+    // allocates nothing and touches no lock.
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != parent {
+                return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+            }
+            Ok(())
+        });
+    }
 }
 
 /// Forward a sidecar's output into the GUI's log, on its own thread: the
@@ -281,9 +314,15 @@ fn dns_down(backend: DnsBackend) {
             run_ok(&p::resolved_flush());
         }
         DnsBackend::ResolvConf => {
+            // Only over our own file: one NetworkManager wrote since (after
+            // a reboot, on a new network) is newer than the backup and stays.
             match logic::resolv_restore(&paths::linux_persistent_dir(), Path::new(RESOLV_CONF)) {
-                Ok(true) => log("info", "/etc/resolv.conf restored"),
-                Ok(false) => {}
+                Ok(logic::ResolvRestore::Restored) => log("info", "/etc/resolv.conf restored"),
+                Ok(logic::ResolvRestore::KeptNewer) => log(
+                    "info",
+                    "/etc/resolv.conf was rewritten after connect; kept it and dropped the old backup",
+                ),
+                Ok(logic::ResolvRestore::NoBackup) => {}
                 Err(e) => log("warn", &format!("could not restore /etc/resolv.conf: {}", e)),
             }
         }
@@ -300,13 +339,16 @@ fn resolv_conf_is_ours() -> bool {
 
 // ----------------------------------------------------------------- the hint
 
-fn write_hint(server_ip: Ipv4Addr, engine_pid: u32) {
+fn write_hint(server_ip: Ipv4Addr, engine_pid: Option<u32>) {
     let dir = paths::linux_runtime_dir();
     if let Err(e) = std::fs::create_dir_all(&dir) {
         log("warn", &format!("could not create {}: {}", dir.display(), e));
         return;
     }
-    let hint = crate::net::format_route_hint_with_engine(std::process::id(), server_ip, engine_pid);
+    let hint = match engine_pid {
+        Some(pid) => crate::net::format_route_hint_with_engine(std::process::id(), server_ip, pid),
+        None => crate::net::format_route_hint(std::process::id(), server_ip),
+    };
     let path = dir.join(paths::ROUTE_HINT_NAME);
     if let Err(e) = std::fs::write(&path, hint) {
         log("warn", &format!("could not write the route hint: {}", e));
@@ -327,15 +369,25 @@ pub fn up(params: &ValidUp, tun2socks: &Path) -> Result<Tunnel> {
     // The node address is not logged: it is not public information.
     log("info", &format!("physical exit: {}", route.iface));
 
-    add_host_route(params.server_ip, &route)?;
+    // The hint goes down before anything it describes exists, and is updated
+    // with the engine's pid the moment there is one: a helper killed half way
+    // through `up` (the 5 s device wait, DNS) used to leave a host route and a
+    // root tun2socks that no later purge knew about.
+    write_hint(params.server_ip, None);
+    if let Err(e) = add_host_route(params.server_ip, &route) {
+        let _ = std::fs::remove_file(hint_path());
+        return Err(e);
+    }
 
     let mut child = match spawn_tun2socks(params, tun2socks) {
         Ok(child) => child,
         Err(e) => {
             del_host_route(params.server_ip);
+            let _ = std::fs::remove_file(hint_path());
             return Err(e);
         }
     };
+    write_hint(params.server_ip, Some(child.id()));
 
     let backend = current_dns_backend();
     let result = (|| -> Result<()> {
@@ -372,10 +424,10 @@ pub fn up(params: &ValidUp, tun2socks: &Path) -> Result<Tunnel> {
         let _ = child.wait();
         run_ok(&p::device_delete());
         del_host_route(params.server_ip);
+        let _ = std::fs::remove_file(hint_path());
         return Err(e);
     }
 
-    write_hint(params.server_ip, child.id());
     log("info", &format!("tunnel up on {} ({:?} DNS)", DEVICE, backend));
 
     Ok(Tunnel {
@@ -419,7 +471,7 @@ pub fn retarget(tunnel: &mut Tunnel, new_ip: Ipv4Addr) -> Result<()> {
     add_host_route(new_ip, &route)?;
     del_host_route(tunnel.server_ip);
     tunnel.server_ip = new_ip;
-    write_hint(new_ip, tunnel.child.id());
+    write_hint(new_ip, Some(tunnel.child.id()));
     // The addresses are not logged: node addresses are not public information.
     log("info", "host route moved to the new node");
     Ok(())
@@ -530,6 +582,35 @@ mod tests {
             tool("ip").is_ok(),
             "iproute2 must be installed on a Linux build host"
         );
+    }
+
+    /// PR_SET_PDEATHSIG is set: the spawning thread ends, the child dies
+    /// with it. (The same rule is why `up` must spawn from the main thread.)
+    #[test]
+    fn a_child_spawned_to_die_with_its_parent_does() {
+        let child = std::thread::spawn(|| {
+            let mut cmd = Command::new("sleep");
+            cmd.arg("30").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+            die_with_parent(&mut cmd);
+            cmd.spawn().expect("spawn sleep")
+        })
+        .join()
+        .expect("spawning thread");
+        let mut child = child;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = child.try_wait().expect("try_wait") {
+                use std::os::unix::process::ExitStatusExt;
+                assert_eq!(status.signal(), Some(libc::SIGKILL));
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("the child outlived the thread that spawned it");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]

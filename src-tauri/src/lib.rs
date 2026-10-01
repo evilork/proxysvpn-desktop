@@ -69,6 +69,8 @@ use pidfile_windows as pidfile;
 mod sidecars;
 #[cfg(target_os = "macos")]
 mod engine_stage;
+#[cfg(desktop)]
+mod location_name;
 #[cfg(target_os = "macos")]
 mod sysdns;
 #[cfg(target_os = "macos")]
@@ -186,6 +188,12 @@ const SETTLING_WINDOW: Duration = Duration::from_secs(45);
 /// repair ends in Failed (`Session::sub_reuse_blocked`): the next Retry tears
 /// the tunnel down and asks the network for a fresh list, instead of reusing
 /// the stale one for the rest of the 15 minutes.
+///
+/// Asking is not the same as depending on the answer: when that fetch cannot
+/// reach any site (SUB_UNREACHABLE — the site names filtered while the nodes
+/// still get through, or a Failed that had nothing to do with the list), the
+/// list already held is used after all (`Session::fallback_sub_age`). A
+/// refusal from the service is never talked over that way.
 const SUB_REUSE_MS: u64 = 15 * 60 * 1000;
 
 /// Outgoing bytes with nothing coming back for this long is the passive half
@@ -566,6 +574,17 @@ struct Session {
     protection_drop_notified: bool,
 }
 
+/// Whether a location change on a live tunnel must move the node's host route
+/// BEFORE the engine starts. Hysteria dials its server while it starts (the
+/// start waits for its SOCKS port); xray dials only on the first connection,
+/// which comes after the route has moved. Without this, hysteria's dial went
+/// into our own tunnel and through the old engine, and the switch timed out
+/// (Linux VM, 02.10.2026). The old engine loses its route a few seconds early,
+/// but it is being replaced anyway.
+fn retarget_before_engine(keep_tunnel: bool, server: &ServerConfig) -> bool {
+    keep_tunnel && matches!(server, ServerConfig::Hy2(_))
+}
+
 /// A phase where traffic is actually believed to cross the tunnel — the two
 /// phases a "protection dropped" notice can fall FROM and a "restored" one
 /// can return TO. Deliberately excludes `Unconfirmed`'s cousin-in-spirit
@@ -607,6 +626,19 @@ impl Session {
         self.sub_fetched_at
             .map(|at| now.saturating_sub(at))
             .filter(|age| *age < SUB_REUSE_MS)
+    }
+
+    /// Age of the list a connect falls back to when the fetch it had to make
+    /// failed with `err`, or `None` when it must fail with that error.
+    ///
+    /// Only SUB_UNREACHABLE: no site could be reached, which says nothing
+    /// about the list. Any answer from the service — a refusal, an empty or
+    /// unreadable list — is the service speaking and is never talked over.
+    fn fallback_sub_age(&self, now: u64, err: &AppError) -> Option<u64> {
+        if err.code != ErrorCode::SubUnreachable || self.servers.is_empty() {
+            return None;
+        }
+        self.sub_fetched_at.map(|at| now.saturating_sub(at))
     }
 
     fn new() -> Self {
@@ -1594,7 +1626,19 @@ impl Core {
                     started.elapsed().as_millis()
                 ),
             );
-            fetched?;
+            if let Err(err) = fetched {
+                // See SUB_REUSE_MS: no site answered, so the list we hold is
+                // still the best there is.
+                let held = self.session.lock().await.fallback_sub_age(now_ms(), &err);
+                let Some(age) = held else {
+                    return Err(err);
+                };
+                logger::log(
+                    "warn",
+                    "vpn",
+                    &format!("подписка: сайты недоступны, берём список, полученный {} с назад", age / 1000),
+                );
+            }
         }
         if !self.is_current(generation).await {
             return Ok(());
@@ -2060,6 +2104,10 @@ impl Core {
             let creds = if partner.is_some() { s.race_credentials.clone() } else { None };
             (partner, creds)
         };
+        let route_first = retarget_before_engine(keep_tunnel, &server);
+        if route_first {
+            self.tunnel_up(&server, true).await?;
+        }
         self.engine_start(&server, partner.as_ref(), race_creds.as_ref()).await?;
         if !self.is_current(generation).await {
             return Ok(());
@@ -2069,7 +2117,9 @@ impl Core {
             // one worth naming separately to a person who is waiting.
             self.set_step(VpnStep::RaisingTun).await;
         }
-        self.tunnel_up(&server, keep_tunnel).await?;
+        if !route_first {
+            self.tunnel_up(&server, keep_tunnel).await?;
+        }
         if !self.is_current(generation).await {
             return Ok(());
         }
@@ -2097,6 +2147,11 @@ impl Core {
         // second rather than after the ladder finishes.
         self.bump_generation().await;
         let _op = self.operation.lock().await;
+        // And again once the lock is ours: a location switch that was already
+        // queued on it got in first and opened a generation of its own after
+        // the bump above. Retiring that one too keeps its late probe from
+        // painting "Protected" over this Disconnect (`select_location`).
+        self.bump_generation().await;
         self.engine_down().await;
         {
             let mut s = self.session.lock().await;
@@ -2369,6 +2424,16 @@ impl Core {
 
             self.passive_tick().await;
 
+            // A connect, a Disconnect, a location change or a repair step
+            // holds the operation lock while it stops and starts engines.
+            // What looks dead, misrouted or silent in the middle of that is
+            // its work in progress: reviving or probing it then raced the
+            // switch's own restart (an old node's engine could end up running
+            // under the new node's name). The next tick looks again.
+            if operation_in_progress(&self.operation) {
+                continue;
+            }
+
             if let Some(dead) = self.dead_engine().await {
                 logger::log("error", "app", &format!("{dead} is not running"));
                 // Handled: the person is not being asked to do anything, and
@@ -2534,7 +2599,16 @@ impl Core {
             // the config is rebuilt — TUN and routes are untouched.
             let index = self.session.lock().await.current;
             if let Some(index) = index {
-                if let Err(err) = self.start_on(index, generation, true).await {
+                // Under the operation lock, like every other engine restart
+                // (`repair_step`); released before `heal`, which takes it per
+                // step itself.
+                let rebuilt = {
+                    let Some(_step) = self.repair_step(generation).await else {
+                        return true;
+                    };
+                    self.start_on(index, generation, true).await
+                };
+                if let Err(err) = rebuilt {
                     self.heal(generation, err).await;
                     return true;
                 }
@@ -2557,7 +2631,16 @@ impl Core {
             if !self.is_current(generation).await {
                 return;
             }
-            if self.restart_dead(generation).await.is_ok() && self.engines_alive().await {
+            // Under the operation lock (`repair_step`): a location change
+            // that is restarting the engines right now finishes first, and
+            // `restart_dead` then looks at what it left, not at its middle.
+            let restarted = {
+                let Some(_step) = self.repair_step(generation).await else {
+                    return;
+                };
+                self.restart_dead(generation).await.is_ok() && self.engines_alive().await
+            };
+            if restarted {
                 if let Some(phase) = self.try_probe(generation).await {
                     let label = self.session.lock().await.location.clone();
                     self.note(TimelineCode::Healed, label).await;
@@ -2762,7 +2845,10 @@ impl Core {
     /// must not wait for the ladder to finish — only around each restart, so
     /// a location chosen by hand (`select_location`, which holds this lock
     /// across its own switch and then retires the ladder) and a repair never
-    /// restart the engines at the same time.
+    /// restart the engines at the same time. The same goes for the
+    /// supervisor's own restarts: `revive` and the network-change rebuild in
+    /// `mend_routes` take it too, and the supervisor does not even look at
+    /// the engines while anyone holds it.
     async fn repair_step(&self, generation: u64) -> Option<tokio::sync::MutexGuard<'_, ()>> {
         let guard = self.operation.lock().await;
         if !self.is_current(generation).await {
@@ -3085,11 +3171,18 @@ async fn select_location(core: tauri::State<'_, Arc<Core>>, id: Option<String>) 
 
     let Some(index) = target else { return Ok(()) };
     let phase = core.session.lock().await.phase;
-    if matches!(phase, VpnPhase::Off | VpnPhase::Failed) {
+    if !switch_moves_the_tunnel(phase) {
         return Ok(());
     }
 
     let _op = core.operation.lock().await;
+    // Again, now that the lock is ours: a Disconnect that was still running
+    // when the click passed the check above (the phase stays On until its
+    // last line) has finished by now, and a click must not raise again the
+    // tunnel the person just turned off.
+    if !switch_moves_the_tunnel(core.session.lock().await.phase) {
+        return Ok(());
+    }
     // A repair ladder may be climbing right now — the main screen says it is
     // healing, which is exactly when people open the list. Both restart the
     // engines, on different nodes, and the ladder never took this lock: the
@@ -3097,7 +3190,8 @@ async fn select_location(core: tauri::State<'_, Arc<Core>>, id: Option<String>) 
     // or one restart failed with "already running". A new generation retires
     // that ladder and the supervisor that runs it (both stop at their next
     // check, and the ladder's engine steps wait for this lock — see
-    // `repair_step`); a fresh supervisor follows this switch.
+    // `repair_step`); a fresh supervisor follows this switch, and leaves the
+    // engines alone until this lock is released (`operation_in_progress`).
     let generation = core.bump_generation().await;
     core.spawn_supervisor(generation);
     let switched = core.switch_to(index, generation).await;
@@ -3108,18 +3202,23 @@ async fn select_location(core: tauri::State<'_, Arc<Core>>, id: Option<String>) 
         return Err(err.to_payload());
     }
 
-    match core.probe(ProbeReason::AfterConnect).await {
-        Some(ProbeVerdict::Passed) => core.settle(VpnPhase::On).await,
-        Some(ProbeVerdict::Unconfirmed) => core.settle(VpnPhase::Unconfirmed).await,
-        Some(other) => {
-            let cause = other
-                .as_error()
-                .unwrap_or_else(|| AppError::new(ErrorCode::Unknown));
-            core.spawn_heal(generation, cause);
-        }
-        None => {
+    let verdict = core.probe(ProbeReason::AfterConnect).await;
+    // The lock is gone by now, so anything may have happened meanwhile: a
+    // Disconnect (which retires this generation), or the engine dying, in
+    // which case the probe went out of the real interface and proves nothing.
+    let still_current = core.is_current(generation).await;
+    #[cfg(desktop)]
+    let carrying = core.tunnel_is_up().await && core.engines_alive().await;
+    #[cfg(target_os = "ios")]
+    let carrying = true;
+    match after_switch(still_current, carrying, verdict) {
+        AfterSwitch::Retired => {}
+        AfterSwitch::Settle(phase) => core.settle(phase).await,
+        AfterSwitch::Heal(code) => core.spawn_heal(generation, AppError::new(code)),
+        AfterSwitch::NoVerdict => {
             // No verdict, and a ladder that was running is retired: do not
-            // leave the screen on "healing" with nobody working on it.
+            // leave the screen on "healing" with nobody working on it. A dead
+            // engine is the supervisor's (it revives it on its next tick).
             let (phase, cause) = {
                 let s = core.session.lock().await;
                 (s.phase, s.error.clone())
@@ -3130,6 +3229,48 @@ async fn select_location(core: tauri::State<'_, Arc<Core>>, id: Option<String>) 
         }
     }
     Ok(())
+}
+
+/// Is a connect, Disconnect, location change or repair step holding the
+/// operation lock right now? Asks without waiting, and holds nothing after.
+fn operation_in_progress(operation: &Mutex<()>) -> bool {
+    operation.try_lock().is_err()
+}
+
+/// Does a location picked in this phase move a live tunnel? Not when there is
+/// none: Off waits for Connect, and Failed for Retry, both of which then
+/// start on the pinned location.
+fn switch_moves_the_tunnel(phase: VpnPhase) -> bool {
+    !matches!(phase, VpnPhase::Off | VpnPhase::Failed)
+}
+
+/// What `select_location` does with the probe it ran after the switch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AfterSwitch {
+    /// A Disconnect, a connect or another switch has taken over since:
+    /// nothing here may change the phase any more.
+    Retired,
+    Settle(VpnPhase),
+    Heal(ErrorCode),
+    /// No verdict that counts.
+    NoVerdict,
+}
+
+/// Pure, so each case is testable. A pass only counts while the tunnel is
+/// there to carry it (`healing_verdict` applies the same rule to repairs).
+fn after_switch(still_current: bool, carrying: bool, verdict: Option<ProbeVerdict>) -> AfterSwitch {
+    if !still_current {
+        return AfterSwitch::Retired;
+    }
+    if !carrying {
+        return AfterSwitch::NoVerdict;
+    }
+    match verdict {
+        Some(ProbeVerdict::Passed) => AfterSwitch::Settle(VpnPhase::On),
+        Some(ProbeVerdict::Unconfirmed) => AfterSwitch::Settle(VpnPhase::Unconfirmed),
+        Some(other) => AfterSwitch::Heal(other.error_code().unwrap_or(ErrorCode::Unknown)),
+        None => AfterSwitch::NoVerdict,
+    }
 }
 
 #[tauri::command]
@@ -4340,7 +4481,13 @@ impl Core {
         let en = self.ui_lang_en.load(std::sync::atomic::Ordering::Relaxed);
         let location = self.session.lock().await.location.clone();
         let text = match (phase, location) {
-            (VpnPhase::On, Some(place)) => format!("{} · {place}", tray_state_text(phase, en)),
+            // The service's Russian name, translated the way the window does
+            // it (location_name.rs mirrors src/locationName.ts).
+            (VpnPhase::On, Some(place)) => format!(
+                "{} · {}",
+                tray_state_text(phase, en),
+                location_name::display_location(&place, en)
+            ),
             _ => tray_state_text(phase, en).to_string(),
         };
         if let Some(tray) = self.app.tray_by_id("main-tray") {
@@ -4789,6 +4936,93 @@ mod tests {
         assert_eq!(empty.reusable_sub_age(0), None);
     }
 
+    /// The supervisor's look at the lock neither waits for it nor keeps it:
+    /// while a switch holds it the tick is skipped, and once it is free the
+    /// revive or rebuild that follows can take it at once.
+    #[tokio::test]
+    async fn the_supervisor_sees_a_held_operation_lock_without_taking_it() {
+        let operation = Mutex::new(());
+        assert!(!operation_in_progress(&operation));
+        assert!(operation.try_lock().is_ok(), "looking did not keep the lock");
+
+        let held = operation.lock().await;
+        assert!(operation_in_progress(&operation));
+        drop(held);
+        assert!(!operation_in_progress(&operation));
+        let taken = tokio::time::timeout(Duration::from_secs(1), operation.lock()).await;
+        assert!(taken.is_ok(), "free again for revive's repair_step");
+    }
+
+    /// A switch whose probe comes back after a Disconnect (or any newer
+    /// operation) changes nothing, and a pass that went out of the real
+    /// interface — the tunnel gone — is not "Protected".
+    #[test]
+    fn a_location_switch_settles_only_its_own_live_tunnel() {
+        for verdict in [
+            Some(ProbeVerdict::Passed),
+            Some(ProbeVerdict::Unconfirmed),
+            Some(ProbeVerdict::NoRoute),
+            None,
+        ] {
+            assert_eq!(after_switch(false, true, verdict), AfterSwitch::Retired, "{verdict:?}");
+        }
+        assert_eq!(after_switch(true, false, Some(ProbeVerdict::Passed)), AfterSwitch::NoVerdict);
+        assert_eq!(after_switch(true, true, Some(ProbeVerdict::Passed)), AfterSwitch::Settle(VpnPhase::On));
+        assert_eq!(
+            after_switch(true, true, Some(ProbeVerdict::Unconfirmed)),
+            AfterSwitch::Settle(VpnPhase::Unconfirmed)
+        );
+        assert_eq!(after_switch(true, true, Some(ProbeVerdict::Blocked)), AfterSwitch::Heal(ErrorCode::Blocked));
+        assert_eq!(after_switch(true, true, Some(ProbeVerdict::NoRoute)), AfterSwitch::Heal(ErrorCode::NoRoute));
+        assert_eq!(after_switch(true, true, None), AfterSwitch::NoVerdict);
+    }
+
+    /// Checked before and again under the operation lock: a click during a
+    /// Disconnect finds Off there and raises nothing.
+    #[test]
+    fn a_location_picked_without_a_live_tunnel_moves_nothing() {
+        assert!(!switch_moves_the_tunnel(VpnPhase::Off));
+        assert!(!switch_moves_the_tunnel(VpnPhase::Failed));
+        for live in [VpnPhase::Starting, VpnPhase::On, VpnPhase::Unconfirmed, VpnPhase::Healing] {
+            assert!(switch_moves_the_tunnel(live), "{live:?}");
+        }
+    }
+
+    /// Retry after a Failed must fetch, but when no site can be reached the
+    /// list already held still connects — as it did before the reuse block.
+    /// A refusal from the service is never talked over.
+    #[test]
+    fn an_unreachable_fetch_falls_back_to_the_list_already_held() {
+        let unreachable = AppError::new(ErrorCode::SubUnreachable);
+        let mut s = Session::new();
+        s.servers = vec![vless("Германия")];
+        s.sub_fetched_at = Some(1_000);
+        s.sub_reuse_blocked = true;
+        assert_eq!(s.fallback_sub_age(121_000, &unreachable), Some(120_000));
+        assert_eq!(
+            s.fallback_sub_age(1_000 + SUB_REUSE_MS * 4, &unreachable),
+            Some(SUB_REUSE_MS * 4),
+            "an older list still beats no connection when no site answers"
+        );
+
+        for refusal in [
+            ErrorCode::BalanceEmpty,
+            ErrorCode::Expired,
+            ErrorCode::DeviceTaken,
+            ErrorCode::NoDevices,
+            ErrorCode::SubNotice,
+            ErrorCode::SubEmpty,
+            ErrorCode::SubInvalid,
+            ErrorCode::SubMalformed,
+            ErrorCode::NoSubscription,
+        ] {
+            assert_eq!(s.fallback_sub_age(121_000, &AppError::new(refusal)), None, "{refusal:?}");
+        }
+
+        let empty = Session::new();
+        assert_eq!(empty.fallback_sub_age(121_000, &unreachable), None, "nothing held");
+    }
+
     /// The tray is the only way to quit on Windows and Linux: in an English
     /// window it must say "Quit", not "Выйти".
     #[test]
@@ -5217,6 +5451,14 @@ mod tests {
         let mut s = Session::new();
         s.servers = servers;
         s
+    }
+
+    #[test]
+    fn only_a_hysteria_switch_on_a_live_tunnel_moves_the_route_first() {
+        assert!(retarget_before_engine(true, &hy2("🇳🇱 Нидерланды")));
+        assert!(!retarget_before_engine(false, &hy2("🇳🇱 Нидерланды")));
+        assert!(!retarget_before_engine(true, &vless("🇩🇪 Германия")));
+        assert!(!retarget_before_engine(false, &vless("🇩🇪 Германия")));
     }
 
     // ── labels and ids ─────────────────────────────────────────────────────

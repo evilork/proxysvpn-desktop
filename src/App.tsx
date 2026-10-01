@@ -29,6 +29,7 @@ import { isAllowedExternal } from "./externalUrl";
 import { makeT, type Lang } from "./i18n";
 import { setNativeTilt } from "./gaze";
 import { detectLang } from "./lang";
+import { displayLocation } from "./locationName";
 import {
   AUTO_CONNECT_KEY,
   LANG_KEY,
@@ -505,7 +506,7 @@ export default function App() {
             onClose={pop}
             onPicked={(label) => {
               pop();
-              toast(label ? t("loc.switched", { location: label }) : t("loc.auto"));
+              toast(label ? t("loc.switched", { location: displayLocation(label, lang) }) : t("loc.auto"));
             }}
             onEmpty={() => {
               setForcedError({ code: "SUB_EMPTY" });

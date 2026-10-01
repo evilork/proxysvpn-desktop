@@ -316,6 +316,19 @@ pub enum ResolvBackup {
 
 const BACKUP_COPY_NAME: &str = "resolv.conf.orig";
 
+/// What `resolv_restore` did with a backup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvRestore {
+    /// No marker: we never touched the file.
+    NoBackup,
+    /// Our file (or nothing at all) was in place, and the original is back.
+    Restored,
+    /// Something else — NetworkManager, resolvconf, resolved — rewrote the
+    /// file after us. Theirs describes the network the machine is on now and
+    /// is newer than any backup, so it was kept and the backup dropped.
+    KeptNewer,
+}
+
 pub fn render_backup_marker(backup: &ResolvBackup) -> String {
     match backup {
         ResolvBackup::Symlink(target) => format!("symlink {}\n", target),
@@ -414,16 +427,55 @@ mod files {
         Ok(())
     }
 
-    /// Put back whatever `resolv_apply` found. Returns `false` when there was
-    /// nothing to restore (no marker — so we never touched the file).
-    pub fn resolv_restore(backup_dir: &Path, resolv: &Path) -> io::Result<bool> {
+    /// Is `resolv` still the regular file `resolv_apply` wrote? A symlink is
+    /// never ours (we always write a plain file), whatever it points at.
+    fn regular_file_is_ours(resolv: &Path) -> bool {
+        match fs::symlink_metadata(resolv) {
+            Ok(meta) if meta.file_type().is_file() => file_is_ours(resolv),
+            _ => false,
+        }
+    }
+
+    /// Drop the marker and the copy without touching `resolv`.
+    fn forget_backup(backup_dir: &Path) -> io::Result<()> {
+        let _ = fs::remove_file(backup_dir.join(BACKUP_COPY_NAME));
+        match fs::remove_file(marker_path(backup_dir)) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Put back whatever `resolv_apply` found — but only over our own file.
+    ///
+    /// The backup is the resolver of the network the machine was on at
+    /// connect time. When NetworkManager (or resolvconf, or resolved) has
+    /// written the file since — after a reboot that followed a power cut, on
+    /// a new network, or inside the few seconds before the supervisor's next
+    /// tick — theirs is the one that works here and now, and putting the old
+    /// copy over it left every lookup on the machine failing until they
+    /// happened to rewrite it again. So, like the .deb's postrm: our file (or
+    /// no file at all) is replaced by the original; anything else is kept and
+    /// only the stale backup goes.
+    pub fn resolv_restore(backup_dir: &Path, resolv: &Path) -> io::Result<ResolvRestore> {
         let run_dir = backup_dir;
         let marker = marker_path(backup_dir);
         let text = match fs::read_to_string(&marker) {
             Ok(t) => t,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(ResolvRestore::NoBackup),
             Err(e) => return Err(e),
         };
+
+        let present = match fs::symlink_metadata(resolv) {
+            Ok(_) => true,
+            Err(e) if e.kind() == ErrorKind::NotFound => false,
+            Err(e) => return Err(e),
+        };
+        if present && !regular_file_is_ours(resolv) {
+            forget_backup(backup_dir)?;
+            return Ok(ResolvRestore::KeptNewer);
+        }
+
         let backup = parse_backup_marker(&text)
             .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
 
@@ -445,7 +497,7 @@ mod files {
             ResolvBackup::Absent => {}
         }
         fs::remove_file(&marker)?;
-        Ok(true)
+        Ok(ResolvRestore::Restored)
     }
 
     /// Did a previous run leave a backup behind (i.e. did we crash)?
@@ -467,12 +519,7 @@ mod files {
     pub fn resolv_reapply(backup_dir: &Path, resolv: &Path, servers: &[IpAddr]) -> io::Result<()> {
         let replaced = fs::symlink_metadata(resolv).is_ok() && !file_is_ours(resolv);
         if replaced {
-            let _ = fs::remove_file(backup_dir.join(BACKUP_COPY_NAME));
-            match fs::remove_file(marker_path(backup_dir)) {
-                Ok(()) => {}
-                Err(e) if e.kind() == ErrorKind::NotFound => {}
-                Err(e) => return Err(e),
-            }
+            forget_backup(backup_dir)?;
         }
         resolv_apply(backup_dir, resolv, servers)
     }
@@ -780,7 +827,7 @@ proxysvpn0\t00000000\t00000000\t0001\t0\t0\t0\t00000080\t0\t0\t0
             assert!(now.contains("nameserver 1.1.1.1"));
             assert!(resolv_backup_exists(&run));
 
-            assert!(resolv_restore(&run, &resolv).expect("restore"));
+            assert_eq!(resolv_restore(&run, &resolv).expect("restore"), ResolvRestore::Restored);
             assert_eq!(
                 fs::read_to_string(&resolv).expect("read"),
                 "nameserver 192.168.1.1\n"
@@ -813,7 +860,7 @@ proxysvpn0\t00000000\t00000000\t0001\t0\t0\t0\t00000080\t0\t0\t0
                 "and it must not be copied either"
             );
 
-            assert!(resolv_restore(&backup, &resolv).expect("restore"));
+            assert_eq!(resolv_restore(&backup, &resolv).expect("restore"), ResolvRestore::Restored);
             assert!(
                 !resolv.exists(),
                 "nothing to put back, so the path is left for the distro to recreate"
@@ -908,8 +955,68 @@ proxysvpn0\t00000000\t00000000\t0001\t0\t0\t0\t00000080\t0\t0\t0
             resolv_reapply(&backup, &resolv, &servers()).expect("reapply");
             assert!(fs::read_to_string(&resolv).expect("read").contains("nameserver 1.1.1.1"));
 
-            assert!(resolv_restore(&backup, &resolv).expect("restore"));
+            assert_eq!(resolv_restore(&backup, &resolv).expect("restore"), ResolvRestore::Restored);
             assert_eq!(fs::read_to_string(&resolv).expect("read"), "nameserver 10.0.0.1\n");
+        }
+
+        /// Connect at home, power cut, the machine boots on the office
+        /// network and NetworkManager rewrites the file, then the helper's
+        /// crash recovery (or a Disconnect inside the supervisor's 5 s tick)
+        /// restores: NM's file must stay, and the stale home copy must go so
+        /// the next connect backs up the office resolver instead.
+        #[test]
+        fn a_restore_never_puts_an_old_backup_over_a_newer_file() {
+            let s = Scratch::new("resolv-crash-nm");
+            let backup = s.path("backup");
+            let resolv = s.path("resolv.conf");
+            fs::write(&resolv, "nameserver 192.168.1.1\n").expect("home");
+            resolv_apply(&backup, &resolv, &servers()).expect("apply");
+            fs::write(&resolv, "nameserver 10.0.0.1\n").expect("office, written by NM at boot");
+
+            assert_eq!(resolv_restore(&backup, &resolv).expect("restore"), ResolvRestore::KeptNewer);
+            assert_eq!(fs::read_to_string(&resolv).expect("read"), "nameserver 10.0.0.1\n");
+            assert!(!resolv_backup_exists(&backup), "the stale backup must not survive");
+            assert!(!backup.join("resolv.conf.orig").exists());
+
+            // The next connect takes the office file as the original.
+            resolv_apply(&backup, &resolv, &servers()).expect("apply again");
+            assert_eq!(resolv_restore(&backup, &resolv).expect("restore"), ResolvRestore::Restored);
+            assert_eq!(fs::read_to_string(&resolv).expect("read"), "nameserver 10.0.0.1\n");
+        }
+
+        /// resolved or resolvconf put its symlink back after us: keep it,
+        /// even when it points at a file that happens to carry our marker.
+        #[test]
+        fn a_restore_keeps_a_symlink_someone_else_put_back() {
+            let s = Scratch::new("resolv-relinked");
+            let backup = s.path("backup");
+            let resolv = s.path("resolv.conf");
+            let stub = s.path("stub-resolv.conf");
+            fs::write(&resolv, "nameserver 192.168.1.1\n").expect("home");
+            resolv_apply(&backup, &resolv, &servers()).expect("apply");
+
+            fs::write(&stub, render_resolv_conf(&servers())).expect("stub");
+            fs::remove_file(&resolv).expect("unlink");
+            std::os::unix::fs::symlink(&stub, &resolv).expect("relink");
+
+            assert_eq!(resolv_restore(&backup, &resolv).expect("restore"), ResolvRestore::KeptNewer);
+            assert_eq!(fs::read_link(&resolv).expect("still a link"), stub);
+            assert!(!resolv_backup_exists(&backup));
+        }
+
+        /// Our file was deleted and nothing replaced it yet: the original is
+        /// still better than no resolver at all.
+        #[test]
+        fn a_restore_over_a_missing_file_puts_the_original_back() {
+            let s = Scratch::new("resolv-gone");
+            let backup = s.path("backup");
+            let resolv = s.path("resolv.conf");
+            fs::write(&resolv, "nameserver 192.168.1.1\n").expect("home");
+            resolv_apply(&backup, &resolv, &servers()).expect("apply");
+            fs::remove_file(&resolv).expect("gone");
+
+            assert_eq!(resolv_restore(&backup, &resolv).expect("restore"), ResolvRestore::Restored);
+            assert_eq!(fs::read_to_string(&resolv).expect("read"), "nameserver 192.168.1.1\n");
         }
 
         /// Reapplying over our own file (nothing rewrote it) keeps the
@@ -923,7 +1030,7 @@ proxysvpn0\t00000000\t00000000\t0001\t0\t0\t0\t00000080\t0\t0\t0
 
             resolv_apply(&backup, &resolv, &servers()).expect("apply");
             resolv_reapply(&backup, &resolv, &servers()).expect("reapply");
-            assert!(resolv_restore(&backup, &resolv).expect("restore"));
+            assert_eq!(resolv_restore(&backup, &resolv).expect("restore"), ResolvRestore::Restored);
             assert_eq!(fs::read_to_string(&resolv).expect("read"), "nameserver 192.168.1.1\n");
         }
 
@@ -947,7 +1054,7 @@ proxysvpn0\t00000000\t00000000\t0001\t0\t0\t0\t00000080\t0\t0\t0
                 "resolved's own stub file must stay untouched"
             );
 
-            assert!(resolv_restore(&run, &resolv).expect("restore"));
+            assert_eq!(resolv_restore(&run, &resolv).expect("restore"), ResolvRestore::Restored);
             let meta = fs::symlink_metadata(&resolv).expect("meta");
             assert!(meta.file_type().is_symlink());
             assert_eq!(fs::read_link(&resolv).expect("link"), stub);
@@ -961,7 +1068,7 @@ proxysvpn0\t00000000\t00000000\t0001\t0\t0\t0\t00000080\t0\t0\t0
 
             resolv_apply(&run, &resolv, &servers()).expect("apply");
             assert!(resolv.exists());
-            assert!(resolv_restore(&run, &resolv).expect("restore"));
+            assert_eq!(resolv_restore(&run, &resolv).expect("restore"), ResolvRestore::Restored);
             assert!(!resolv.exists(), "we must not leave a file we invented");
         }
 
@@ -974,7 +1081,7 @@ proxysvpn0\t00000000\t00000000\t0001\t0\t0\t0\t00000080\t0\t0\t0
 
             resolv_apply(&run, &resolv, &servers()).expect("apply 1");
             resolv_apply(&run, &resolv, &servers()).expect("apply 2");
-            assert!(resolv_restore(&run, &resolv).expect("restore"));
+            assert_eq!(resolv_restore(&run, &resolv).expect("restore"), ResolvRestore::Restored);
             assert_eq!(
                 fs::read_to_string(&resolv).expect("read"),
                 "nameserver 10.0.0.1\n",
@@ -988,7 +1095,7 @@ proxysvpn0\t00000000\t00000000\t0001\t0\t0\t0\t00000080\t0\t0\t0
             let run = s.path("run");
             let resolv = s.path("resolv.conf");
             fs::write(&resolv, "nameserver 10.0.0.1\n").expect("seed");
-            assert!(!resolv_restore(&run, &resolv).expect("restore"));
+            assert_eq!(resolv_restore(&run, &resolv).expect("restore"), ResolvRestore::NoBackup);
             assert_eq!(
                 fs::read_to_string(&resolv).expect("read"),
                 "nameserver 10.0.0.1\n"

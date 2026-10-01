@@ -164,12 +164,16 @@ table and the pids of its own engines (`net/windows.rs`).
 
 * normal quit — the GUI closes the pipe, the helper tears down and exits;
 * GUI crash or SIGKILL — the pipe hits EOF, same path;
-* helper killed — `purge_stale_sync()` on the next start removes the leftover
-  device, the host route (remembered in `/run/proxysvpn/route-hint`) and the
+* helper killed — tun2socks is started with `PR_SET_PDEATHSIG` = SIGKILL from
+  the helper's main thread, so it dies with the helper. `purge_stale_sync()` on
+  the next start removes the leftover device, the host route (remembered in
+  `/run/proxysvpn/route-hint`, written before the route is added and again,
+  with `engine_pid=`, as soon as tun2socks is spawned) and the
   `/etc/resolv.conf` backup, and kills the tun2socks the previous helper
-  recorded in the route hint (`engine_pid=`), only while that pid still runs
-  the helper's own binary — never every root `tun2socks` by name, which would
-  stop another VPN client's engine;
+  recorded there if one is still running, only while that pid still runs the
+  helper's own binary (also when a package upgrade has replaced the file and
+  the kernel reports it as `tun2socks (deleted)`) — never every root
+  `tun2socks` by name, which would stop another VPN client's engine;
 * reboot — the route hint is in `/run`, a tmpfs, and that is right: routes do
   not survive a reboot either, so a hint that did would name entries that no
   longer exist. The `/etc/resolv.conf` backup is the opposite case and lives in
@@ -178,7 +182,11 @@ table and the pids of its own engines (`net/windows.rs`).
   the machine pointed at our resolvers with nothing left to restore.
   `purge_stale_sync()` puts it back on the next start, which means the machine
   keeps our resolvers until the app is launched again; a systemd unit that
-  restores it at boot instead is the proper fix and is not written yet.
+  restores it at boot instead is the proper fix and is not written yet. The
+  backup only ever goes back over our own file: when NetworkManager (or
+  resolvconf, or resolved) has rewritten `/etc/resolv.conf` since — at boot on
+  another network, say — theirs is newer, so it is kept and only the stale
+  backup is deleted. Disconnect and the .deb's `postrm` follow the same rule.
 
 ## DNS
 

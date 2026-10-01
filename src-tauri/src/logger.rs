@@ -685,9 +685,34 @@ const SITE_LINE_MARKERS: [&str; 6] = [
 /// File names engines print next to a message: not sites, and useful.
 const NOT_A_SITE_SUFFIXES: [&str; 9] = ["go", "dat", "json", "yaml", "yml", "log", "txt", "exe", "dll"];
 
-/// Is `token` shaped like a DNS name: dot-separated labels of letters, digits
-/// and hyphens, at least two of them, ending in an alphabetic (or punycode)
-/// top label, which leaves dotted IPv4 and version numbers to their own rules?
+/// Public resolvers an engine names when a lookup through it fails. Which
+/// resolver timed out is what support needs to read, and it says nothing
+/// about the sites the person opened.
+const RESOLVER_HOSTS: [&str; 7] = [
+    "dns.google",
+    "cloudflare-dns.com",
+    "one.one.one.one",
+    "dns.quad9.net",
+    "doh.opendns.com",
+    "dns.adguard-dns.com",
+    "common.dot.dns.yandex.net",
+];
+
+/// `RESOLVER_HOSTS`, plus the per-service names under Cloudflare's and
+/// Quad9's resolver domains (`security.cloudflare-dns.com`, `dns11.quad9.net`).
+fn is_public_resolver(token: &str) -> bool {
+    let name = token.strip_suffix('.').unwrap_or(token).to_ascii_lowercase();
+    RESOLVER_HOSTS.contains(&name.as_str())
+        || name.ends_with(".cloudflare-dns.com")
+        || name.ends_with(".quad9.net")
+}
+
+/// Is `token` shaped like a DNS name: dot-separated labels of letters, digits,
+/// hyphens and underscores (`_xmpp-client._tcp`, `my_host` — real names in
+/// lookups), at least two of them, ending in an alphabetic (or punycode) top
+/// label, which leaves dotted IPv4 and version numbers to their own rules?
+/// A top label that is a file extension (`nameserver_doh.go`) is a code
+/// location, not a host.
 fn looks_like_a_site(token: &str) -> bool {
     let name = token.strip_suffix('.').unwrap_or(token);
     let mut labels = name.split('.');
@@ -695,7 +720,7 @@ fn looks_like_a_site(token: &str) -> bool {
         return false;
     };
     let well_formed = labels.all(|l| {
-        !l.is_empty() && l.len() <= 63 && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        !l.is_empty() && l.len() <= 63 && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
     });
     well_formed
         && name.contains('.')
@@ -707,11 +732,16 @@ fn looks_like_a_site(token: &str) -> bool {
 /// Replace every DNS name in an engine line that can name a visited site.
 /// Lines without one of `SITE_LINE_MARKERS` are left alone: our own lines
 /// ("proxysvpn.com unreachable") are what support needs to read.
+///
+/// A name is masked wherever it stands — after `://`, before a `/`, next to
+/// an underscore: `Get https://cdn.site.io/x` names the site as plainly as
+/// `reqAddr` does. Only code locations (`nameserver_doh.go`, a top label in
+/// `NOT_A_SITE_SUFFIXES`) and the public resolvers keep their names.
 fn mask_visited_sites(input: &str) -> String {
     if !SITE_LINE_MARKERS.iter().any(|m| input.contains(m)) {
         return input.to_string();
     }
-    let is_name_char = |c: char| c.is_ascii_alphanumeric() || c == '.' || c == '-';
+    let is_name_char = |c: char| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_';
     let mut out = String::with_capacity(input.len());
     let mut rest = input;
     while let Some(start) = rest.find(is_name_char) {
@@ -719,11 +749,13 @@ fn mask_visited_sites(input: &str) -> String {
         let tail = &rest[start..];
         let end = tail.find(|c: char| !is_name_char(c)).unwrap_or(tail.len());
         let token = &tail[..end];
-        // A token glued to a path or an identifier (`app/dns`, `nameserver_doh`)
-        // is a code location, not a host.
-        let glued = out.ends_with(['/', '_']) || tail[end..].starts_with(['/', '_']);
-        if !glued && looks_like_a_site(token) {
+        if looks_like_a_site(token) && !is_public_resolver(token) {
             out.push_str(MASK_SITE);
+            // A trailing dot is the name's root, not the sentence's end, but
+            // a masked name keeps it so the line still reads the same.
+            if token.ends_with('.') {
+                out.push('.');
+            }
         } else {
             out.push_str(token);
         }
@@ -791,6 +823,7 @@ impl FileSink {
             }
         };
         let dir = LogDir::open(&dir_path)?;
+        redact_files_from_older_versions(&dir, &name, keep);
         let handle = dir.open_file(&name, false)?;
         let meta = handle.metadata()?;
         // Adopt the existing file's day, not today's: a machine started the
@@ -859,6 +892,97 @@ impl FileSink {
     }
 }
 
+/// Bump when the masking rules change in a way that makes lines already on
+/// disk worth masking again: the files of the folder are then re-redacted
+/// once, on the first start of the new version.
+const REDACTION_GENERATION: u32 = 2;
+
+/// A log file bigger than this was not written by our rotation (5 MiB);
+/// rather than rewrite part of it, it is removed.
+const REDACT_READ_CAP: u64 = MAX_FILE_BYTES * 3;
+
+/// Lines written by an older version were masked by older rules: 0.3.1 wrote
+/// `app/dns: failed to retrieve response for <a real site>` and hysteria's
+/// `reqAddr` as they came, and rotation keeps those files for days. Once per
+/// `REDACTION_GENERATION`, every file of the folder is put through today's
+/// `redact` (and stripped of per-connection records), the marker is written,
+/// and nothing is done on later starts. Best effort: a file that cannot be
+/// rewritten is left as it was, and the marker is not written, so the next
+/// start tries again.
+fn redact_files_from_older_versions(dir: &LogDir, name: &std::ffi::OsStr, keep: usize) {
+    let marker = OsString::from(format!(".redacted-{REDACTION_GENERATION}"));
+    if dir.exists(&marker) {
+        return;
+    }
+    let mut names = vec![name.to_os_string()];
+    names.extend((1..keep).map(|n| archive_name(name, n)));
+    let mut all_done = true;
+    for file in &names {
+        if dir.exists(file) && rewrite_redacted(dir, file).is_err() {
+            all_done = false;
+        }
+    }
+    if all_done {
+        let _ = dir.open_file(&marker, false);
+    }
+}
+
+/// One file of `redact_files_from_older_versions`: rewritten through a temp
+/// file and renamed over the original, its modification time kept so the
+/// day-based rotation still sees the day it was written.
+fn rewrite_redacted(dir: &LogDir, file: &std::ffi::OsStr) -> std::io::Result<()> {
+    let (bytes, modified) = dir.read_all(file, REDACT_READ_CAP)?;
+    let Some(bytes) = bytes else {
+        // Too big to be ours: gone rather than half rewritten.
+        return dir.remove(file);
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let (prefix, message) = split_file_line(line);
+        if connection_kind(message).is_some() {
+            continue;
+        }
+        out.push_str(prefix);
+        out.push_str(&redact(message, &[]));
+        out.push('\n');
+    }
+    if out.as_bytes() == bytes.as_slice() {
+        return Ok(());
+    }
+    let mut tmp = OsString::from(".");
+    tmp.push(file);
+    tmp.push(".redacting");
+    let written = (|| -> std::io::Result<()> {
+        let mut handle = dir.open_file(&tmp, true)?;
+        handle.write_all(out.as_bytes())?;
+        if let Some(when) = modified {
+            handle.set_modified(when)?;
+        }
+        dir.rename(&tmp, file)
+    })();
+    if written.is_err() {
+        let _ = dir.remove(&tmp);
+    }
+    written
+}
+
+/// `"<time> [<level>] [<source>] "` and the message after it, as `emit`
+/// writes a line. A line of another shape (torn, or from a much older
+/// version) is all message.
+fn split_file_line(line: &str) -> (&str, &str) {
+    let Some(level_at) = line.find(" [") else {
+        return ("", line);
+    };
+    let Some(source_at) = line[level_at + 2..].find("] [").map(|i| i + level_at + 2) else {
+        return ("", line);
+    };
+    let Some(message_at) = line[source_at + 3..].find("] ").map(|i| i + source_at + 3 + 2) else {
+        return ("", line);
+    };
+    line.split_at(message_at)
+}
+
 /// Mode of a newly created log file.
 ///
 /// Linux: 0600. There the GUI is unprivileged, so the file belongs to the user
@@ -875,14 +999,19 @@ const LOG_MODE: u32 = if cfg!(target_os = "linux") { 0o600 } else { 0o644 };
 /// The folder the log files live in, held open so that every later step —
 /// open, rotate, delete — happens in that very folder.
 ///
-/// macOS and Linux: the folder is opened once with O_NOFOLLOW and every file
-/// operation is `*at()` relative to it, with O_NOFOLLOW on the file and a
-/// check that the file is a plain file with a single link. On macOS the
-/// process writing here is root and the folder sits in the user's own
-/// `~/Library/Logs`: by path, a program of that user could swap the folder or
-/// plant `app.log` as a symlink or hard link to a system file (a sudoers.d
-/// entry, a shell startup file) and have root create it or append log lines to
-/// it. Now a link is refused and the log simply has no file.
+/// macOS and Linux: the folder is reached one component at a time below the
+/// home folder (`LogDir::open_beneath`), each component opened with
+/// O_DIRECTORY|O_NOFOLLOW (and created with mkdirat when missing) relative to
+/// the one before, and each owned by the home folder's owner or by root.
+/// Every file operation is then `*at()` relative to the folder, with
+/// O_NOFOLLOW on the file and a check that the file is a plain file with a
+/// single link. On macOS the process writing here is root and the folder sits
+/// in the user's own `~/Library/Logs`: by path, a program of that user could
+/// swap any folder on the way (`~/Library/Logs` itself, not only
+/// `ProxysVPN`) for a link, or plant `app.log` as a symlink or hard link to a
+/// system file (a sudoers.d entry, a shell startup file), and have root
+/// create folders and files there or append log lines to them. Now a link
+/// anywhere below the home folder is refused and the log simply has no file.
 ///
 /// Windows and iOS keep plain paths: %LOCALAPPDATA% has an owner-only ACL, and
 /// the iOS file is inside the app's sandbox.
@@ -891,15 +1020,120 @@ struct LogDir {
     fd: File,
 }
 
+/// Mode of a log folder this process creates (before the umask).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const LOG_DIR_MODE: u32 = 0o755;
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 impl LogDir {
+    /// Open `dir`, walking every component below `$HOME` without following
+    /// a link. A folder outside the home folder (only tests use one) is
+    /// walked from its parent, which is created by path as before.
     fn open(dir: &Path) -> std::io::Result<Self> {
-        use std::os::unix::fs::OpenOptionsExt;
+        let home = std::env::var_os("HOME")
+            .filter(|h| !h.is_empty())
+            .map(PathBuf::from);
+        if let Some(home) = home {
+            if let Ok(rel) = dir.strip_prefix(&home) {
+                if !rel.as_os_str().is_empty() {
+                    let walked = Self::open_beneath(&home, rel);
+                    // On Linux only the GUI writes this log, as the user. It
+                    // gains nothing from refusing links in its own home, and
+                    // a symlinked ~/.local (dotfile managers) must not cost
+                    // the log silently. Root always keeps the strict walk.
+                    #[cfg(target_os = "linux")]
+                    {
+                        // SAFETY: geteuid has no preconditions and cannot fail.
+                        if walked.is_err() && unsafe { libc::geteuid() } != 0 {
+                            return Self::open_following(dir);
+                        }
+                    }
+                    return walked;
+                }
+            }
+        }
+        let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "log folder has no parent or no name",
+            ));
+        };
+        create_dir_all(parent)?;
+        Self::open_beneath(parent, Path::new(name))
+    }
 
+    /// Open `anchor` (links followed: it is the home folder the launcher
+    /// named, in a parent only root can write), then each component of `rel`
+    /// relative to the one before with O_DIRECTORY|O_NOFOLLOW, creating a
+    /// missing one with mkdirat. Every component must belong to the anchor's
+    /// owner or to root, and `rel` may hold plain names only.
+    fn open_beneath(anchor: &Path, rel: &Path) -> std::io::Result<Self> {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        use std::path::Component;
+
+        let mut current = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+            .open(anchor)?;
+        let owner = current.metadata()?.uid();
+        // A folder of our own user is as safe as one of the anchor's owner:
+        // for root this adds nothing, for a user it lets an anchor owned by
+        // root (/tmp in tests) hold the user's folders.
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        let me = unsafe { libc::geteuid() };
+        let mut walked = 0usize;
+        for component in rel.components() {
+            let Component::Normal(name) = component else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "the log folder must be plain names below the home folder",
+                ));
+            };
+            let c = Self::c_name(name)?;
+            // SAFETY: `current` is an open directory for the whole call and
+            // `c` is a NUL-terminated name. mkdirat never follows a final link.
+            if unsafe { libc::mkdirat(current.as_raw_fd(), c.as_ptr(), LOG_DIR_MODE as libc::mode_t) } != 0 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(err);
+                }
+            }
+            let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+            // SAFETY: as above; openat takes no mode without O_CREAT.
+            let raw = unsafe { libc::openat(current.as_raw_fd(), c.as_ptr(), flags) };
+            if raw < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // SAFETY: `raw` is a descriptor openat just returned to us and
+            // nothing else owns it.
+            let next = unsafe { File::from_raw_fd(raw) };
+            let uid = next.metadata()?.uid();
+            if uid != owner && uid != 0 && uid != me {
+                return Err(std::io::Error::other(format!(
+                    "a folder on the way to the log belongs to uid {uid}, not {owner}, {me} or root"
+                )));
+            }
+            current = next;
+            walked += 1;
+        }
+        if walked == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "the log folder cannot be the home folder itself",
+            ));
+        }
+        Ok(Self { fd: current })
+    }
+
+    /// Linux, non-root only: create `dir` and open it following links.
+    #[cfg(target_os = "linux")]
+    fn open_following(dir: &Path) -> std::io::Result<Self> {
+        use std::os::unix::fs::OpenOptionsExt;
         create_dir_all(dir)?;
         let fd = OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
             .open(dir)?;
         Ok(Self { fd })
     }
@@ -938,6 +1172,40 @@ impl LogDir {
             file.set_len(0)?;
         }
         Ok(file)
+    }
+
+    /// The whole of `name` and its modification time, read through the
+    /// same checks as `open_file` (no link followed, one link only), or
+    /// `None` for the bytes when the file is bigger than `cap`.
+    fn read_all(
+        &self,
+        name: &std::ffi::OsStr,
+        cap: u64,
+    ) -> std::io::Result<(Option<Vec<u8>>, Option<SystemTime>)> {
+        use std::io::Read;
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::unix::fs::MetadataExt;
+
+        let c = Self::c_name(name)?;
+        let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
+        // SAFETY: as in `open_file`; openat takes no mode without O_CREAT.
+        let raw = unsafe { libc::openat(self.fd.as_raw_fd(), c.as_ptr(), flags) };
+        if raw < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `raw` is a descriptor openat just returned to us and nothing
+        // else owns it.
+        let file = unsafe { File::from_raw_fd(raw) };
+        let meta = file.metadata()?;
+        if !meta.file_type().is_file() || meta.nlink() != 1 {
+            return Err(std::io::Error::other("the log file is not a plain file with a single link"));
+        }
+        if meta.len() > cap {
+            return Ok((None, meta.modified().ok()));
+        }
+        let mut bytes = Vec::new();
+        file.take(cap).read_to_end(&mut bytes)?;
+        Ok((Some(bytes), meta.modified().ok()))
     }
 
     fn rename(&self, from: &std::ffi::OsStr, to: &std::ffi::OsStr) -> std::io::Result<()> {
@@ -995,6 +1263,26 @@ impl LogDir {
             opts.append(true);
         }
         opts.open(self.path.join(name))
+    }
+
+    fn read_all(
+        &self,
+        name: &std::ffi::OsStr,
+        cap: u64,
+    ) -> std::io::Result<(Option<Vec<u8>>, Option<SystemTime>)> {
+        use std::io::Read;
+
+        let path = self.path.join(name);
+        let meta = std::fs::symlink_metadata(&path)?;
+        if !meta.file_type().is_file() {
+            return Err(std::io::Error::other("the log file is not a plain file"));
+        }
+        if meta.len() > cap {
+            return Ok((None, meta.modified().ok()));
+        }
+        let mut bytes = Vec::new();
+        File::open(&path)?.take(cap).read_to_end(&mut bytes)?;
+        Ok((Some(bytes), meta.modified().ok()))
     }
 
     fn rename(&self, from: &std::ffi::OsStr, to: &std::ffi::OsStr) -> std::io::Result<()> {
@@ -1607,6 +1895,106 @@ mod tests {
         assert!(!elsewhere.join("app.log").exists());
     }
 
+    /// The files a previous version wrote, with sites its rules did not
+    /// mask, are masked once on the first start of this one — and only once.
+    #[test]
+    fn files_written_by_an_older_version_are_redacted_once() {
+        let dir = TmpDir::new("reredact");
+        let live = dir.file("app.log");
+        let archive = dir.file("app.log.1");
+        let old_line = "2026-09-30T10:00:00Z [error] [xray] [Error] app/dns: failed to retrieve response for my_host.private-site.org.";
+        let ours = "2026-09-30T10:00:01Z [info] [vpn] подписка: получена за 812 мс";
+        let hy2 = r#"2026-09-29T10:00:00Z [warn] [hysteria] SOCKS5 TCP error {"reqAddr": "a-site-the-user-opened.example:443", "error": "EOF"}"#;
+        std::fs::write(&live, format!("{old_line}
+{ours}
+")).expect("live");
+        std::fs::write(&archive, format!("{hy2}
+")).expect("archive");
+        let yesterday = SystemTime::now() - std::time::Duration::from_secs(86_400);
+        File::options()
+            .write(true)
+            .open(&live)
+            .and_then(|f| f.set_modified(yesterday))
+            .expect("age the live file");
+
+        let sink = FileSink::open_with(live.clone(), DAY_MS * 20_000, 10_000, 3).expect("open");
+        drop(sink);
+        let text = std::fs::read_to_string(&live).expect("live");
+        assert!(!text.contains("private-site"), "{text}");
+        assert!(text.contains("2026-09-30T10:00:00Z [error] [xray] [Error] app/dns: failed to retrieve response for <site>."), "{text}");
+        assert!(text.contains(ours), "our own line stays as it was: {text}");
+        let archived = std::fs::read_to_string(&archive).expect("archive");
+        assert!(!archived.contains("a-site-the-user-opened"), "{archived}");
+        let modified = std::fs::metadata(&live).and_then(|m| m.modified()).expect("mtime");
+        let drift = modified.duration_since(yesterday).unwrap_or_default();
+        assert!(drift < std::time::Duration::from_secs(2), "the day the file was written is kept");
+
+        // Once: a line put back afterwards is left alone (a new version only
+        // ever writes masked lines; this proves the pass does not run again).
+        std::fs::write(&archive, format!("{hy2}
+")).expect("archive again");
+        drop(FileSink::open_with(live, DAY_MS * 20_000, 10_000, 3).expect("reopen"));
+        assert!(std::fs::read_to_string(&archive).expect("archive").contains("a-site-the-user-opened"));
+    }
+
+    #[test]
+    fn a_file_line_splits_into_its_prefix_and_message() {
+        assert_eq!(
+            split_file_line("2026-09-30T10:00:00Z [warn] [xray] [Error] app/dns: x"),
+            ("2026-09-30T10:00:00Z [warn] [xray] ", "[Error] app/dns: x")
+        );
+        assert_eq!(split_file_line("torn half of a line"), ("", "torn half of a line"));
+        assert_eq!(split_file_line("x [y] z"), ("", "x [y] z"));
+    }
+
+    /// Not only the last folder: ~/Library/Logs itself swapped for a link
+    /// (its owner can do that) must not lead root anywhere else either.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_link_anywhere_below_home_is_refused() {
+        let home = TmpDir::new("homelink");
+        std::fs::create_dir(home.file("Library")).expect("Library");
+        let elsewhere = home.file("elsewhere");
+        std::fs::create_dir(&elsewhere).expect("elsewhere");
+        std::os::unix::fs::symlink(&elsewhere, home.file("Library/Logs")).expect("Logs is a link");
+
+        assert!(LogDir::open_beneath(&home.0, Path::new("Library/Logs/ProxysVPN")).is_err());
+        assert!(!elsewhere.join("ProxysVPN").exists(), "nothing is created through the link");
+
+        // The same chain of real folders works, and missing ones are made.
+        std::fs::remove_file(home.file("Library/Logs")).expect("unlink");
+        let dir = LogDir::open_beneath(&home.0, Path::new("Library/Logs/ProxysVPN")).expect("real folders");
+        let file = dir.open_file(std::ffi::OsStr::new("app.log"), false).expect("app.log");
+        drop(file);
+        assert!(home.file("Library/Logs/ProxysVPN/app.log").is_file());
+    }
+
+    /// Linux: the GUI runs as the user, so a symlinked ~/.local/state (dotfile
+    /// managers do that) is followed instead of losing the log.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_user_follows_a_symlinked_state_folder() {
+        let home = TmpDir::new("statelink");
+        let real = home.file("dotfiles-state");
+        std::fs::create_dir(&real).expect("real state");
+        std::fs::create_dir(home.file(".local")).expect(".local");
+        std::os::unix::fs::symlink(&real, home.file(".local/state")).expect("state is a link");
+
+        assert!(LogDir::open_beneath(&home.0, Path::new(".local/state/ProxysVPN")).is_err());
+        let dir = LogDir::open_following(&home.file(".local/state/ProxysVPN")).expect("followed");
+        drop(dir.open_file(std::ffi::OsStr::new("app.log"), false).expect("app.log"));
+        assert!(real.join("ProxysVPN/app.log").is_file());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn the_log_folder_walk_takes_plain_names_only() {
+        let home = TmpDir::new("homedots");
+        assert!(LogDir::open_beneath(&home.0, Path::new("../escape")).is_err());
+        assert!(LogDir::open_beneath(&home.0, Path::new("/etc")).is_err());
+        assert!(LogDir::open_beneath(&home.0, Path::new("")).is_err());
+    }
+
     /// Rotation stays inside the folder that was opened: swapping the folder
     /// for a link afterwards moves nothing anywhere else.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -1815,12 +2203,69 @@ mod tests {
 
     #[test]
     fn the_site_shape_is_strict() {
-        for site in ["example.com", "a-b.c-d.example.org.", "xn--80ak6aa92e.xn--p1ai", "DNS.Google"] {
+        for site in [
+            "example.com",
+            "a-b.c-d.example.org.",
+            "xn--80ak6aa92e.xn--p1ai",
+            "DNS.Google",
+            "my_host.private-site.org",
+            "_xmpp-client._tcp.jabber-site.ru.",
+        ] {
             assert!(looks_like_a_site(site), "{site}");
         }
-        for not_site in ["1.2.3.4", "v2.9.3", "dns.go", "geoip.dat", "a..b", ".com", "localhost", "a.b1"] {
+        for not_site in [
+            "1.2.3.4",
+            "v2.9.3",
+            "dns.go",
+            "geoip.dat",
+            "a..b",
+            ".com",
+            "localhost",
+            "a.b1",
+            "nameserver_doh.go",
+            "my_host",
+        ] {
             assert!(!looks_like_a_site(not_site), "{not_site}");
         }
+    }
+
+    /// A name glued to an underscore label or sitting inside a URL is still
+    /// the site the person opened.
+    #[test]
+    fn site_names_next_to_underscores_and_inside_urls_are_masked() {
+        let underscore = "[Error] app/dns: failed to retrieve response for my_host.private-site.org.";
+        let out = redact(underscore, &[]);
+        assert!(!out.contains("private-site"), "{out}");
+        assert!(out.ends_with("failed to retrieve response for <site>."), "{out}");
+
+        let srv = "[Error] app/dns: failed to retrieve response for _xmpp-client._tcp.jabber-site.ru.";
+        let out = redact(srv, &[]);
+        assert!(!out.contains("jabber-site"), "{out}");
+        assert!(!out.contains("xmpp"), "{out}");
+
+        let url = r#"WARN	TCP error	{"reqAddr": "cdn.site.io:443", "error": "Get https://cdn.site.io/x?y=1: EOF"}"#;
+        let out = redact(url, &[]);
+        assert!(!out.contains("site.io"), "{out}");
+        assert!(out.contains("https://<site>/x"), "{out}");
+    }
+
+    /// Which resolver failed is support's business and nobody's browsing.
+    #[test]
+    fn public_resolvers_and_code_locations_keep_their_names() {
+        let doh = r#"[Error] app/dns: failed to retrieve response for private.example. > Post "https://dns.google/dns-query": context deadline exceeded"#;
+        let out = redact(doh, &[]);
+        assert!(out.contains("https://dns.google/dns-query"), "{out}");
+        assert!(!out.contains("private.example"), "{out}");
+        for resolver in ["cloudflare-dns.com", "security.cloudflare-dns.com", "dns.quad9.net", "dns11.quad9.net", "DNS.Google."] {
+            assert!(is_public_resolver(resolver), "{resolver}");
+        }
+        assert!(!is_public_resolver("quad9.net.example.com"));
+        assert!(!is_public_resolver("notcloudflare-dns.com"));
+
+        let located = "[Warning] app/dns: nameserver_doh.go:207 github_com_xtls.dns.go query failed";
+        let out = redact(located, &[]);
+        assert!(out.contains("nameserver_doh.go:207"), "{out}");
+        assert!(out.contains("github_com_xtls.dns.go"), "{out}");
     }
 
     #[test]

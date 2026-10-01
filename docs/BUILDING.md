@@ -28,11 +28,15 @@ Windows x86_64, Linux x86_64. Ничего не подписывается и н
 
 | Артефакт | Что внутри |
 | --- | --- |
-| `proxysvpn-macos-aarch64` | `ProxysVPN_<версия>_aarch64.dmg` |
-| `proxysvpn-windows-x86_64` | `ProxysVPN_<версия>_x64-setup.exe` (установщик NSIS) |
-| `proxysvpn-linux-x86_64` | `ProxysVPN_<версия>_amd64.deb` |
+| `proxysvpn-macos-aarch64` | `ProxysVPN_<версия>_aarch64.dmg`, `SHA256SUMS-proxysvpn-macos-aarch64.txt` |
+| `proxysvpn-windows-x86_64` | `ProxysVPN_<версия>_x64-setup.exe` (установщик NSIS), `SHA256SUMS-proxysvpn-windows-x86_64.txt` |
+| `proxysvpn-linux-x86_64` | `ProxysVPN_<версия>_amd64.deb`, `SHA256SUMS-proxysvpn-linux-x86_64.txt` |
 
-GitHub отдаёт артефакт одним zip-архивом — распаковать перед установкой.
+GitHub отдаёт артефакт одним zip-архивом — распаковать перед установкой. Оба файла лежат
+в корне архива, без подпапок. `scripts/publish-release.sh` ищет установщики и файлы
+`SHA256SUMS-*.txt` и во вложенных папках (старые артефакты клали их в `dmg/`, `nsis/`,
+`deb/`) и останавливается, если какой-то установщик в этих файлах не указан или его
+сумма не совпадает.
 
 Подписи кода у сборок нет, поэтому единственная проверка «это тот самый файл» —
 sha256. Прогон печатает его сам: в логе задания есть шаг **List bundle output

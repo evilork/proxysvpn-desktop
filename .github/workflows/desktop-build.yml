@@ -90,19 +90,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # bundle_dir is the one folder under target/release/bundle that holds
+          # this job's installer and its SHA256SUMS file. Both upload patterns
+          # name it, so the artifact root stays that folder and the zip is
+          # flat — see "Upload installers".
           - label: macOS aarch64 (dmg)
             runner: macos-latest
             artifact: proxysvpn-macos-aarch64
+            bundle_dir: dmg
             artifact_path: src-tauri/target/release/bundle/dmg/*.dmg
           - label: Windows x86_64 (nsis)
             runner: windows-latest
             artifact: proxysvpn-windows-x86_64
             bundles: nsis
+            bundle_dir: nsis
             artifact_path: src-tauri/target/release/bundle/nsis/*.exe
           - label: Linux x86_64 (deb)
             runner: ubuntu-22.04
             artifact: proxysvpn-linux-x86_64
             bundles: deb
+            bundle_dir: deb
             artifact_path: src-tauri/target/release/bundle/deb/*.deb
 
     defaults:
@@ -217,13 +224,20 @@ jobs:
 
       - name: Upload installers
         # Only on a manual run that asked for it: see the header.
+        #
+        # upload-artifact roots the zip at the least common ancestor of its
+        # patterns' search paths. Both patterns below live in the same
+        # bundle/<bundle_dir> folder, so that folder is the root and the zip
+        # holds the installer and SHA256SUMS-<artifact>.txt side by side at
+        # its top level. A `bundle/*/` wildcard here made the root `bundle/`
+        # and put both one `dmg/`, `nsis/` or `deb/` folder down.
         if: github.event_name == 'workflow_dispatch' && inputs.upload_installers
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: |
             ${{ matrix.artifact_path }}
-            src-tauri/target/release/bundle/*/SHA256SUMS-${{ matrix.artifact }}.txt
+            src-tauri/target/release/bundle/${{ matrix.bundle_dir }}/SHA256SUMS-${{ matrix.artifact }}.txt
           if-no-files-found: error
           retention-days: 14
 

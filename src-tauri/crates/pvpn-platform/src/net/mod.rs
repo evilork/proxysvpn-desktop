@@ -290,11 +290,17 @@ pub fn parse_engine_pids(contents: &str) -> Vec<u32> {
 /// a file called tun2socks (or tun2socks-<triple> in a dev checkout) in the
 /// helper's own directory? A pid from an old hint may have been reused by
 /// anything since.
+///
+/// The kernel appends " (deleted)" to the link once the file the process
+/// runs has been replaced — which is exactly what `apt upgrade` does to
+/// /usr/bin/tun2socks while an orphan of the old helper still runs it. That
+/// orphan is still ours, so the suffix is ignored.
 pub fn is_own_engine_image(exe: &std::path::Path, own_dir: &std::path::Path) -> bool {
     exe.parent() == Some(own_dir)
         && exe
             .file_name()
             .and_then(|n| n.to_str())
+            .map(|n| n.strip_suffix(" (deleted)").unwrap_or(n))
             .is_some_and(|n| n == TUNNEL_ENGINE || n.starts_with(&format!("{TUNNEL_ENGINE}-")))
 }
 
@@ -324,6 +330,21 @@ mod tests {
         assert!(!is_own_engine_image(std::path::Path::new("/opt/amnezia/tun2socks"), own));
         assert!(!is_own_engine_image(std::path::Path::new("/usr/bin/bash"), own));
         assert!(!is_own_engine_image(std::path::Path::new("/usr/bin/tun2socksd"), own));
+    }
+
+    /// After a package upgrade replaced /usr/bin/tun2socks, an orphan still
+    /// running the old file reads as "/usr/bin/tun2socks (deleted)".
+    #[test]
+    fn an_orphan_running_a_replaced_tun2socks_is_still_ours() {
+        let own = std::path::Path::new("/usr/bin");
+        assert!(is_own_engine_image(std::path::Path::new("/usr/bin/tun2socks (deleted)"), own));
+        assert!(is_own_engine_image(
+            std::path::Path::new("/usr/bin/tun2socks-x86_64-unknown-linux-gnu (deleted)"),
+            own
+        ));
+        assert!(!is_own_engine_image(std::path::Path::new("/opt/amnezia/tun2socks (deleted)"), own));
+        assert!(!is_own_engine_image(std::path::Path::new("/usr/bin/bash (deleted)"), own));
+        assert!(!is_own_engine_image(std::path::Path::new("/usr/bin/tun2socks (deleted) (deleted)"), own));
     }
 
     #[test]

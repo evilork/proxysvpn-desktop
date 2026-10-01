@@ -68,6 +68,9 @@ export type ErrorCode =
   // dialog would help, so it is not PERMISSION_DENIED and has no Retry.
   | "ELEVATION_UNAVAILABLE"
   | "ENGINE_START_FAILED"
+  // macOS: the engines could not be copied into the root-owned folder at
+  // launch. The cause is on the machine, so no Retry.
+  | "ENGINE_STAGE_FAILED"
   | "ENGINE_DIED"
   | "PORT_BUSY"
   | "TUN_FAILED"
@@ -227,6 +230,8 @@ const DIRECT_ERROR_ACTION: Record<ErrorCode, ErrorAction> = {
   // The fix is on the machine (install the .deb or pkexec), not a press away.
   ELEVATION_UNAVAILABLE: "contactSupport",
   ENGINE_START_FAILED: "retry",
+  // Connect again finds the same failed copy; a relaunch or support helps.
+  ENGINE_STAGE_FAILED: "contactSupport",
   ENGINE_DIED: "waitAndSee",
   PORT_BUSY: "retry",
   TUN_FAILED: "diagnose",

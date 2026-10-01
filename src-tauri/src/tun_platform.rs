@@ -208,15 +208,61 @@ fn raise_error(err: &anyhow::Error) -> ErrorCode {
 // Up, moved, repaired, down
 // ───────────────────────────────────────────────────────────────────────────
 
+/// What `start` makes of the tunnel it finds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Raise {
+    /// Nothing is up: raise it.
+    Fresh,
+    /// A plan is still recorded but its tun2socks is gone. Nothing clears the
+    /// plan when the engine dies (`is_running` only asks the platform, and
+    /// `restart_engine` needs the plan), so the repair ladder's raise (C1,
+    /// and C2–C4 when the tunnel is down) used to be refused here every time
+    /// and the ladder ended Failed until a manual Retry. The remains are torn
+    /// down and the tunnel raised again, as on macOS.
+    OverDeadEngine,
+    /// A live tunnel: a second raise would fight it for the device.
+    AlreadyUp,
+}
+
+fn raise_kind(plan_recorded: bool, engine_alive: bool) -> Raise {
+    match (plan_recorded, engine_alive) {
+        (false, _) => Raise::Fresh,
+        (true, false) => Raise::OverDeadEngine,
+        (true, true) => Raise::AlreadyUp,
+    }
+}
+
 pub async fn start(
     state: &SharedTunState,
     app: &tauri::AppHandle,
     server_host: &str,
 ) -> Result<(), AppError> {
     let mut guard = state.lock().await;
-    if guard.plan.is_some() {
-        crate::logger::log("error", "tun", "start called while tun is up");
-        return Err(AppError::new(ErrorCode::TunFailed));
+    let recorded = guard.plan.as_ref().map(|plan| plan.server_ip);
+    let alive = match recorded {
+        Some(_) => net::engine_alive().await,
+        None => false,
+    };
+    match raise_kind(recorded.is_some(), alive) {
+        Raise::Fresh => {}
+        Raise::AlreadyUp => {
+            crate::logger::log("error", "tun", "start called while tun is up");
+            return Err(AppError::new(ErrorCode::TunFailed));
+        }
+        Raise::OverDeadEngine => {
+            crate::logger::log(
+                "warn",
+                "tun",
+                "the tunnel's engine is gone; clearing what is left of it before raising again",
+            );
+            // The guard stays held across the teardown, as in `stop`.
+            if let Err(e) = net::down(recorded).await {
+                crate::logger::log("warn", "tun", &format!("teardown of the dead tunnel: {e:#}"));
+            }
+            guard.plan = None;
+            guard.physical = None;
+            forget_route_hint();
+        }
     }
 
     // Before anything is changed: elevation on Windows, the polkit dialog on
@@ -487,6 +533,17 @@ mod tests {
         assert_eq!(raise_error(&offline), ErrorCode::NetworkOffline);
         let routes = anyhow::anyhow!("route 0.0.0.0/1 into proxysvpn0");
         assert_eq!(raise_error(&routes), ErrorCode::TunFailed);
+    }
+
+    /// Windows and Linux: tun2socks died while a plan was recorded. A raise
+    /// must clear the remains and go ahead, not refuse as if the tunnel were
+    /// up — that refusal failed every rung of the repair ladder.
+    #[test]
+    fn a_raise_after_the_engine_died_goes_ahead() {
+        assert_eq!(raise_kind(false, false), Raise::Fresh);
+        assert_eq!(raise_kind(false, true), Raise::Fresh, "an engine of nobody's plan is not ours to fight");
+        assert_eq!(raise_kind(true, false), Raise::OverDeadEngine);
+        assert_eq!(raise_kind(true, true), Raise::AlreadyUp);
     }
 
     #[test]

@@ -91,9 +91,14 @@ Cinnamon and MATE have one). Remove with `sudo apt remove proxys-vpn`.
 - **macOS:** after a crash or Force Quit the engines may keep running until
   ProxysVPN is opened again; opening it cleans them up.
 - **macOS:** the whole app runs as root (the price of not having a signed
-  privileged helper yet); the engines it runs are copied to a root-owned
-  folder at launch, so nothing in the user-writable app bundle runs as root
-  after the password prompt.
+  privileged helper yet). The engines it starts (xray, tun2socks, hysteria)
+  and their geo files are copied to a root-owned folder at launch and run only
+  from there, but the app itself (`Contents/MacOS/ProxysVPN-bin`) and its
+  launcher still run as root straight from the app bundle, which a drag
+  install leaves owned by your account. A program running as your user can
+  therefore replace them, and the replacement runs as root at the next launch
+  when you type your password. The planned fix is a `.pkg` installer with a
+  small privileged helper, so that the window no longer runs as root.
 
 ## Architecture
 
@@ -147,8 +152,10 @@ More in [docs/BUILDING.md](docs/BUILDING.md).
 - **Logs stay on the device:** `~/Library/Logs/ProxysVPN/app.log` (macOS),
   `%LOCALAPPDATA%\ProxysVPN\logs\app.log` (Windows),
   `~/.local/state/ProxysVPN/app.log` (Linux). Node addresses, tokens and the
-  names of sites you open are masked before a line is written. The "Report
-  for support" leaves the device only if you send it yourself.
+  names of sites you open are masked before a line is written; log files an
+  older version left behind are masked the same way once, on the first start
+  of a version whose masking rules changed. The "Report for support" leaves
+  the device only if you send it yourself.
 - **No accounts in the desktop app.** It is tied to your subscription link.
 
 ## Uninstall
@@ -171,9 +178,12 @@ The installers bundle third-party components under their own licences:
 Xray-core (MPL-2.0), Hysteria (MIT), tun2socks (MIT), Wintun on Windows
 (WireGuard LLC prebuilt-binaries licence), Tauri (MIT/Apache-2.0) and others.
 The stock Xray-core and Hysteria binaries also contain GPL-3.0-or-later Go
-modules. The full list, with versions and sources, is in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) and on the app's
-"Open-source licences" screen.
+modules. [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) and the app's
+"Open-source licences" screen list, with versions and sources, the engines,
+every Rust crate and npm package the app links, and those GPL modules. The
+other Go modules compiled into the desktop engines (under MIT, BSD,
+Apache-2.0 and similar licences) are not listed one by one yet;
+`go version -m <engine binary>` prints them.
 
 ## Links
 
