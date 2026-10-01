@@ -92,10 +92,11 @@ The polkit action is `com.proxysvpn.desktop.helper`
 everything still works with a generic prompt. That is what happens in the
 AppImage, which cannot install a policy file.
 
-The action's `exec.path` is `/usr/bin/ProxysVPN`, which is where Tauri should put
-a binary named after `productName`. Confirm on the first CI run — the workflow
-prints `dpkg --contents` — and fix that one line if the bundler names it
-differently.
+The action's `exec.path` is `/usr/bin/proxysvpn-desktop`. Note that this is the
+**Cargo package name**, not `productName`: Tauri uses productName only for the
+`.desktop` entry and `/usr/lib/ProxysVPN`. Verified by unpacking the `.deb` from
+the first CI build, so the dialog gets our wording rather than the generic
+fallback.
 
 The helper refuses to exec a sidecar that is group- or world-writable, or that is
 neither root-owned nor sitting in its own directory; `PROXYSVPN_HELPER_DEV=1`
@@ -187,9 +188,12 @@ this branch is unseen by a compiler.
 
 Verified here:
 
-* the whole crate compiles and all tests pass for macOS (`cargo test`, 50 tests);
-* the Linux modules type-check — they were compiled once with the `cfg` gates
-  lifted, zero errors (they use only `std` and `libc` items that exist on both);
+* the whole workspace compiles and all tests pass on macOS (`cargo test`, 116);
+* the Linux code is **compiled for Linux** — not with the `cfg` gates lifted, but
+  really, for `x86_64-unknown-linux-gnu`, and linted with `clippy -D warnings`.
+  That is possible because the platform layer is its own crate with no
+  tauri/reqwest/rustls, so it has no `ring` and needs no C compiler. Run it with
+  `scripts/check-platform.sh`; CI runs the same commands in the `cross-check` job;
 * `scripts/fetch-binaries.sh` really downloads and sha256-verifies the Linux
   x86_64 **and** aarch64 sidecars; `file` confirms the architectures;
 * tun2socks flag names (`-device`, `-proxy`, `-mtu`, `-loglevel warn`) read from
@@ -197,16 +201,23 @@ Verified here:
 
 **Not** verified, and not verifiable without a Linux machine:
 
-* that the crate links and the `.deb`/AppImage actually build — CI decides;
+* ~~that the crate links and the `.deb`/AppImage build~~ — done on the first green
+  CI run: `ProxysVPN_0.1.0_amd64.deb` (41 MB) and `ProxysVPN_0.1.0_amd64.AppImage`
+  (114 MB). Neither has been **launched**, which is the next line;
+* that the app actually starts, shows a window and raises a tunnel. Nothing below
+  this point has run on a Linux machine even once;
 * that `tun2socks -device tun://proxysvpn0` creates the device under the name we
   then configure;
 * `pkexec` behaviour in a real desktop session (Wayland and X11), with and
   without our policy file, and inside an AppImage;
-* that `/usr/bin/ProxysVPN` is the path the `.deb` really installs;
+* ~~that the `.deb` installs the binary where the policy expects~~ — confirmed on
+  the first CI build: `usr/bin/proxysvpn-desktop`, root:root 0755, and the
+  sidecars beside it are root-owned too, so the helper's trust check passes;
 * whether `resolvectl domain '~.'` is enough on distros where NetworkManager
   manages DNS itself, and whether the `/etc/resolv.conf` fallback survives a
   NetworkManager rewrite (the supervisor re-applies it, but only every 5 s);
 * tray behaviour on desktops without an AppIndicator host (the window close is
   allowed to quit there, instead of hiding into a tray that does not exist);
-* aarch64 Linux end to end — the CI job for it is behind a `workflow_dispatch`
-  input because ARM runners are not always available.
+* aarch64 Linux end to end; the matrix builds x86_64 only, since ARM runners are
+  not reliably available;
+* the AppImage interior — it builds, but it was not unpacked on the build Mac.
