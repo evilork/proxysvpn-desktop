@@ -6,6 +6,13 @@ description = "Platform layer for ProxysVPN Desktop: elevation, paths, TUN devic
 authors = ["ProxysVPN"]
 publish = false
 
+# The root helper on its own, for the AppImage (src/bin/proxysvpn-helper.rs).
+# The GUI depends on the library only, so building the app does not build it;
+# tauri.linux.conf.json does, before the bundle.
+[[bin]]
+name = "proxysvpn-helper"
+path = "src/bin/proxysvpn-helper.rs"
+
 # Deliberately free of tauri/reqwest/rustls so that
 #   cargo check -p pvpn-platform --target x86_64-pc-windows-msvc
 # works on a machine without the MSVC toolchain (nothing here needs a C
