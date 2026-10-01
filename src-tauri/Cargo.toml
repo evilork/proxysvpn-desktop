@@ -3,7 +3,7 @@ members = ["crates/pvpn-platform"]
 
 [package]
 name = "proxysvpn-desktop"
-version = "0.3.1"
+version = "0.3.2"
 description = "ProxysVPN Desktop"
 authors = ["ProxysVPN"]
 edition = "2021"
