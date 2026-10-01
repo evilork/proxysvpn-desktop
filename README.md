@@ -152,8 +152,10 @@ More in [docs/BUILDING.md](docs/BUILDING.md).
 - **Logs stay on the device:** `~/Library/Logs/ProxysVPN/app.log` (macOS),
   `%LOCALAPPDATA%\ProxysVPN\logs\app.log` (Windows),
   `~/.local/state/ProxysVPN/app.log` (Linux). Node addresses, tokens and the
-  names of sites you open are masked before a line is written. The "Report
-  for support" leaves the device only if you send it yourself.
+  names of sites you open are masked before a line is written; log files an
+  older version left behind are masked the same way once, on the first start
+  of a version whose masking rules changed. The "Report for support" leaves
+  the device only if you send it yourself.
 - **No accounts in the desktop app.** It is tied to your subscription link.
 
 ## Uninstall
