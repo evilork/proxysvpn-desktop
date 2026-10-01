@@ -122,3 +122,29 @@ SDK. That is exactly why the platform layer is a separate crate.
 * behaviour on logoff/shutdown: there is no reliable notification for a GUI
   process, so the design relies on `store=active` plus route-hint cleanup rather
   than on a teardown handler.
+
+## Content security policy
+
+`tauri.conf.json` carries a policy now (it used to be `"csp": null`), which
+matters more here than on Linux because the WebView runs elevated:
+
+```
+default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
+img-src 'self' data:; font-src 'self' data:;
+connect-src 'self' ipc: http://ipc.localhost;
+object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'
+```
+
+`'unsafe-inline'` for styles because the UI uses a few `style=` attributes, and
+`data:` for images because the pairing QR code is a data URL. Everything the app
+fetches over the network is fetched by Rust, so the WebView itself needs no
+outside origin — `connect-src` only has to cover Tauri's own IPC, which is
+`ipc:` on macOS and `http://ipc.localhost` on Windows and Linux.
+
+Verified against the real production bundle (`dist/`) by serving it with this
+exact policy and loading it in a browser: the bundle executes, React mounts, the
+stylesheet applies, the `style=` attributes take effect and a `data:` image
+loads, with no CSP violation reported. What that does **not** cover is Tauri's
+own IPC under the policy, because the test page had no Tauri runtime — if a
+command call ever fails with a CSP error in the console, `connect-src` is where
+to look.
