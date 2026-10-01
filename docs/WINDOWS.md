@@ -94,6 +94,18 @@ crash or "End task" takes xray, hysteria and tun2socks along. There is
 deliberately no `taskkill /IM` sweep: it would also stop another VPN client's
 `tun2socks.exe` or `xray.exe`.
 
+**The installer stops the running app itself.** Tauri's own check before files
+are copied or removed ("ProxysVPN is running, press OK to close it") failed to
+close the elevated tray app once in three upgrades on a Windows 11 VM and
+aborted the install. `src-tauri/nsis/installer-hooks.nsh` (wired in through
+`bundle.windows.nsis.installerHooks`) runs first, in both
+`NSIS_HOOK_PREINSTALL` and `NSIS_HOOK_PREUNINSTALL`: `taskkill /F /T` on our own
+main binary only — the engines are its children and in its job object — then a
+bounded wait until the process is gone. An app that is not running is the
+normal case and never fails the install. The uninstallers of 0.3.2 and earlier
+carry no hook, so the very first upgrade from them still goes through the old
+check once.
+
 **Paths.** State lives in `%LOCALAPPDATA%\ProxysVPN` (hysteria config, route
 hint, the subscription link, device id and preferences) and logs in
 `%LOCALAPPDATA%\ProxysVPN\logs\app.log`. Not `%PROGRAMDATA%`:
