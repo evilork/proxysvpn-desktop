@@ -38,7 +38,7 @@ use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
 use windows::Win32::NetworkManagement::IpHelper::{
     ConvertInterfaceAliasToLuid, ConvertInterfaceIndexToLuid, ConvertInterfaceLuidToAlias,
     ConvertInterfaceLuidToIndex, FreeMibTable, GetBestRoute2, GetExtendedTcpTable, GetIfEntry2,
-    GetIpForwardTable2, GetIpInterfaceEntry, MIB_IF_ROW2, MIB_IPFORWARD_ROW2,
+    GetIfTable2, GetIpForwardTable2, GetIpInterfaceEntry, MIB_IF_ROW2, MIB_IF_TABLE2, MIB_IPFORWARD_ROW2,
     MIB_IPFORWARD_TABLE2, MIB_IPINTERFACE_ROW, MIB_TCP6ROW_OWNER_PID, MIB_TCP6TABLE_OWNER_PID,
     MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER,
 };
@@ -510,10 +510,16 @@ pub async fn wait_for_device(timeout: Duration) -> Result<()> {
 }
 
 pub async fn configure_device() -> Result<()> {
-    p::device_set_address()
-        .run()
-        .await
-        .with_context(|| format!("assign IP to {}", DEVICE))?;
+    if let Err(e) = p::device_set_address().run().await {
+        // netsh's own words are logged by `run`; this names what it worked
+        // on. A second "ProxysVPN 2" or a stale adapter under our name is the
+        // first thing to rule out (a Windows VM, 02.10.2026).
+        log::warn(
+            "net",
+            &format!("adapters named {}*: {}; we picked index {:?}", DEVICE, describe_devices(), device_index().ok()),
+        );
+        return Err(e).with_context(|| format!("assign IP to {}", DEVICE));
+    }
     // Not fatal: the split routes are more specific than any physical default,
     // so a failed metric change degrades predictability, not connectivity.
     if let Err(e) = p::device_set_metric().run().await {
@@ -526,6 +532,42 @@ pub async fn configure_device() -> Result<()> {
         .await
         .context("clear DNS servers on the tunnel adapter")?;
     Ok(())
+}
+
+/// Every interface whose alias starts with our adapter's name, with its
+/// index and states, for the log when configuring it fails.
+fn describe_devices() -> String {
+    let mut table: *mut MIB_IF_TABLE2 = std::ptr::null_mut();
+    // SAFETY: `table` is an out-pointer that IP Helper allocates; it is freed
+    // with FreeMibTable below on every path that reaches it.
+    let err = unsafe { GetIfTable2(&mut table) };
+    if err != NO_ERROR || table.is_null() {
+        return format!("interface table unreadable ({err:?})");
+    }
+    let wanted = DEVICE.to_lowercase();
+    let mut found = Vec::new();
+    // SAFETY: the table is non-null (NO_ERROR) and NumEntries describes the
+    // length of the trailing Table array; nothing escapes the loop by pointer.
+    unsafe {
+        let entries = (*table).NumEntries as usize;
+        let rows = std::slice::from_raw_parts((*table).Table.as_ptr(), entries);
+        for row in rows {
+            let len = row.Alias.iter().position(|&c| c == 0).unwrap_or(row.Alias.len());
+            let alias = String::from_utf16_lossy(&row.Alias[..len]);
+            if alias.to_lowercase().starts_with(&wanted) {
+                found.push(format!(
+                    "{alias} (index {}, oper {}, media {})",
+                    row.InterfaceIndex, row.OperStatus.0, row.MediaConnectState.0
+                ));
+            }
+        }
+        FreeMibTable(table as *const _);
+    }
+    if found.is_empty() {
+        "none".to_string()
+    } else {
+        found.join("; ")
+    }
 }
 
 pub async fn device_down() {
