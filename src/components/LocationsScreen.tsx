@@ -135,10 +135,14 @@ export default function LocationsScreen({
   const recent = items?.filter((entry) => entry.recent) ?? [];
   const all = items ?? [];
 
-  /** The name exactly as the service wrote it: «Британия · XHTTP». */
+  /**
+   * The whole name the service wrote, «Британия · XHTTP». The badge after «·»
+   * goes through `displayLocation` too: «Амстердам · резерв» is
+   * "Amsterdam · reserve" in an English window, not "Amsterdam · резерв".
+   */
   const titleOf = (entry: LocationEntry, index: number) => {
     const base = entry.label ? displayLocation(entry.label, lang) : t("loc.unnamed", { n: index + 1 });
-    return entry.note ? `${base} · ${entry.note}` : base;
+    return entry.note ? `${base} · ${displayLocation(entry.note, lang)}` : base;
   };
 
   const renderRow = (entry: LocationEntry, index: number) => (
