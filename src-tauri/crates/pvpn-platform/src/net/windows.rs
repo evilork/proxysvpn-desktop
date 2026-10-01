@@ -16,18 +16,17 @@
 //             cheapest possible crash recovery.
 //
 // The device itself is created by tun2socks (wireguard-go's Wintun driver),
-// exactly as utun225 is on macOS, with a new random GUID on every start.
-// Wintun publishes the requested name as the interface alias and the device
-// disappears together with the process that owns it — so a hard kill of
-// tun2socks takes the adapter and all of its routes with it. Windows keeps
-// the interface of the removed device, though, alias included: such a
-// leftover can hold "ProxysVPN" while the new adapter gets another name
-// (seen on a Windows 11 VM, 02.10.2026). So the adapter is found among the
-// *present* interfaces (`plan::windows::pick_device`), leftovers under our
-// name are removed before tun2socks starts (`free_device_name`), and every
-// netsh write names the adapter by index, never by alias. The other thing
-// that can outlive a crash is the /32 host route to the node, which
-// `sync_cleanup` removes from the route hint on the next start.
+// exactly as utun225 is on macOS. Wintun publishes the requested name as the
+// interface alias and the device disappears together with the process that
+// owns it — so a hard kill of tun2socks takes the adapter and all of its
+// routes with it. A fresh adapter is not usable at once, though: it arrives
+// (not present → present), comes up, and only then gets its IPv4 interface.
+// netsh asked any earlier answers «Элемент не найден» (a Windows 11 VM,
+// 02.10.2026). So the adapter is chosen among the *present* interfaces
+// (`plan::windows::pick_device`), configured once it is up with IPv4 bound
+// (`wait_for_device`), and every netsh write names it by index, never by
+// alias. The only thing that can outlive a crash is the /32 host route to the
+// node, which `sync_cleanup` removes from the route hint on the next start.
 //
 // UNVERIFIED on real hardware (no Windows machine on the dev box, see PR):
 //   * that `-device ProxysVPN` makes tun2socks create a Wintun adapter whose
@@ -126,44 +125,6 @@ fn adapter_rows() -> Result<Vec<p::AdapterRow>> {
         FreeMibTable(table as *const _);
     }
     Ok(out)
-}
-
-/// How long removing one leftover adapter may take before we go on without.
-const STALE_REMOVAL_LIMIT: Duration = Duration::from_secs(10);
-
-/// Free our adapter name before tun2socks asks for it: remove what is left
-/// of earlier adapters under that name whose device is gone. Best effort —
-/// `device_index` copes with a leftover that stays — but with the name free
-/// the new adapter gets exactly "ProxysVPN" again.
-async fn free_device_name() {
-    let rows = match adapter_rows() {
-        Ok(rows) => rows,
-        Err(e) => {
-            log::warn("net", &format!("{e:#}"));
-            return;
-        }
-    };
-    for stale in p::stale_devices(&rows) {
-        let Some(argv) = p::remove_stale_device(&stale.guid) else {
-            log::warn("net", &format!("leftover {} (index {}) has no usable GUID", stale.alias, stale.index));
-            continue;
-        };
-        // Bounded: connecting must never hang on housekeeping.
-        match argv.output_within(STALE_REMOVAL_LIMIT).await {
-            Ok(out) if out.status.success() => log::info(
-                "net",
-                &format!("leftover {} (index {}, device gone): removed", stale.alias, stale.index),
-            ),
-            Ok(out) => log::warn(
-                "net",
-                &format!(
-                    "leftover {} (index {}) not removed: pnputil {}",
-                    stale.alias, stale.index, out.status
-                ),
-            ),
-            Err(e) => log::warn("net", &format!("could not remove leftover {}: {e:#}", stale.alias)),
-        }
-    }
 }
 
 /// Interface the OS would currently use to reach `dest`.
@@ -566,15 +527,60 @@ pub async fn split_defaults_ok() -> bool {
     low && high
 }
 
+/// (OperStatus is Up, the IPv4 interface exists) for interface `index`.
+fn device_state(index: u32) -> (bool, bool) {
+    let mut row = MIB_IF_ROW2::default();
+    // SAFETY: the second argument is the LUID field of a live, zero-initialised row.
+    if unsafe { ConvertInterfaceIndexToLuid(index, &mut row.InterfaceLuid) } != NO_ERROR {
+        return (false, false);
+    }
+    // SAFETY: `row` is a live MIB_IF_ROW2 whose key (InterfaceLuid) is set.
+    let up = unsafe { GetIfEntry2(&mut row) } == NO_ERROR && row.OperStatus.0 == p::OPER_UP;
+    let mut iface = MIB_IPINTERFACE_ROW {
+        Family: AF_INET,
+        InterfaceLuid: row.InterfaceLuid,
+        InterfaceIndex: index,
+        ..Default::default()
+    };
+    // SAFETY: `iface` is a live, zero-initialised row with the key fields
+    // filled in, which is what GetIpInterfaceEntry requires.
+    let ipv4 = unsafe { GetIpInterfaceEntry(&mut iface) } == NO_ERROR;
+    (up, ipv4)
+}
+
+/// Wait until the adapter tun2socks creates can take an address: present,
+/// up, and with its IPv4 interface bound.
+///
+/// Present is not enough. On a Windows 11 VM (02.10.2026) netsh was asked
+/// the moment the alias resolved: first while the adapter was still arriving
+/// (OperStatus 6, not present), then — with presence checked — while it was
+/// present but down (OperStatus 2) with no IPv4 interface yet. Both times
+/// netsh said «Элемент не найден» and the connect failed; 0.3.1 had only
+/// been lucky with the timing.
 pub async fn wait_for_device(timeout: Duration) -> Result<()> {
     let step = Duration::from_millis(100);
     let attempts = (timeout.as_millis() / step.as_millis().max(1)).max(1) as u32;
+    let mut bound_but_down = false;
     for _ in 0..attempts {
         tokio::time::sleep(step).await;
-        if device_index().is_ok() {
-            return Ok(());
+        if let Ok(index) = device_index() {
+            let (up, ipv4) = device_state(index);
+            if up && ipv4 {
+                return Ok(());
+            }
+            bound_but_down = ipv4;
         }
     }
+    if bound_but_down {
+        // An address can be set on a down interface once IPv4 is bound;
+        // configure_device retries if Windows still is not ready.
+        log::warn(
+            "net",
+            &format!("{} is still down after {}s; configuring it anyway", DEVICE, timeout.as_secs()),
+        );
+        return Ok(());
+    }
+    log::warn("net", &format!("adapters named {}*: {}", DEVICE, describe_devices()));
     Err(anyhow!(
         "{} did not come up within {}s — проверьте, что wintun.dll лежит рядом с tun2socks.exe",
         DEVICE,
@@ -582,9 +588,23 @@ pub async fn wait_for_device(timeout: Duration) -> Result<()> {
     ))
 }
 
+/// Attempts at addressing a fresh adapter, and the pause between them.
+const ADDRESS_TRIES: u32 = 4;
+const ADDRESS_RETRY_PAUSE: Duration = Duration::from_millis(750);
+
 pub async fn configure_device() -> Result<()> {
     let index = device_index().with_context(|| format!("assign IP to {}", DEVICE))?;
-    if let Err(e) = p::device_set_address(index).run().await {
+    let mut tries = 0;
+    let assigned = loop {
+        tries += 1;
+        match p::device_set_address(index).run().await {
+            Ok(()) => break Ok(()),
+            Err(e) if tries >= ADDRESS_TRIES => break Err(e),
+            // Windows can still be binding IPv4 to a fresh adapter.
+            Err(_) => tokio::time::sleep(ADDRESS_RETRY_PAUSE).await,
+        }
+    };
+    if let Err(e) = assigned {
         // netsh's own words are logged by `run`; this names what it worked
         // on. A second "ProxysVPN 2" or a stale adapter under our name is the
         // first thing to rule out (a Windows VM, 02.10.2026).
@@ -705,12 +725,6 @@ impl Privileged for Windows {
 
     fn tun2socks_argv(bin: &Path, socks_port: u16) -> Argv {
         p::tun2socks(bin, socks_port)
-    }
-
-    async fn start_engine(bin: &Path, socks_port: u16) -> Result<()> {
-        free_device_name().await;
-        let argv = Self::tun2socks_argv(bin, socks_port);
-        super::engine::spawn(bin, &argv.args).await
     }
 
     async fn physical_route() -> Result<PhysicalRoute> {

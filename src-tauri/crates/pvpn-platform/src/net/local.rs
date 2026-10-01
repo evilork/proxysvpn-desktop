@@ -27,8 +27,10 @@ use crate::log;
 use crate::net::{engine, PhysicalRoute, TeardownStep, TunPlan, TEARDOWN_ORDER, TUNNEL_ENGINE};
 use crate::process::Argv;
 
-/// How long the device may take to appear after tun2socks starts.
-const DEVICE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the device may take to appear after tun2socks starts. Ten
+/// seconds, not five: a Wintun adapter on a slow Windows machine (an x64
+/// tun2socks emulated on ARM, 02.10.2026) took longer than five to come up.
+const DEVICE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The steps one privileged platform provides. Implemented by a zero-sized type
 /// in `macos.rs` and `windows.rs`; never used as `dyn`, so the async methods
