@@ -29,7 +29,8 @@ pub enum ErrorCode {
     /// Every address on the fallback ladder failed. Usually the user's own
     /// network, which is exactly why the ladder exists.
     SubUnreachable,
-    /// Server answered, body is not a subscription we can read.
+    /// Server answered, body is not a subscription we can read. Also a
+    /// redeemed pair code whose answer carries a link we refuse to keep.
     SubInvalid,
     /// Server answered with a valid, genuinely empty list.
     SubEmpty,
@@ -53,6 +54,19 @@ pub enum ErrorCode {
     NoDevices,
     /// Some other notice from the server; `detail` holds its text.
     SubNotice,
+
+    // ── Pair code: eight characters from the cabinet or the bot ────────────
+    // Answers of `POST /api/pair/code` (pair_code.rs). They are met on the
+    // sign-in screen only, under the code field, never on a failure screen.
+    /// Not eight characters of the code alphabet: said by the app before
+    /// anything is sent, or by the service (400 `bad_code`).
+    PairCodeMalformed,
+    /// Wrong, expired or already used. One answer for all three on purpose:
+    /// the service gives no oracle, and the remedy is the same new code.
+    PairCodeNotFound,
+    /// Too many attempts from this address. `detail` holds the Retry-After
+    /// seconds as a decimal number.
+    PairRateLimited,
 
     // ── Bringing the tunnel up ─────────────────────────────────────────────
     /// The user dismissed the administrator prompt.
@@ -212,6 +226,18 @@ mod tests {
     fn ping_not_applicable_keeps_its_wire_name() {
         let payload = AppError::new(ErrorCode::PingNotApplicable).to_payload();
         assert_eq!(payload, r#"{"code":"PING_NOT_APPLICABLE"}"#);
+    }
+
+    #[test]
+    fn pair_code_errors_keep_their_wire_names() {
+        // src/types.ts and src/pairCode.ts match on these exact strings.
+        for (code, wire) in [
+            (ErrorCode::PairCodeMalformed, "PAIR_CODE_MALFORMED"),
+            (ErrorCode::PairCodeNotFound, "PAIR_CODE_NOT_FOUND"),
+            (ErrorCode::PairRateLimited, "PAIR_RATE_LIMITED"),
+        ] {
+            assert_eq!(AppError::new(code).to_payload(), format!(r#"{{"code":"{wire}"}}"#));
+        }
     }
 
     #[test]

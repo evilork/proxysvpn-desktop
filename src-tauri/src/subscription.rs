@@ -372,7 +372,7 @@ pub struct Subscription {
 /// (`sub:<token>:hwid`), not on the site name, so walking the ladder does not
 /// weaken "one link — one device". For the same reason `/api/vpn/sub-alt` is
 /// never called from here: that endpoint deliberately CLEARS the binding.
-const RESERVE_HOSTS: &[&str] = &[
+pub(crate) const RESERVE_HOSTS: &[&str] = &[
     "proxysvnovich.vercel.app",
     "proksya.com",
     "proksya.xyz",

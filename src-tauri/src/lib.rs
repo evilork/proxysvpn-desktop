@@ -39,6 +39,7 @@ mod probe;
 mod netmem;
 mod manifest;
 mod motion;
+mod pair_code;
 mod site_ladder;
 mod subscription;
 mod tunnel_prefs;
@@ -196,7 +197,9 @@ const CABINET_PATH: &str = "/dashboard";
 
 /// Sites that can serve the cabinet and the pairing endpoints, in the order
 /// measurement put them (mirrors the ladder in subscription.rs; these are site
-/// names, never node addresses).
+/// names, never node addresses). Also the only names a link delivered by a
+/// pair code may live on (pair_code.rs); a test keeps it the same set as
+/// `subscription::RESERVE_HOSTS`.
 const SITE_LADDER: [&str; 4] = [
     "proxysvpn.com",
     "proxysvnovich.vercel.app",
@@ -3246,23 +3249,9 @@ async fn pair_poll(core: tauri::State<'_, Arc<Core>>, token: String) -> Cmd<Pair
         },
     );
     if let PairOutcome::Linked(link) = outcome {
-        let link = match validate_link(&link) {
-            Ok(link) => link,
-            Err(e) => {
-                // Токен уже погашен сервером: ссылка потеряна навсегда, и
-                // человеку придётся просить новый код. Молчать тут нельзя.
-                logger::log("error", "pair", &format!("link rejected: {e}"));
-                return Err(e.to_payload());
-            }
-        };
-        if let Err(e) = store_link(&link) {
-            logger::log("error", "pair", &format!("link not stored: {e}"));
-            return Err(e.to_payload());
-        }
-        logger::log("info", "pair", "link stored");
-        let mut s = core.session.lock().await;
-        s.servers.clear();
-        s.sub_fetched_at = None;
+        adopt_paired_link(&core, &link)
+            .await
+            .map_err(|e| e.to_payload())?;
         return Ok(PairStatus::Linked);
     }
     Ok(match outcome {
@@ -3270,6 +3259,59 @@ async fn pair_poll(core: tauri::State<'_, Arc<Core>>, token: String) -> Cmd<Pair
         PairOutcome::Expired => PairStatus::Expired,
         PairOutcome::Linked(_) => PairStatus::Linked,
     })
+}
+
+/// Pair code v1: the eight characters from the cabinet or the bot, typed on
+/// the sign-in screen. On success the link is kept exactly as a scanned QR
+/// keeps it, and the window connects the same way.
+///
+/// The log gets the outcome class and nothing else: never the code, never
+/// the link (pair_code.rs).
+#[tauri::command]
+async fn redeem_pair_code(core: tauri::State<'_, Arc<Core>>, code: String) -> Cmd<()> {
+    let core = core.inner().clone();
+    let wire = site_ladder::HttpWire::new(http_client().map_err(|e| e.to_payload())?);
+    let link = match pair_code::redeem(&wire, &SITE_LADDER, &code).await {
+        Ok(link) => link,
+        Err(e) => {
+            // A wrong or spent code is the person's everyday, not our error.
+            let level = match e.code {
+                ErrorCode::PairCodeMalformed | ErrorCode::PairCodeNotFound | ErrorCode::PairRateLimited => {
+                    "info"
+                }
+                _ => "error",
+            };
+            logger::log(level, "pair", &format!("code not redeemed: {:?}", e.code));
+            return Err(e.to_payload());
+        }
+    };
+    logger::log("info", "pair", "code redeemed: link arrived");
+    adopt_paired_link(&core, &link)
+        .await
+        .map_err(|e| e.to_payload())
+}
+
+/// A pairing delivered a link, by QR or by code: keep it, and forget the list
+/// fetched for whatever link came before, so the next connect reads this one.
+async fn adopt_paired_link(core: &Core, link: &str) -> Result<(), AppError> {
+    let link = match validate_link(link) {
+        Ok(link) => link,
+        Err(e) => {
+            // Токен уже погашен сервером: ссылка потеряна навсегда, и
+            // человеку придётся просить новый код. Молчать тут нельзя.
+            logger::log("error", "pair", &format!("link rejected: {e}"));
+            return Err(e);
+        }
+    };
+    if let Err(e) = store_link(&link) {
+        logger::log("error", "pair", &format!("link not stored: {e}"));
+        return Err(e);
+    }
+    logger::log("info", "pair", "link stored");
+    let mut s = core.session.lock().await;
+    s.servers.clear();
+    s.sub_fetched_at = None;
+    Ok(())
 }
 
 #[tauri::command]
@@ -4297,6 +4339,7 @@ pub fn run() {
             logs_page,
             pair_start,
             pair_poll,
+            redeem_pair_code,
             onboarding_state,
             onboarding_run,
             app_info,
@@ -4828,6 +4871,31 @@ mod tests {
         assert!(!is_pair_token("0123456789ABCDEF0123456789ABCDEF"));
         assert!(!is_pair_token("short"));
         assert!(!is_pair_token("0123456789abcdef0123456789abcdeg"));
+    }
+
+    #[test]
+    fn the_pairing_ladder_and_the_subscription_ladder_name_the_same_sites() {
+        // A pair-code link is kept only on a SITE_LADDER name; the
+        // subscription is then fetched over RESERVE_HOSTS. A site added to one
+        // and not the other would either refuse good links or fetch from a
+        // name the code never vouched for.
+        let mut pairing: Vec<String> = SITE_LADDER.iter().map(|h| h.to_ascii_lowercase()).collect();
+        let mut fetching: Vec<String> =
+            subscription::RESERVE_HOSTS.iter().map(|h| h.to_ascii_lowercase()).collect();
+        pairing.sort();
+        fetching.sort();
+        assert_eq!(pairing, fetching);
+    }
+
+    #[test]
+    fn a_link_a_pair_code_delivers_is_one_the_store_keeps() {
+        // pair_code::accept_pair_link is the stricter gate; whatever it lets
+        // through must also pass the gate every stored link goes through.
+        for host in SITE_LADDER {
+            let raw = format!("https://{host}/api/sub/abcdef0123456789?lang=en");
+            let accepted = pair_code::accept_pair_link(&raw, &SITE_LADDER).expect("ours");
+            assert_eq!(validate_link(&accepted).map_err(|e| e.code), Ok(accepted.clone()));
+        }
     }
 
     // ── local facts ────────────────────────────────────────────────────────
