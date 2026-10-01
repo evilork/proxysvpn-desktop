@@ -63,6 +63,16 @@ pub const FRONT_SOCKS_PORT: u16 = 10808;
 /// into an observation.
 const START_SETTLE_MS: u64 = 500;
 
+/// How long a started xray gets to open its SOCKS port, and how often we look.
+///
+/// "Did not exit" is not "ready". On a Windows 11 VM (02.10.2026, x64 xray
+/// emulated on ARM) xray needed about two seconds to listen, and the probe
+/// that follows a location change ran into a closed port, failed, and started
+/// the repair ladder, whose every rung restarted xray and probed too early
+/// again until the connection was declared broken.
+const LISTEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+const LISTEN_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
 #[derive(Default)]
 pub struct XrayState {
     child: Option<Engine>,
@@ -460,6 +470,24 @@ pub async fn start(
             child.stop().await;
             return Err(AppError::new(ErrorCode::EngineStartFailed));
         }
+    }
+
+    let deadline = tokio::time::Instant::now() + LISTEN_TIMEOUT;
+    while !port_in_use(FRONT_SOCKS_PORT).await {
+        if let Ok(Some(status)) = child.try_wait() {
+            crate::logger::log("error", "xray", &format!("exited before listening: {status}"));
+            return Err(AppError::new(ErrorCode::EngineStartFailed));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            // Not fatal: the probe that follows decides whether traffic flows.
+            crate::logger::log(
+                "warn",
+                "xray",
+                &format!("SOCKS port not open after {}s; going on", LISTEN_TIMEOUT.as_secs()),
+            );
+            break;
+        }
+        tokio::time::sleep(LISTEN_POLL).await;
     }
 
     guard.child = Some(child);
