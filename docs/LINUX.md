@@ -133,6 +133,17 @@ bounded at 64 KiB. polkit's `auth_admin_keep` means an authorization earned by
 one connect is reusable without a password for the rest of the keep window, so
 the helper assumes its peer may not be our GUI.
 
+Checking the port number is not enough on its own. The 0.3.1 core restarts xray
+with the tunnel up (a location change, a revived engine), and between the stop
+and the start nobody listens on 127.0.0.1:10808 — any local user could bind it
+and receive the whole machine's traffic from our root tun2socks. So the helper
+also reads `/proc/net/tcp{,6}` on `Up` and on every `Ensure` tick: a listener
+that a connection to 127.0.0.1:<port> could reach must belong to root or to
+`PKEXEC_UID`. On `Up` a stranger is refused; on `Ensure` the helper lowers the
+tunnel and says why, and the GUI then reports protection as dropped. An empty
+port is fine: that is the restart itself. Windows does the same against its TCP
+table and the pids of its own engines (`net/windows.rs`).
+
 ### Teardown
 
 * normal quit — the GUI closes the pipe, the helper tears down and exits;

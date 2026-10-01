@@ -84,6 +84,22 @@ pub trait Privileged {
     async fn stop_engine() {
         engine::kill().await
     }
+
+    /// `Some(who)` when a process that is not one of our engines listens
+    /// where tun2socks connects (127.0.0.1:`port`). Every packet of the
+    /// machine goes there once the split defaults are in, and between the
+    /// stop and the start of an xray restart the port is free for anyone to
+    /// take. Defaulted to "nobody": macOS keeps exactly what it did; Windows
+    /// asks its TCP table (net::windows).
+    async fn socks_port_stranger(_port: u16) -> Option<String> {
+        None
+    }
+}
+
+/// The error for a SOCKS port held by someone else. Russian, like the other
+/// messages of this layer that reach the person through a failure.
+fn stranger_error(port: u16, who: &str) -> anyhow::Error {
+    anyhow!("порт {port} занят чужой программой ({who}) — туннель на него не направлен")
 }
 
 /// Raise the tunnel.
@@ -139,6 +155,13 @@ pub async fn up<P: Privileged>(plan: &TunPlan) -> Result<()> {
         return Err(undo("configure the device", e).await);
     }
 
+    // The last moment before the machine is pointed at the SOCKS port.
+    if let Some(who) = P::socks_port_stranger(plan.socks_port).await {
+        P::stop_engine().await;
+        P::delete_host_route(plan.server_ip).await;
+        return Err(undo("check the SOCKS port", stranger_error(plan.socks_port, &who)).await);
+    }
+
     if let Err(e) = P::add_split_defaults().await {
         P::delete_split_defaults().await;
         P::stop_engine().await;
@@ -167,6 +190,17 @@ pub async fn up<P: Privileged>(plan: &TunPlan) -> Result<()> {
 /// while the engine stays alive; without this the app looks connected and
 /// nothing flows.
 pub async fn ensure<P: Privileged>(plan: &TunPlan) -> Result<()> {
+    // Someone else took the port the machine is pointed at — while xray
+    // restarted, typically. Lower the tunnel rather than keep feeding them:
+    // the GUI sees the engine gone and says protection dropped, and its next
+    // `up` is refused for as long as the stranger holds the port.
+    if let Some(who) = P::socks_port_stranger(plan.socks_port).await {
+        let refusal = stranger_error(plan.socks_port, &who);
+        log::warn("watchdog", &format!("{refusal:#}"));
+        down::<P>(Some(plan.server_ip)).await?;
+        return Err(refusal);
+    }
+
     let mut trouble: Option<anyhow::Error> = None;
 
     if !P::host_route_ok(plan.server_ip).await {
@@ -250,6 +284,8 @@ mod tests {
     static CALLS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
     /// Name of the step that should fail, to exercise one rollback path.
     static FAIL_AT: Mutex<Option<&'static str>> = Mutex::new(None);
+    /// Who the fake says listens on the SOCKS port, when it is not us.
+    static STRANGER: Mutex<Option<&'static str>> = Mutex::new(None);
     /// Serialises the tests that share the two statics above. A tokio mutex and
     /// not a std one: the guard is held across awaits for the whole scenario,
     /// which is exactly what `clippy::await_holding_lock` forbids for std.
@@ -268,6 +304,7 @@ mod tests {
         let guard = GUARD.lock().await;
         CALLS.lock().expect("calls").clear();
         *FAIL_AT.lock().expect("fail_at") = fail_at;
+        *STRANGER.lock().expect("stranger") = None;
         guard
     }
 
@@ -354,6 +391,11 @@ mod tests {
 
         async fn stop_engine() {
             let _ = record("stop_engine");
+        }
+
+        // Not recorded: the step sequences pinned above stay as they were.
+        async fn socks_port_stranger(_port: u16) -> Option<String> {
+            STRANGER.lock().expect("stranger").map(str::to_string)
         }
     }
 
@@ -517,6 +559,42 @@ mod tests {
             .await
             .expect("no-op");
         assert!(calls().is_empty(), "{:?}", calls());
+    }
+
+    /// A stranger on the SOCKS port before the split defaults go in: the
+    /// machine is never pointed at it, and what was raised is undone.
+    #[tokio::test]
+    async fn up_refuses_a_socks_port_held_by_a_stranger() {
+        let _g = begin(None).await;
+        *STRANGER.lock().expect("stranger") = Some("pid 4242");
+        let err = up::<Fake>(&plan()).await.expect_err("must refuse");
+        assert!(format!("{err:#}").contains("pid 4242"), "{err:#}");
+        let log = calls();
+        assert!(!log.contains(&"add_split_defaults"), "{log:?}");
+        assert!(log.contains(&"stop_engine"), "{log:?}");
+        assert!(log.contains(&"delete_host_route"), "{log:?}");
+    }
+
+    /// A stranger that took the port while xray restarted: the supervisor
+    /// lowers the whole tunnel instead of re-asserting routes into it.
+    #[tokio::test]
+    async fn ensure_lowers_the_tunnel_when_a_stranger_holds_the_socks_port() {
+        let _g = begin(None).await;
+        *STRANGER.lock().expect("stranger") = Some("pid 4242");
+        let err = ensure::<Fake>(&plan()).await.expect_err("must report");
+        assert!(format!("{err:#}").contains("pid 4242"), "{err:#}");
+        assert_eq!(
+            calls(),
+            vec![
+                "delete_split_defaults",
+                "delete_host_route",
+                "restore_dns",
+                "device_down",
+                "stop_engine",
+                "kill_stray",
+            ],
+            "the published teardown, and no repair"
+        );
     }
 
     #[tokio::test]

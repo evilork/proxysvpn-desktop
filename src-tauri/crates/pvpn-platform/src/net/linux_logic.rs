@@ -166,6 +166,76 @@ pub fn parse_ipv6_physical_default(text: &str) -> bool {
     })
 }
 
+/// TCP state LISTEN in `/proc/net/tcp{,6}`.
+const TCP_LISTEN: &str = "0A";
+
+/// Decode a `/proc/net/tcp6` address: 32 hex digits, four 32-bit words, each
+/// in host byte order (little-endian on every platform we ship).
+fn hex_le_to_ipv6(field: &str) -> Option<std::net::Ipv6Addr> {
+    if field.len() != 32 || !field.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut octets = [0u8; 16];
+    for (word, chunk) in octets.chunks_exact_mut(4).enumerate() {
+        let hex = field.get(word * 8..word * 8 + 8)?;
+        let raw = u32::from_str_radix(hex, 16).ok()?;
+        chunk.copy_from_slice(&raw.to_le_bytes());
+    }
+    Some(std::net::Ipv6Addr::from(octets))
+}
+
+/// The owners (uids) of every listening TCP socket that a connection to
+/// 127.0.0.1:`port` could reach, read from `/proc/net/tcp` and
+/// `/proc/net/tcp6`.
+///
+/// This is what tun2socks connects to, and through it every packet of the
+/// machine once the split defaults are in: the root helper asks it before it
+/// points the machine at the port and on every supervisor tick, so a program
+/// of another user that takes the port while xray restarts gets nothing.
+///
+/// Columns: slot, local address:port (hex), remote address:port, state, queues,
+/// timer, retransmits, uid, … Unparsable lines are skipped.
+pub fn loopback_listener_uids(tcp: &str, tcp6: &str, port: u16) -> Vec<u32> {
+    let mut owners = Vec::new();
+    for (text, v6) in [(tcp, false), (tcp6, true)] {
+        for line in text.lines() {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            if cols.len() < 8 || cols[3] != TCP_LISTEN {
+                continue;
+            }
+            let Some((addr_hex, port_hex)) = cols[1].split_once(':') else {
+                continue;
+            };
+            if u16::from_str_radix(port_hex, 16).ok() != Some(port) {
+                continue;
+            }
+            let addr = if v6 {
+                hex_le_to_ipv6(addr_hex).map(IpAddr::V6)
+            } else {
+                hex_le_to_ipv4(addr_hex).map(IpAddr::V4)
+            };
+            let Some(addr) = addr else { continue };
+            if !crate::net::takes_loopback_v4(addr) {
+                continue;
+            }
+            if let Ok(uid) = cols[7].parse::<u32>() {
+                owners.push(uid);
+            }
+        }
+    }
+    owners
+}
+
+/// The first listener owner that is neither root nor the person who started
+/// the helper (`PKEXEC_UID`; `None` when a root GUI started it directly, and
+/// then its engines are root's too).
+pub fn foreign_listener(owners: &[u32], invoking_uid: Option<u32>) -> Option<u32> {
+    owners
+        .iter()
+        .copied()
+        .find(|&uid| uid != 0 && Some(uid) != invoking_uid)
+}
+
 /// May `name` be used as one path component under `/sys/class/net`?
 ///
 /// The name comes from our own constants today; the check keeps it that way —
@@ -390,6 +460,52 @@ pub use files::{resolv_apply, resolv_backup_exists, resolv_restore};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // `/proc/net/tcp` and `/proc/net/tcp6` in the kernel's own layout. Port
+    // 10808 is 2A38. Rows: our xray on 127.0.0.1 (uid 1000), a stranger's
+    // wildcard listener on another port, an established connection to 10808
+    // (not a listener), and in tcp6 a stranger's dual-stack [::]:10808.
+    const TCP: &str = "\
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:2A38 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 41001 1 0000000000000000 100 0 0 10 0
+   1: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 41002 1 0000000000000000 100 0 0 10 0
+   2: 0100007F:2A38 0100007F:D431 01 00000000:00000000 00:00000000 00000000  1002        0 41003 1 0000000000000000 20 4 30 10 -1
+";
+    const TCP6_STRANGER: &str = "\
+  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000000000000000000000000000:2A38 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 52001 1 0000000000000000 100 0 0 10 0
+";
+    const TCP6_LOOPBACK_V6_ONLY: &str = "\
+  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000000000000000000001000000:2A38 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 52002 1 0000000000000000 100 0 0 10 0
+";
+
+    #[test]
+    fn listeners_a_tunnel_connection_could_reach_are_found_with_their_owner() {
+        assert_eq!(loopback_listener_uids(TCP, "", 10808), vec![1000]);
+        // A dual-stack [::] listener takes 127.0.0.1 connections too.
+        assert_eq!(loopback_listener_uids(TCP, TCP6_STRANGER, 10808), vec![1000, 1001]);
+        // ::1 is not where tun2socks connects.
+        assert_eq!(loopback_listener_uids("", TCP6_LOOPBACK_V6_ONLY, 10808), Vec::<u32>::new());
+        // Another port, and an established connection, are not listeners on ours.
+        assert_eq!(loopback_listener_uids(TCP, "", 8080), vec![1001]);
+        assert_eq!(loopback_listener_uids("", "", 10808), Vec::<u32>::new());
+        assert_eq!(loopback_listener_uids("garbage\n0: zz", "", 10808), Vec::<u32>::new());
+    }
+
+    /// Only the person who started the helper and root may hold the port the
+    /// whole machine's traffic is pointed at. No listener at all is fine: an
+    /// engine restarting leaves the port empty for a moment.
+    #[test]
+    fn a_listener_of_another_user_is_foreign() {
+        assert_eq!(foreign_listener(&[1000], Some(1000)), None);
+        assert_eq!(foreign_listener(&[0], Some(1000)), None);
+        assert_eq!(foreign_listener(&[], Some(1000)), None);
+        assert_eq!(foreign_listener(&[1000, 1001], Some(1000)), Some(1001));
+        // Started by a root GUI without pkexec: only root's own listener.
+        assert_eq!(foreign_listener(&[0], None), None);
+        assert_eq!(foreign_listener(&[1000], None), Some(1000));
+    }
 
     // A real `cat /proc/net/route` from an Ubuntu 22.04 box with one wired
     // link, plus the two half-defaults our tunnel installs.

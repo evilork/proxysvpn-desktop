@@ -34,15 +34,16 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use windows::core::HSTRING;
-use windows::Win32::Foundation::NO_ERROR;
+use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
 use windows::Win32::NetworkManagement::IpHelper::{
     ConvertInterfaceAliasToLuid, ConvertInterfaceIndexToLuid, ConvertInterfaceLuidToAlias,
-    ConvertInterfaceLuidToIndex, FreeMibTable, GetBestRoute2, GetIfEntry2, GetIpForwardTable2,
-    GetIpInterfaceEntry, MIB_IF_ROW2, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
-    MIB_IPINTERFACE_ROW,
+    ConvertInterfaceLuidToIndex, FreeMibTable, GetBestRoute2, GetExtendedTcpTable, GetIfEntry2,
+    GetIpForwardTable2, GetIpInterfaceEntry, MIB_IF_ROW2, MIB_IPFORWARD_ROW2,
+    MIB_IPFORWARD_TABLE2, MIB_IPINTERFACE_ROW, MIB_TCP6ROW_OWNER_PID, MIB_TCP6TABLE_OWNER_PID,
+    MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER,
 };
 use windows::Win32::NetworkManagement::Ndis::{IF_MAX_STRING_SIZE, NET_LUID_LH};
-use windows::Win32::Networking::WinSock::{AF_INET, SOCKADDR_INET};
+use windows::Win32::Networking::WinSock::{ADDRESS_FAMILY, AF_INET, AF_INET6, SOCKADDR_INET};
 
 use crate::log;
 use crate::net::plan::{self, windows as p, SPLIT_HIGH, SPLIT_LOW};
@@ -208,6 +209,108 @@ fn physical_default(exclude_index: Option<u32>) -> Result<PhysicalRoute> {
     best.map(|(route, _)| route).ok_or_else(|| {
         anyhow!("нет сетевого подключения — не найден шлюз по умолчанию")
     })
+}
+
+/// The TCP listener table of one address family, with owning pids, as raw
+/// bytes. `None` when the table cannot be read.
+///
+/// Held in `u32`s so that the 4-byte-aligned structs it holds can be read in
+/// place. The two-call dance: ask for the size, allocate, ask again; a
+/// listener that appears in between makes the second call ask for more, so
+/// it is retried a few times.
+fn tcp_listener_table(family: ADDRESS_FAMILY) -> Option<Vec<u32>> {
+    let mut size = 0u32;
+    let mut buf: Vec<u32> = Vec::new();
+    for _ in 0..4 {
+        let words = (size as usize).div_ceil(std::mem::size_of::<u32>());
+        buf.resize(words, 0);
+        let table = if buf.is_empty() {
+            None
+        } else {
+            Some(buf.as_mut_ptr().cast::<core::ffi::c_void>())
+        };
+        // SAFETY: `table` is either null (size query) or a buffer of at least
+        // `size` bytes that lives across the call; `size` is a live u32.
+        let err = unsafe {
+            GetExtendedTcpTable(
+                table,
+                &mut size,
+                false,
+                u32::from(family.0),
+                TCP_TABLE_OWNER_PID_LISTENER,
+                0,
+            )
+        };
+        if err == NO_ERROR.0 && !buf.is_empty() {
+            return Some(buf);
+        }
+        if err != ERROR_INSUFFICIENT_BUFFER.0 && err != NO_ERROR.0 {
+            return None;
+        }
+    }
+    None
+}
+
+/// Read `count` rows of `R` that follow the table's entry count, bounded by
+/// the buffer: a short or inconsistent table yields what fits, never more.
+fn table_rows<T, R: Copy>(buf: &[u32], rows_offset: usize) -> Vec<R> {
+    let bytes = std::mem::size_of_val(buf);
+    let Some(&count) = buf.first() else {
+        return Vec::new();
+    };
+    let row_size = std::mem::size_of::<R>();
+    let fits = bytes.saturating_sub(rows_offset) / row_size.max(1);
+    let count = (count as usize).min(fits);
+    let base = buf.as_ptr().cast::<u8>();
+    debug_assert!(rows_offset <= std::mem::size_of::<T>());
+    (0..count)
+        .map(|i| {
+            // SAFETY: `rows_offset + (i + 1) * row_size <= bytes` by `fits`,
+            // so the read stays inside `buf`; `read_unaligned` makes no
+            // assumption about the row's alignment.
+            unsafe { std::ptr::read_unaligned(base.add(rows_offset + i * row_size).cast::<R>()) }
+        })
+        .collect()
+}
+
+/// A port as the TCP table stores it: network byte order in the low 16 bits.
+fn table_port(raw: u32) -> u16 {
+    u16::from_be((raw & 0xFFFF) as u16)
+}
+
+/// Pids of the processes listening where tun2socks connects (127.0.0.1:`port`),
+/// from both the IPv4 and the IPv6 table.
+fn loopback_listener_pids(port: u16) -> Vec<u32> {
+    let mut pids = Vec::new();
+    if let Some(buf) = tcp_listener_table(AF_INET) {
+        let offset = std::mem::offset_of!(MIB_TCPTABLE_OWNER_PID, table);
+        for row in table_rows::<MIB_TCPTABLE_OWNER_PID, MIB_TCPROW_OWNER_PID>(&buf, offset) {
+            let addr = Ipv4Addr::from(row.dwLocalAddr.to_ne_bytes());
+            if table_port(row.dwLocalPort) == port && crate::net::takes_loopback_v4(addr.into()) {
+                pids.push(row.dwOwningPid);
+            }
+        }
+    }
+    if let Some(buf) = tcp_listener_table(AF_INET6) {
+        let offset = std::mem::offset_of!(MIB_TCP6TABLE_OWNER_PID, table);
+        for row in table_rows::<MIB_TCP6TABLE_OWNER_PID, MIB_TCP6ROW_OWNER_PID>(&buf, offset) {
+            let addr = std::net::Ipv6Addr::from(row.ucLocalAddr);
+            if table_port(row.dwLocalPort) == port && crate::net::takes_loopback_v4(addr.into()) {
+                pids.push(row.dwOwningPid);
+            }
+        }
+    }
+    pids
+}
+
+/// A listener on the SOCKS port that is not one of our engines
+/// (`process::is_engine`), named by pid for the log. Nobody listening is not
+/// a stranger: that is an engine restarting.
+pub fn socks_port_stranger(port: u16) -> Option<String> {
+    loopback_listener_pids(port)
+        .into_iter()
+        .find(|&pid| !crate::process::is_engine(pid))
+        .map(|pid| format!("pid {pid}"))
 }
 
 /// The interface alias ("Ethernet", "Wi-Fi") of an interface index.
@@ -544,6 +647,10 @@ impl Privileged for Windows {
 
     async fn kill_stray(stem: &str) {
         kill_stray(stem).await
+    }
+
+    async fn socks_port_stranger(port: u16) -> Option<String> {
+        socks_port_stranger(port)
     }
 
 }

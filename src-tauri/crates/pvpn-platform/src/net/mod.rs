@@ -247,6 +247,22 @@ pub fn parse_route_hint(contents: &str) -> Vec<Ipv4Addr> {
 }
 
 /// Serialises the route hint. Kept identical to the pre-split layout.
+/// Would a TCP listener bound to `addr` take tun2socks' connection to
+/// 127.0.0.1? Itself, the IPv4 wildcard, and their IPv6 forms: `::` is
+/// dual-stack unless the socket set IPV6_V6ONLY, which neither `/proc` nor
+/// the Windows TCP table shows, so it counts.
+///
+/// Every packet of the machine goes to that connection once the split
+/// defaults are in, so the Linux helper and the Windows backend refuse to keep
+/// them pointed at a port a stranger listens on (linux_logic.rs, windows.rs).
+pub fn takes_loopback_v4(addr: IpAddr) -> bool {
+    let loopback_or_any = |v4: Ipv4Addr| v4 == Ipv4Addr::LOCALHOST || v4.is_unspecified();
+    match addr {
+        IpAddr::V4(v4) => loopback_or_any(v4),
+        IpAddr::V6(v6) => v6.is_unspecified() || v6.to_ipv4_mapped().is_some_and(loopback_or_any),
+    }
+}
+
 pub fn format_route_hint(pid: u32, server_ip: Ipv4Addr) -> String {
     format!("pid={}\nserver_ip={}\n", pid, server_ip)
 }
@@ -272,6 +288,16 @@ mod tests {
         // Our own child first, the blunt sweep last.
         assert!(pos(TeardownStep::KillOwnedEngine) < pos(TeardownStep::KillStrayEngines));
         assert!(pos(TeardownStep::DeviceDown) < pos(TeardownStep::KillOwnedEngine));
+    }
+
+    #[test]
+    fn only_listeners_tun2socks_could_reach_count() {
+        for addr in ["127.0.0.1", "0.0.0.0", "::", "::ffff:127.0.0.1", "::ffff:0.0.0.0"] {
+            assert!(takes_loopback_v4(addr.parse().expect("ip")), "{addr}");
+        }
+        for addr in ["127.0.0.2", "192.168.1.10", "::1", "fe80::1", "::ffff:10.0.0.1"] {
+            assert!(!takes_loopback_v4(addr.parse().expect("ip")), "{addr}");
+        }
     }
 
     #[test]

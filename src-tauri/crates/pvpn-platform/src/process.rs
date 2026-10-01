@@ -112,6 +112,41 @@ impl std::fmt::Display for Argv {
     }
 }
 
+/// Pids of the engines this app is running right now (Windows: xray and
+/// hysteria, registered by the GUI's pidfile_windows.rs as they start and
+/// forgotten as they stop).
+///
+/// The Windows backend asks it who may listen on the SOCKS port tun2socks
+/// sends the whole machine's traffic to (`net::windows`): a listener that is
+/// not one of these is a stranger that took the port while xray restarted.
+static ENGINE_PIDS: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+fn engine_pids() -> std::sync::MutexGuard<'static, Vec<u32>> {
+    // A poisoned list is still a list of pids; refusing to read it would make
+    // every engine of ours look like a stranger.
+    ENGINE_PIDS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Record a running engine of ours.
+pub fn note_engine(pid: u32) {
+    let mut pids = engine_pids();
+    if !pids.contains(&pid) {
+        pids.push(pid);
+    }
+}
+
+/// Forget an engine that has stopped.
+pub fn forget_engine(pid: u32) {
+    engine_pids().retain(|&known| known != pid);
+}
+
+/// Is `pid` one of our running engines?
+pub fn is_engine(pid: u32) -> bool {
+    engine_pids().contains(&pid)
+}
+
 /// Ties a child process to the lifetime of this app, so it cannot outlive us.
 ///
 /// Windows: the child joins a job object created with
@@ -252,6 +287,22 @@ pub async fn kill_by_name(stem: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engines_are_known_from_start_to_stop() {
+        // Pids no real process here has; the list is process-wide.
+        let (a, b) = (4_000_000_001, 4_000_000_002);
+        assert!(!is_engine(a));
+        note_engine(a);
+        note_engine(a);
+        note_engine(b);
+        assert!(is_engine(a) && is_engine(b));
+        forget_engine(a);
+        assert!(!is_engine(a), "one forget undoes a repeated note");
+        assert!(is_engine(b));
+        forget_engine(b);
+        assert!(!is_engine(b));
+    }
 
     #[test]
     fn argv_keeps_program_and_args() {

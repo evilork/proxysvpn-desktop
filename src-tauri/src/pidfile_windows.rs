@@ -27,9 +27,15 @@ const REAP_WAIT: Duration = Duration::from_secs(2);
 const LOG_SOURCE: &str = "engine";
 
 /// A child engine process that dies with the app, whatever way the app dies.
+///
+/// Its pid is also registered with the platform layer for as long as this
+/// handle lives (`pvpn_platform::process::note_engine`): the Windows backend
+/// lets only our own engines hold the SOCKS port tun2socks sends the machine's
+/// traffic to.
 pub struct Engine {
     name: &'static str,
     child: Child,
+    pid: Option<u32>,
 }
 
 impl Engine {
@@ -40,6 +46,10 @@ impl Engine {
     /// recognising it unnecessary.
     pub fn spawn(name: &'static str, cmd: &mut Command, _bin: &Path) -> std::io::Result<Self> {
         let child = cmd.spawn()?;
+        let pid = child.id();
+        if let Some(pid) = pid {
+            pvpn_platform::process::note_engine(pid);
+        }
         if let Err(e) = pvpn_platform::process::tie_to_app(&child) {
             // The engine still runs and is still stopped by `stop` and by
             // `kill_on_drop`; only a crash of the app would now leave it behind.
@@ -49,7 +59,7 @@ impl Engine {
                 &format!("{name} is not tied to the app's lifetime: {e:#}"),
             );
         }
-        Ok(Self { name, child })
+        Ok(Self { name, child, pid })
     }
 
     pub fn child(&mut self) -> &mut Child {
@@ -79,6 +89,15 @@ impl Engine {
                 LOG_SOURCE,
                 &format!("kill pid={pid} name={} result={outcome}", self.name),
             );
+        }
+    }
+}
+
+impl Drop for Engine {
+    /// `stop` consumes the handle, so this also runs after every stop.
+    fn drop(&mut self) {
+        if let Some(pid) = self.pid {
+            pvpn_platform::process::forget_engine(pid);
         }
     }
 }
