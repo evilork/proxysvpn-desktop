@@ -293,7 +293,7 @@ impl PidFile {
     /// Blocking: up to `grace` plus a moment. The lock is NOT held while
     /// waiting, and the file is re-read before the final write, so an engine
     /// recorded meanwhile keeps its line.
-    fn reap(&self, own_dir: &Path, only: Option<&str>, grace: Duration) -> Vec<(Entry, Outcome)> {
+    fn reap(&self, own_dirs: &[PathBuf], only: Option<&str>, grace: Duration) -> Vec<(Entry, Outcome)> {
         let targets: Vec<Entry> = {
             let _guard = lock();
             self.load()
@@ -308,7 +308,7 @@ impl PidFile {
         let mut done: Vec<(Entry, Outcome)> = Vec::with_capacity(targets.len());
         let mut pending: Vec<Entry> = Vec::new();
         for entry in targets {
-            match judge(&entry, exe_of(entry.pid).as_deref(), own_dir) {
+            match judge_in(&entry, exe_of(entry.pid).as_deref(), own_dirs) {
                 Verdict::Ours => match send(entry.pid, libc::SIGTERM) {
                     Sent::Delivered => pending.push(entry),
                     Sent::NoSuchProcess => done.push((entry, Outcome::Stale)),
@@ -325,7 +325,7 @@ impl PidFile {
         let deadline = Instant::now() + grace;
         loop {
             let (alive, left): (Vec<Entry>, Vec<Entry>) =
-                pending.into_iter().partition(|e| still_ours(e, own_dir));
+                pending.into_iter().partition(|e| still_ours(e, own_dirs));
             done.extend(left.into_iter().map(|e| (e, Outcome::Terminated)));
             pending = alive;
             if pending.is_empty() || Instant::now() >= deadline {
@@ -337,7 +337,7 @@ impl PidFile {
             // Asked once more right before the signal nobody can ignore: in
             // the grace period the engine may have left and its pid gone to
             // somebody else.
-            let outcome = if still_ours(&entry, own_dir) {
+            let outcome = if still_ours(&entry, own_dirs) {
                 match send(entry.pid, libc::SIGKILL) {
                     Sent::Delivered => Outcome::Killed,
                     Sent::NoSuchProcess => Outcome::Terminated,
@@ -447,8 +447,25 @@ fn judge(entry: &Entry, running: Option<&Path>, own_dir: &Path) -> Verdict {
     Verdict::Ours
 }
 
-fn still_ours(entry: &Entry, own_dir: &Path) -> bool {
-    judge(entry, exe_of(entry.pid).as_deref(), own_dir) == Verdict::Ours
+/// `judge` against every folder this copy runs engines from: the folder of
+/// our own executable and, on macOS as root, the root-owned copy
+/// (`engine_stage.rs`). Ours when any of them says so.
+fn judge_in(entry: &Entry, running: Option<&Path>, own_dirs: &[PathBuf]) -> Verdict {
+    let mut verdict = match running {
+        None => Verdict::Gone,
+        Some(path) if path != entry.path => Verdict::Reused,
+        Some(_) => Verdict::OtherCopy,
+    };
+    for dir in own_dirs {
+        if judge(entry, running, dir) == Verdict::Ours {
+            verdict = Verdict::Ours;
+        }
+    }
+    verdict
+}
+
+fn still_ours(entry: &Entry, own_dirs: &[PathBuf]) -> bool {
+    judge_in(entry, exe_of(entry.pid).as_deref(), own_dirs) == Verdict::Ours
 }
 
 /// The executable a live process runs, as the kernel reports it; `None` for
@@ -501,16 +518,18 @@ fn send(pid: u32, signal: libc::c_int) -> Sent {
     }
 }
 
-/// The folder our own executable lives in, canonical like the recorded paths.
-fn own_dir() -> Option<PathBuf> {
-    let exe = std::env::current_exe().and_then(std::fs::canonicalize);
-    match exe {
-        Ok(exe) => exe.parent().map(Path::to_path_buf),
-        Err(e) => {
-            crate::logger::log("warn", LOG_SOURCE, &format!("own folder unknown: {e}"));
-            None
-        }
+/// The folders our engines run from, canonical like the recorded paths: the
+/// folder our own executable lives in and, on macOS as root, this copy's
+/// root-owned engine folder (`engine_stage.rs`). Empty when unknown.
+fn own_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::with_capacity(2);
+    match std::env::current_exe().and_then(std::fs::canonicalize) {
+        Ok(exe) => dirs.extend(exe.parent().map(Path::to_path_buf)),
+        Err(e) => crate::logger::log("warn", LOG_SOURCE, &format!("own folder unknown: {e}")),
     }
+    #[cfg(target_os = "macos")]
+    dirs.extend(crate::engine_stage::current_home());
+    dirs
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -660,9 +679,10 @@ impl Drop for Engine {
 /// crash left behind would otherwise keep its port or device and make the
 /// next start fail. Runs on a blocking thread: it may wait up to `GRACE`.
 pub async fn sweep(name: &'static str) {
-    let Some(own) = own_dir() else {
+    let own = own_dirs();
+    if own.is_empty() {
         return;
-    };
+    }
     let file = PidFile::system();
     let joined = tokio::task::spawn_blocking(move || {
         file.reap(&own, Some(name), GRACE);
@@ -680,9 +700,10 @@ pub async fn sweep(name: &'static str) {
 /// Stop every recorded engine that is ours. Synchronous on purpose: it runs
 /// at launch, on signals and at exit, where there is no runtime to await on.
 pub fn reap_all() {
-    let Some(own) = own_dir() else {
+    let own = own_dirs();
+    if own.is_empty() {
         return;
-    };
+    }
     PidFile::system().reap(&own, None, GRACE);
 }
 
@@ -1072,6 +1093,28 @@ mod tests {
         );
     }
 
+    /// macOS as root runs the engines from a root-owned copy
+    /// (engine_stage.rs), not from the bundle. Those must still count as ours,
+    /// or a stop would leave them running and a launch after a crash would
+    /// never clean them up; and a copy of another app folder must not.
+    #[test]
+    fn engines_run_from_this_copys_staged_folder_are_ours_too() {
+        let bundle = PathBuf::from("/Applications/ProxysVPN.app/Contents/MacOS");
+        let staged = PathBuf::from("/Library/Application Support/ProxysVPN/engines/0123456789abcdef");
+        let own = [bundle.clone(), staged.clone()];
+
+        let from_stage = entry(4244, "xray", &staged.join("xray").to_string_lossy());
+        assert_eq!(judge_in(&from_stage, Some(&from_stage.path), &own), Verdict::Ours);
+        let from_bundle = entry(4245, "xray", &bundle.join("xray").to_string_lossy());
+        assert_eq!(judge_in(&from_bundle, Some(&from_bundle.path), &own), Verdict::Ours);
+
+        let other = entry(4246, "xray", "/Library/Application Support/ProxysVPN/engines/ffffffffffffffff/xray");
+        assert_eq!(judge_in(&other, Some(&other.path), &own), Verdict::OtherCopy);
+        assert_eq!(judge_in(&other, None, &own), Verdict::Gone);
+        assert_eq!(judge_in(&other, Some(Path::new("/usr/bin/true")), &own), Verdict::Reused);
+        assert_eq!(judge_in(&other, Some(&other.path), &[]), Verdict::OtherCopy);
+    }
+
     // ── Real processes ─────────────────────────────────────────────────────
 
     #[test]
@@ -1089,7 +1132,7 @@ mod tests {
         let file = file_at(&base.join("state"));
         file.record("sing-box", ours.pid(), &ours_bin);
 
-        let results = file.reap(&ours_dir, None, Duration::from_secs(2));
+        let results = file.reap(std::slice::from_ref(&ours_dir), None, Duration::from_secs(2));
         assert_eq!(outcome_of(&results, ours.pid()), Some(Outcome::Terminated));
         assert!(!ours.is_alive());
         assert!(
@@ -1115,7 +1158,7 @@ mod tests {
         file.record("xray", stubborn.pid(), &bin);
 
         let started = Instant::now();
-        let results = file.reap(&base, None, Duration::from_millis(300));
+        let results = file.reap(std::slice::from_ref(&base), None, Duration::from_millis(300));
         assert_eq!(outcome_of(&results, stubborn.pid()), Some(Outcome::Killed));
         assert!(
             started.elapsed() >= Duration::from_millis(300),
@@ -1139,7 +1182,7 @@ mod tests {
         let file = file_at(&base.join("state"));
         file.record("xray", theirs.pid(), &ours_dir.join("xray"));
 
-        let results = file.reap(&ours_dir, None, Duration::from_secs(1));
+        let results = file.reap(std::slice::from_ref(&ours_dir), None, Duration::from_secs(1));
         assert_eq!(outcome_of(&results, theirs.pid()), Some(Outcome::NotOurs));
         assert!(theirs.is_alive());
         assert!(
@@ -1162,7 +1205,7 @@ mod tests {
         let file = file_at(&base.join("state"));
         file.record("tun2socks", other.pid(), &other_bin);
 
-        let results = file.reap(&ours_dir, None, Duration::from_secs(1));
+        let results = file.reap(std::slice::from_ref(&ours_dir), None, Duration::from_secs(1));
         assert_eq!(outcome_of(&results, other.pid()), Some(Outcome::OtherCopy));
         assert!(other.is_alive());
         assert_eq!(file.load().len(), 1, "that copy still needs its line");
@@ -1180,7 +1223,7 @@ mod tests {
         let file = file_at(&base.join("state"));
         file.record("hysteria", pid, &bin);
 
-        let results = file.reap(&base, None, Duration::from_secs(1));
+        let results = file.reap(std::slice::from_ref(&base), None, Duration::from_secs(1));
         assert_eq!(outcome_of(&results, pid), Some(Outcome::Stale));
         assert!(file.load().is_empty());
         let _ = std::fs::remove_dir_all(&base);
@@ -1197,7 +1240,7 @@ mod tests {
         file.record("xray", xray.pid(), &xray_bin);
         file.record("tun2socks", tun.pid(), &tun_bin);
 
-        let results = file.reap(&base, Some("xray"), Duration::from_secs(2));
+        let results = file.reap(std::slice::from_ref(&base), Some("xray"), Duration::from_secs(2));
         assert_eq!(results.len(), 1);
         assert!(!xray.is_alive());
         assert!(tun.is_alive());

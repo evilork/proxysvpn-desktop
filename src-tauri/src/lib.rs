@@ -68,6 +68,8 @@ use pidfile_windows as pidfile;
 #[cfg(desktop)]
 mod sidecars;
 #[cfg(target_os = "macos")]
+mod engine_stage;
+#[cfg(target_os = "macos")]
 mod sysdns;
 #[cfg(target_os = "macos")]
 mod tun;
@@ -4397,6 +4399,11 @@ pub fn run() {
     // of the copy that is already running.
     #[cfg(target_os = "macos")]
     sync_cleanup();
+    // After the cleanup (which stops what a crashed run of this copy left
+    // running from the engine folder) and before anything can connect: copy
+    // the engines out of the user-owned bundle into a root-owned folder.
+    #[cfg(target_os = "macos")]
+    engine_stage::prepare();
 
     // ОДИН setup на всё приложение. Их было два, и это молча ломало macOS
     // целиком: `Builder::setup` не добавляет обработчик, а ЗАМЕНЯЕТ его, и
