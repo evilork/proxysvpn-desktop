@@ -181,7 +181,7 @@ fn spawn_command() -> Result<Spawn> {
             .ok_or_else(|| anyhow::Error::new(privilege::ElevationUnavailable::NoPkexec))?;
         // Typed, so the window shows "could not prepare its files" rather
         // than a refusal the person never gave.
-        let plan = install::plan_appimage_spawn(&exe).map_err(anyhow::Error::new)?;
+        let plan = install::plan_appimage_spawn(&exe, install::running_on_steamos()).map_err(anyhow::Error::new)?;
         crate::log::info(
             "helper",
             if plan.setup {
@@ -288,7 +288,15 @@ async fn describe_handshake_failure(link: &mut Link, cause: anyhow::Error) -> an
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
     let stderr = link.stderr.lock().map(|s| s.clone()).unwrap_or_default();
-    match privilege::handshake_failure(code, &stderr, link.setup) {
+    let failure = privilege::handshake_failure(code, &stderr, link.setup);
+    // SteamOS: the deck user has no password until one is set, and Gaming
+    // Mode has no window to type it into. Say which, instead of "denied".
+    if install::running_on_steamos() {
+        if let Some(advice) = privilege::steamos_advice_for(failure) {
+            return anyhow::Error::new(advice);
+        }
+    }
+    match failure {
         // pkexec(1): 126 — the dialog was dismissed.
         HandshakeFailure::Dismissed => {
             anyhow!("запрос прав отменён — без пароля администратора туннель не поднять")

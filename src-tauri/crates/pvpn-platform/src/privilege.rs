@@ -156,6 +156,50 @@ pub fn is_helper_setup_failure(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| cause.is::<HelperSetupFailed>())
 }
 
+/// What SteamOS needs from the person when its system dialog could not let
+/// the helper start. Not `ElevationUnavailable`: both have a way out the
+/// person can take, and the window says which (src/errors.rs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SteamOsAdvice {
+    /// The dialog was dismissed, or the password was not accepted. On a Steam
+    /// Deck the likely reason is that the deck user has no password: SteamOS
+    /// ships it without one, and polkit cannot accept "nothing".
+    SetPassword,
+    /// No polkit agent: Gaming Mode, where no password window can appear.
+    /// The one-time setup has to happen in Desktop Mode (helper/install.rs).
+    UseDesktopMode,
+}
+
+impl std::fmt::Display for SteamOsAdvice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::SetPassword => {
+                "SteamOS не выдал права: пароль не введён или не принят; у пользователя deck пароля нет, пока его не задать (режим рабочего стола → Konsole → passwd)"
+            }
+            Self::UseDesktopMode => {
+                "в игровом режиме SteamOS нет окна для пароля — подключитесь один раз из режима рабочего стола, после этого игровой режим подключается без пароля"
+            }
+        })
+    }
+}
+
+impl std::error::Error for SteamOsAdvice {}
+
+/// The SteamOS advice anywhere in `err`'s chain.
+pub fn steamos_advice(err: &anyhow::Error) -> Option<SteamOsAdvice> {
+    err.chain().find_map(|cause| cause.downcast_ref::<SteamOsAdvice>().copied())
+}
+
+/// What to tell a SteamOS user about a failed handshake, if anything
+/// SteamOS-specific applies. A failed setup keeps its own screen.
+pub fn steamos_advice_for(failure: HandshakeFailure) -> Option<SteamOsAdvice> {
+    match failure {
+        HandshakeFailure::Dismissed | HandshakeFailure::NotAuthorized => Some(SteamOsAdvice::SetPassword),
+        HandshakeFailure::NoAgent => Some(SteamOsAdvice::UseDesktopMode),
+        HandshakeFailure::SetupFailed(_) | HandshakeFailure::Other => None,
+    }
+}
+
 /// Why a pkexec child died before the helper answered its first request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandshakeFailure {
@@ -353,6 +397,26 @@ mod tests {
         assert_eq!(handshake_failure(Some(127), no_agent, false), HandshakeFailure::NoAgent);
         assert_eq!(handshake_failure(Some(65), script, false), HandshakeFailure::Other);
         assert_eq!(handshake_failure(None, no_agent, true), HandshakeFailure::Other);
+    }
+
+    /// On SteamOS a refusal sends the person to `passwd` and a missing agent
+    /// to Desktop Mode; the advice survives the context the layers add.
+    #[test]
+    fn steamos_turns_refusals_into_what_to_do() {
+        assert_eq!(steamos_advice_for(HandshakeFailure::Dismissed), Some(SteamOsAdvice::SetPassword));
+        assert_eq!(steamos_advice_for(HandshakeFailure::NotAuthorized), Some(SteamOsAdvice::SetPassword));
+        assert_eq!(steamos_advice_for(HandshakeFailure::NoAgent), Some(SteamOsAdvice::UseDesktopMode));
+        assert_eq!(steamos_advice_for(HandshakeFailure::SetupFailed(65)), None);
+        assert_eq!(steamos_advice_for(HandshakeFailure::Other), None);
+
+        for advice in [SteamOsAdvice::SetPassword, SteamOsAdvice::UseDesktopMode] {
+            let err = anyhow::Error::new(advice).context("spawn the privileged helper").context("preflight");
+            assert_eq!(steamos_advice(&err), Some(advice));
+            assert!(!is_elevation_unavailable(&err));
+        }
+        assert!(SteamOsAdvice::SetPassword.to_string().contains("passwd"));
+        assert!(SteamOsAdvice::UseDesktopMode.to_string().contains("рабочего стола"));
+        assert_eq!(steamos_advice(&anyhow::anyhow!("запрос прав отменён")), None);
     }
 
     #[test]

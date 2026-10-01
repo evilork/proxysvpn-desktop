@@ -68,6 +68,59 @@
 //! the mount's sums) and runs `pkexec /home/.proxysvpn/bin/proxysvpn-helper
 //! --helper` — no copy, the same one window the .deb shows. An update of the
 //! AppImage changes the sums, and the next connect copies again.
+//!
+//! ── Gaming Mode on SteamOS ─────────────────────────────────────────────────
+//! Gaming Mode (gamescope) runs no polkit authentication agent, so any pkexec
+//! that needs a password fails at once with "No authentication agent found".
+//! On SteamOS only (`ID=steamos` in /etc/os-release), the setup — made in
+//! Desktop Mode, behind the password — also writes
+//!
+//! ```text
+//! /home/.proxysvpn/gaming-mode-user          root:root 0644, one user name
+//! ```
+//!
+//! naming the user who authorized it, and every start of the installed helper
+//! keeps one polkit rule in step with that record ([`sync_rule`]):
+//!
+//! ```text
+//! /etc/polkit-1/rules.d/49-proxysvpn.rules   root:root 0644
+//! ```
+//!
+//! It lets that one user, at the device and in the active session
+//! (`subject.local && subject.active`), run exactly
+//! `/home/.proxysvpn/bin/proxysvpn-helper --helper` as root without a
+//! password: that program, that argv, as root, nothing else ([`polkit_rule`]).
+//!
+//! What that leaves on the device, precisely: any program running as that
+//! user may start the helper as root without asking. The helper does only
+//! what its protocol lets a peer ask (helper/proto.rs): raise our TUN device,
+//! send the machine's traffic to a SOCKS listener on 127.0.0.1:10808 or 10809
+//! that belongs to root or to that same user (`check_socks_listener`), pin a
+//! host route to one unicast IPv4 address, publish resolvers on our device,
+//! and take all of it down. It executes nothing but the tun2socks beside it in
+//! the same root-owned folder. So such a program gains one thing it could not
+//! do before: route the whole machine through a proxy it runs itself. It does
+//! not gain code execution as root, any file, or anything that outlasts the
+//! helper — the device, its routes and resolved's per-link servers go with it
+//! (crash recovery in net/linux_priv.rs). That is the same power a .deb install
+//! hands out for polkit's `auth_admin_keep` minutes after every connect, here
+//! without the time limit, which is the price of a Gaming Mode that cannot ask.
+//!
+//! Why acceptable and not worse: no file that carries privilege sits where a
+//! normal user can change it — no setuid bit, no file capability, the rule
+//! names a path whose every folder is root's alone (and [`sync_rule`] removes
+//! the rule instead of writing it if one is not). Rejected: `setcap` on a
+//! binary (a capability-carrying file, and `cap_net_admin` is not inherited by
+//! tun2socks anyway, docs/LINUX.md); a sudoers drop-in (the same grant through
+//! a second mechanism the rest of the app does not use); a root service that
+//! runs all the time (more surface, and a design of its own).
+//!
+//! The rule is written by the helper, not by the setup script, so that one
+//! function renders it and a SteamOS update that resets /etc (it usually keeps
+//! it) is repaired by the next start in Desktop Mode instead of leaving Gaming
+//! Mode broken with nothing to say why. The record is only written by the
+//! first setup (the folder did not exist yet): removing it switches the rule
+//! off for good, through app updates too, until /home/.proxysvpn is removed.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 // Reason for the allow: only the Linux GUI and helper call into this, but the
 // rules and the setup script are tested on the developer's Mac as well — the
@@ -84,6 +137,16 @@ pub const BIN_DIR: &str = "bin";
 pub const HELPER_BIN: &str = "proxysvpn-helper";
 /// The only engine root runs; the helper finds it beside itself.
 pub const ENGINE_BIN: &str = super::proto::SIDECAR_NAME;
+/// The record, in [`INSTALL_DIR`], of the user Gaming Mode may start the
+/// helper for (SteamOS only).
+pub const GAMING_RECORD: &str = "gaming-mode-user";
+/// The setup's fifth argument when the record should be written.
+pub const GAMING_FLAG: &str = "gaming-mode";
+/// The polkit rule the installed helper keeps in step with the record. 49, so
+/// it is read before the distribution's 50-default.rules.
+pub const POLKIT_RULE: &str = "/etc/polkit-1/rules.d/49-proxysvpn.rules";
+/// The longest record that can hold a user name.
+const RECORD_MAX: u64 = 64;
 /// The shell the setup script runs under. A system file in a root-owned
 /// directory on every Linux, and on SteamOS part of the read-only image.
 pub const SHELL: &str = "/bin/sh";
@@ -105,7 +168,9 @@ pub const EXIT_COPY: i32 = 74;
 ///
 /// Arguments: `$1` the install folder ([`INSTALL_DIR`]), `$2` the staging
 /// folder, `$3` and `$4` the SHA-256 of the helper and of tun2socks as the GUI
-/// read them in its mount. Nothing in it reads stdin and nothing writes to
+/// read them in its mount, `$5` [`GAMING_FLAG`] on SteamOS and `-` elsewhere.
+/// The user the record names is pkexec's `PKEXEC_UID`, the person who typed
+/// the password, never an argument. Nothing in it reads stdin and nothing writes to
 /// stdout: both are the protocol pipe the exec'd helper inherits, and the
 /// GUI's first request is already waiting in it. POSIX sh and coreutils only,
 /// so dash (Debian) and bash as sh (SteamOS, Arch) run it the same; the unit
@@ -113,7 +178,7 @@ pub const EXIT_COPY: i32 = 74;
 /// dialog shows the start of the command line.
 pub const SETUP_SCRIPT: &str = r#"# ProxysVPN: copy the tunnel helper into a folder only root can change, then start it (docs/STEAMDECK.md)
 set -eu
-dest=$1 staged=$2 helper_sum=$3 engine_sum=$4
+dest=$1 staged=$2 helper_sum=$3 engine_sum=$4 gaming=$5
 umask 077
 me=$(id -u)
 say() { printf 'proxysvpn-setup: %s\n' "$*" >&2; }
@@ -123,10 +188,20 @@ private() {
 }
 parent=$(dirname -- "$dest")
 private "$parent" || { say "$parent is not a folder only uid $me can change"; exit 73; }
+fresh=yes
+[ ! -e "$dest" ] && [ ! -L "$dest" ] || fresh=no
 for dir in "$dest" "$dest/bin"; do
     [ -e "$dir" ] || [ -L "$dir" ] || mkdir -m 0755 -- "$dir"
     private "$dir" || { say "$dir is not a folder only uid $me can change"; exit 73; }
 done
+if [ "$gaming" != gaming-mode ]; then
+    rm -f -- "$dest/gaming-mode-user"
+elif [ "$fresh" = yes ]; then
+    user=$(id -nu "${PKEXEC_UID:?}")
+    printf '%s\n' "$user" > "$dest/.gaming-mode-user.new"
+    chmod 0644 "$dest/.gaming-mode-user.new"
+    mv -f -- "$dest/.gaming-mode-user.new" "$dest/gaming-mode-user"
+fi
 take() {
     src=$staged/$1 tmp=$dest/bin/.$1.new
     rm -f -- "$tmp"
@@ -181,7 +256,13 @@ pub fn launch_kind(appimage: Option<&OsStr>, appdir: Option<&Path>, exe: &Path) 
 }
 
 /// The arguments for `pkexec /bin/sh …` that run [`SETUP_SCRIPT`].
-pub fn setup_args(install_dir: &Path, staged: &Path, helper_sum: &str, engine_sum: &str) -> Vec<OsString> {
+pub fn setup_args(
+    install_dir: &Path,
+    staged: &Path,
+    helper_sum: &str,
+    engine_sum: &str,
+    gaming: bool,
+) -> Vec<OsString> {
     vec![
         OsString::from("-c"),
         OsString::from(SETUP_SCRIPT),
@@ -190,7 +271,79 @@ pub fn setup_args(install_dir: &Path, staged: &Path, helper_sum: &str, engine_su
         staged.as_os_str().to_os_string(),
         OsString::from(helper_sum),
         OsString::from(engine_sum),
+        OsString::from(if gaming { GAMING_FLAG } else { "-" }),
     ]
+}
+
+/// Is this SteamOS? `ID=steamos` in os-release(5), quoted or not.
+pub fn is_steamos(os_release: &str) -> bool {
+    os_release
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("ID="))
+        .any(|value| value.trim().trim_matches(|c| c == '"' || c == '\'') == "steamos")
+}
+
+/// A user name the rule may quote: what useradd accepts, and nothing that
+/// could close the JavaScript string it is put into.
+pub fn valid_user_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    name.len() <= 32
+        && (first.is_ascii_alphanumeric() || first == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+}
+
+/// A path the rule may quote: absolute, and only characters that need no
+/// escaping in a JavaScript string.
+pub fn is_plain_path(path: &str) -> bool {
+    path.starts_with('/')
+        && path
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-'))
+}
+
+/// The user a record names, if it holds exactly one valid name.
+pub fn parse_gaming_record(bytes: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let name = text.strip_suffix('\n').unwrap_or(text);
+    valid_user_name(name).then(|| name.to_string())
+}
+
+/// The polkit rule that lets `user` start the helper at `helper` without a
+/// password, or `None` when either would need escaping. `helper` is the
+/// physical path: pkexec matches `program` after realpath(3), and passes
+/// `command_line` as the GUI spelled it, which is the same physical path.
+pub fn polkit_rule(user: &str, helper: &Path) -> Option<String> {
+    if !valid_user_name(user) {
+        return None;
+    }
+    let helper = helper.to_str().filter(|path| is_plain_path(path))?;
+    Some(format!(
+        r#"// {POLKIT_RULE}
+//
+// Written by the ProxysVPN tunnel helper (docs/STEAMDECK.md). It lets {user},
+// at this device and in the active session, start
+//   {helper} --helper
+// as root without a password, so the VPN can connect in Gaming Mode, where no
+// password window can appear. It allows nothing else.
+//
+// The helper rewrites this file from {INSTALL_DIR}/{GAMING_RECORD}
+// at every start. To withdraw it, remove that record as well as this file, or
+// remove {INSTALL_DIR} entirely.
+polkit.addRule(function (action, subject) {{
+    if (action.id === "org.freedesktop.policykit.exec" &&
+        action.lookup("program") === "{helper}" &&
+        action.lookup("command_line") === "{helper} --helper" &&
+        action.lookup("user") === "root" &&
+        subject.user === "{user}" &&
+        subject.local && subject.active) {{
+        return polkit.Result.YES;
+    }}
+}});
+"#
+    ))
 }
 
 /// A lowercase hex SHA-256, the only shape a sum may have on the command line.
@@ -393,7 +546,185 @@ pub fn stage(dir: &Path, helper: &Path, engine: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+// ------------------------------------------------------------------ root side
+
+/// What the installed helper did about the Gaming Mode rule as it started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuleSync {
+    /// This helper is not the AppImage's installed copy — the .deb's, a dev
+    /// run, a copy replaced while it ran: polkit is not ours to touch.
+    NotOurs,
+    /// The rule already says what the record says (or both are absent).
+    Unchanged,
+    /// The rule was written for this user.
+    Written(String),
+    /// The record is gone, so the rule went too.
+    Removed,
+    /// A folder on the rule's path is not root's alone, the record is not a
+    /// root-only file holding one user name, or a write failed. The rule is
+    /// removed in the first two cases; the text says what.
+    Failed(String),
+}
+
+/// A folder of the chain the rule names: a real folder of root (or, in tests,
+/// of `owner`), with no group or world write bit.
+#[cfg(unix)]
+fn trusted_folder(path: &Path, owner: u32) -> Result<(), String> {
+    let facts = node_facts(path).ok_or_else(|| format!("{} is missing", path.display()))?;
+    let as_root = NodeFacts { uid: if facts.uid == owner { 0 } else { facts.uid }, ..facts };
+    folder_is_root_only(path, &as_root)
+}
+
+/// Read the record if it is a regular file of `owner` that nobody else may
+/// write; `Ok(None)` when there is none.
+#[cfg(unix)]
+fn read_record(path: &Path, owner: u32) -> Result<Option<String>, String> {
+    use std::io::Read;
+    use std::os::unix::fs::MetadataExt;
+
+    let file = match open_regular(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let meta = file.metadata().map_err(|e| format!("{}: {e}", path.display()))?;
+    if meta.uid() != owner || meta.mode() & 0o022 != 0 {
+        return Err(format!("{} is not root's alone", path.display()));
+    }
+    let mut bytes = Vec::new();
+    file.take(RECORD_MAX + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if bytes.len() as u64 > RECORD_MAX {
+        return Err(format!("{} is too long to be a user name", path.display()));
+    }
+    parse_gaming_record(&bytes)
+        .map(Some)
+        .ok_or_else(|| format!("{} does not hold a user name", path.display()))
+}
+
+/// Remove the rule file if there is one. It is ours by name.
+#[cfg(unix)]
+fn remove_rule(rule: &Path) -> Result<bool, String> {
+    match std::fs::remove_file(rule) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(format!("could not remove {}: {e}", rule.display())),
+    }
+}
+
+/// Write `text` to `rule` through a temp file in the same folder, renamed into
+/// place. polkit loads only names ending in `.rules`, so it never reads the
+/// temp file half written.
+#[cfg(unix)]
+fn write_rule(rule: &Path, text: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let dir = rule.parent().ok_or_else(|| "the rule has no folder".to_string())?;
+    if !dir.is_dir() {
+        return Err(format!("{} does not exist; is polkit installed?", dir.display()));
+    }
+    let name = rule.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    let result = (|| -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&tmp)?;
+        file.write_all(text.as_bytes())?;
+        // polkitd reads rules as its own user; the umask must not take that away.
+        file.set_permissions(std::fs::Permissions::from_mode(0o644))?;
+        std::fs::rename(&tmp, rule)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result.map_err(|e| format!("could not write {}: {e}", rule.display()))
+}
+
+/// Bring the rule at `rule` in step with the record in `install_dir`, when
+/// `exe` is the helper installed there. `install_dir` is physical; `top` is
+/// the highest folder whose trust is checked (`/` for real, the test's own
+/// folder in tests); `owner` is root's uid for real, the test runner's in
+/// tests.
+#[cfg(unix)]
+pub fn sync_rule(exe: &Path, install_dir: &Path, top: &Path, rule: &Path, owner: u32) -> RuleSync {
+    let helper = installed_helper(install_dir);
+    if exe != helper {
+        return RuleSync::NotOurs;
+    }
+    // Fail closed: when it is not clear whom the rule may name, or the path
+    // it names could be swapped, there is no rule.
+    let withdraw = |reason: String| match remove_rule(rule) {
+        Ok(_) => RuleSync::Failed(format!("{reason}; no Gaming Mode rule while it is")),
+        Err(e) => RuleSync::Failed(format!("{reason}; {e}")),
+    };
+    // Every folder the rule's path runs through must be root's alone, or the
+    // rule would hand out root to whoever can swap the file under it.
+    let chain = helper.parent().map(Path::ancestors).into_iter().flatten();
+    for dir in chain {
+        if let Err(reason) = trusted_folder(dir, owner) {
+            return withdraw(reason);
+        }
+        if dir == top {
+            break;
+        }
+    }
+
+    let user = match read_record(&install_dir.join(GAMING_RECORD), owner) {
+        Ok(user) => user,
+        Err(reason) => return withdraw(reason),
+    };
+    let Some(user) = user else {
+        return match remove_rule(rule) {
+            Ok(true) => RuleSync::Removed,
+            Ok(false) => RuleSync::Unchanged,
+            Err(e) => RuleSync::Failed(e),
+        };
+    };
+    let Some(text) = polkit_rule(&user, &helper) else {
+        return RuleSync::Failed(format!("{} cannot be named in a rule", helper.display()));
+    };
+    let current = open_regular(rule).ok().and_then(|mut file| {
+        use std::io::Read;
+        let mut held = String::new();
+        file.read_to_string(&mut held).ok().map(|_| held)
+    });
+    if current.as_deref() == Some(text.as_str()) {
+        return RuleSync::Unchanged;
+    }
+    match write_rule(rule, &text) {
+        Ok(()) => RuleSync::Written(user),
+        Err(e) => RuleSync::Failed(e),
+    }
+}
+
+/// [`sync_rule`] for the running helper, with the real paths.
+#[cfg(target_os = "linux")]
+pub fn sync_gaming_rule() -> RuleSync {
+    let (Ok(exe), Ok(install_dir)) = (std::env::current_exe(), std::fs::canonicalize(INSTALL_DIR)) else {
+        return RuleSync::NotOurs;
+    };
+    sync_rule(&exe, &install_dir, Path::new("/"), Path::new(POLKIT_RULE), 0)
+}
+
 // ------------------------------------------------------------- GUI side, Linux
+
+/// Is this SteamOS? Read once per process.
+#[cfg(target_os = "linux")]
+pub fn running_on_steamos() -> bool {
+    static STEAMOS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *STEAMOS.get_or_init(|| {
+        ["/etc/os-release", "/usr/lib/os-release"]
+            .iter()
+            .find_map(|path| std::fs::read_to_string(path).ok())
+            .is_some_and(|text| is_steamos(&text))
+    })
+}
 
 /// What the GUI hands pkexec, and what to clean up once it answered.
 #[cfg(target_os = "linux")]
@@ -465,9 +796,10 @@ fn inspect(install_dir: &Path, wants: &[(&'static str, &str)]) -> (Installed, Pa
 /// current, else the setup script with freshly staged files.
 ///
 /// `own_exe` is the GUI executable inside the mount; the helper and tun2socks
-/// sit beside it in the AppImage's `usr/bin`.
+/// sit beside it in the AppImage's `usr/bin`. `gaming` asks the setup to write
+/// the Gaming Mode record (SteamOS).
 #[cfg(target_os = "linux")]
-pub fn plan_appimage_spawn(own_exe: &Path) -> Result<SpawnPlan, crate::privilege::HelperSetupFailed> {
+pub fn plan_appimage_spawn(own_exe: &Path, gaming: bool) -> Result<SpawnPlan, crate::privilege::HelperSetupFailed> {
     use crate::privilege::HelperSetupFailed as Fail;
 
     let own_dir = own_exe
@@ -500,7 +832,7 @@ pub fn plan_appimage_spawn(own_exe: &Path) -> Result<SpawnPlan, crate::privilege
             })?;
             Ok(SpawnPlan {
                 program: PathBuf::from(SHELL),
-                args: setup_args(install_dir, &staged, &helper_sum, &engine_sum),
+                args: setup_args(install_dir, &staged, &helper_sum, &engine_sum, gaming),
                 staged: Some(staged),
                 setup: true,
             })
@@ -656,17 +988,71 @@ mod tests {
 
     #[test]
     fn the_setup_is_one_fixed_script_with_its_arguments_after_it() {
-        let args = setup_args(Path::new(INSTALL_DIR), Path::new("/run/user/1000/s"), H, E);
+        let args = setup_args(Path::new(INSTALL_DIR), Path::new("/run/user/1000/s"), H, E, true);
         let text: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(text[0], "-c");
         assert_eq!(text[1], SETUP_SCRIPT);
-        assert_eq!(&text[2..], [SETUP_NAME, INSTALL_DIR, "/run/user/1000/s", H, E]);
+        assert_eq!(&text[2..], [SETUP_NAME, INSTALL_DIR, "/run/user/1000/s", H, E, GAMING_FLAG]);
+        let off = setup_args(Path::new(INSTALL_DIR), Path::new("/s"), H, E, false);
+        assert_eq!(off.last().map(|a| a.to_string_lossy().into_owned()).as_deref(), Some("-"));
+        assert!(!SETUP_SCRIPT.contains("$6"), "the user is PKEXEC_UID, never an argument");
         assert!(SETUP_SCRIPT.starts_with("# ProxysVPN:"), "the polkit dialog shows the start");
         for code in [EXIT_FOLDER, EXIT_FILES, EXIT_COPY] {
             assert!(SETUP_SCRIPT.contains(&format!("exit {code}")), "{code}");
             assert!(code != 126 && code != 127, "pkexec's own codes");
         }
         assert_eq!(installed_helper(Path::new(INSTALL_DIR)), Path::new("/home/.proxysvpn/bin/proxysvpn-helper"));
+    }
+
+    #[test]
+    fn steamos_is_found_by_its_id_only() {
+        let deck = "NAME=\"SteamOS\"\nPRETTY_NAME=\"SteamOS\"\nVERSION_CODENAME=holo\nID=steamos\nID_LIKE=arch\nVARIANT_ID=steamdeck\n";
+        assert!(is_steamos(deck));
+        assert!(is_steamos("ID=\"steamos\"\n"));
+        assert!(is_steamos("ID='steamos'"));
+        assert!(!is_steamos("ID=arch\nID_LIKE=steamos\n"), "ID_LIKE is not ID");
+        assert!(!is_steamos("ID=debian\nVERSION_ID=\"13\"\n"));
+        assert!(!is_steamos(""));
+    }
+
+    #[test]
+    fn only_plain_names_and_paths_reach_the_rule() {
+        for good in ["deck", "_svc", "a.b-c_1", "Deck"] {
+            assert!(valid_user_name(good), "{good}");
+        }
+        for bad in ["", "-deck", "de\"ck", "deck\\", "de ck", "deck\n", &"x".repeat(33), "dëck"] {
+            assert!(!valid_user_name(bad), "{bad:?}");
+        }
+        assert!(is_plain_path("/home/.proxysvpn/bin/proxysvpn-helper"));
+        assert!(!is_plain_path("home/x"));
+        assert!(!is_plain_path("/home/x\"); alert(1); //"));
+        assert!(!is_plain_path("/home/x y"));
+
+        assert_eq!(parse_gaming_record(b"deck\n").as_deref(), Some("deck"));
+        assert_eq!(parse_gaming_record(b"deck").as_deref(), Some("deck"));
+        assert_eq!(parse_gaming_record(b"deck\n\n"), None);
+        assert_eq!(parse_gaming_record(b"deck\nroot\n"), None);
+        assert_eq!(parse_gaming_record(b"\xff"), None);
+        assert_eq!(parse_gaming_record(b""), None);
+    }
+
+    /// The rule allows one program, with one argv, as root, for one user at
+    /// the device — and quotes nothing it was not sure of.
+    #[test]
+    fn the_rule_allows_exactly_the_installed_helper() {
+        let helper = installed_helper(Path::new(INSTALL_DIR));
+        let rule = polkit_rule("deck", &helper).expect("rule");
+        assert!(rule.contains(r#"action.id === "org.freedesktop.policykit.exec""#));
+        assert!(rule.contains(r#"action.lookup("program") === "/home/.proxysvpn/bin/proxysvpn-helper""#));
+        assert!(rule.contains(r#"action.lookup("command_line") === "/home/.proxysvpn/bin/proxysvpn-helper --helper""#));
+        assert!(rule.contains(r#"action.lookup("user") === "root""#));
+        assert!(rule.contains(r#"subject.user === "deck""#));
+        assert!(rule.contains("subject.local && subject.active"));
+        assert_eq!(rule.matches("polkit.Result.YES").count(), 1);
+        assert!(!rule.contains("Result.AUTH"), "it never changes how anything else is asked");
+
+        assert_eq!(polkit_rule("de\"ck", &helper), None);
+        assert_eq!(polkit_rule("deck", Path::new("/home/x\"/proxysvpn-helper")), None);
     }
 
     #[cfg(unix)]
@@ -729,11 +1115,23 @@ mod tests {
         /// Run the setup exactly as pkexec would, minus root: same shell,
         /// same arguments, a request already waiting on stdin.
         fn run_setup(base: &Path, dest: &Path, staged: &Path, helper_sum: &str, engine_sum: &str) -> Run {
+            run_setup_as(base, dest, staged, helper_sum, engine_sum, false)
+        }
+
+        fn run_setup_as(
+            base: &Path,
+            dest: &Path,
+            staged: &Path,
+            helper_sum: &str,
+            engine_sum: &str,
+            gaming: bool,
+        ) -> Run {
             use std::io::Write;
 
             let mut child = Command::new(SHELL)
-                .args(setup_args(dest, staged, helper_sum, engine_sum))
+                .args(setup_args(dest, staged, helper_sum, engine_sum, gaming))
                 .env("PATH", path_with_sha256sum(base))
+                .env("PKEXEC_UID", me().to_string())
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -751,6 +1149,16 @@ mod tests {
                 stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
                 stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
             }
+        }
+
+        fn me() -> u32 {
+            // SAFETY: geteuid(2) has no preconditions and cannot fail.
+            unsafe { libc::geteuid() }
+        }
+
+        fn my_name() -> String {
+            let out = Command::new("id").arg("-nu").output().expect("id");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
         }
 
         fn staged_from(base: &Path) -> (PathBuf, String, String) {
@@ -896,6 +1304,121 @@ mod tests {
             std::fs::remove_file(&engine).expect("remove");
             std::os::unix::fs::symlink(&helper, &engine).expect("link");
             assert!(stage(&staged, &helper, &engine).is_err());
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        /// SteamOS: the first setup records who typed the password; a later
+        /// one keeps whatever the record says now, so removing it stays a
+        /// decision; elsewhere the record is removed.
+        #[test]
+        fn the_first_setup_on_steamos_records_its_user_and_later_ones_keep_the_choice() {
+            let base = temp("record");
+            let (staged, hs, es) = staged_from(&base);
+            let dest = base.join(".proxysvpn");
+            let record = dest.join(GAMING_RECORD);
+
+            let run = run_setup_as(&base, &dest, &staged, &hs, &es, true);
+            assert_eq!(run.code, Some(0), "{}", run.stderr);
+            assert_eq!(std::fs::read_to_string(&record).expect("record"), format!("{}\n", my_name()));
+            assert_eq!(std::fs::metadata(&record).expect("meta").mode() & 0o7777, 0o644);
+            assert!(parse_gaming_record(&std::fs::read(&record).expect("read")).is_some());
+
+            std::fs::remove_file(&record).expect("switched off");
+            let update = run_setup_as(&base, &dest, &staged, &hs, &es, true);
+            assert_eq!(update.code, Some(0), "{}", update.stderr);
+            assert!(!record.exists(), "an update does not switch it back on");
+
+            std::fs::write(&record, "deck\n").expect("record");
+            let elsewhere = run_setup_as(&base, &dest, &staged, &hs, &es, false);
+            assert_eq!(elsewhere.code, Some(0), "{}", elsewhere.stderr);
+            assert!(!record.exists(), "not SteamOS: no record");
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        /// The installed tree of a test, owned by the runner instead of root.
+        fn installed(base: &Path, user: Option<&str>) -> (PathBuf, PathBuf, PathBuf) {
+            let install = base.join(".proxysvpn");
+            std::fs::create_dir_all(install.join(BIN_DIR)).expect("bin");
+            let helper = installed_helper(&install);
+            std::fs::write(&helper, b"helper").expect("helper");
+            if let Some(user) = user {
+                std::fs::write(install.join(GAMING_RECORD), format!("{user}\n")).expect("record");
+            }
+            let rules = base.join("rules.d");
+            std::fs::create_dir_all(&rules).expect("rules.d");
+            (install, helper, rules.join("49-proxysvpn.rules"))
+        }
+
+        #[test]
+        fn the_helper_writes_the_rule_its_record_asks_for_once() {
+            let base = temp("rule");
+            let (install, helper, rule) = installed(&base, Some("deck"));
+
+            assert_eq!(sync_rule(&helper, &install, &base, &rule, me()), RuleSync::Written("deck".to_string()));
+            let text = std::fs::read_to_string(&rule).expect("rule");
+            assert_eq!(Some(text), polkit_rule("deck", &helper));
+            assert_eq!(std::fs::metadata(&rule).expect("meta").mode() & 0o7777, 0o644);
+            assert_eq!(sync_rule(&helper, &install, &base, &rule, me()), RuleSync::Unchanged);
+
+            // An /etc reset by an OS update: the next start puts it back.
+            std::fs::remove_file(&rule).expect("reset");
+            assert_eq!(sync_rule(&helper, &install, &base, &rule, me()), RuleSync::Written("deck".to_string()));
+            // Edited by hand: put back as the record says.
+            std::fs::write(&rule, "polkit.addRule(function () { return polkit.Result.YES; });").expect("edit");
+            assert_eq!(sync_rule(&helper, &install, &base, &rule, me()), RuleSync::Written("deck".to_string()));
+
+            // The record removed: the rule goes too, once.
+            std::fs::remove_file(install.join(GAMING_RECORD)).expect("off");
+            assert_eq!(sync_rule(&helper, &install, &base, &rule, me()), RuleSync::Removed);
+            assert!(!rule.exists());
+            assert_eq!(sync_rule(&helper, &install, &base, &rule, me()), RuleSync::Unchanged);
+            let leftovers = std::fs::read_dir(rule.parent().expect("dir")).expect("list").count();
+            assert_eq!(leftovers, 0, "no temp file is left in rules.d");
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        /// The .deb's helper, or any program that is not the installed copy,
+        /// never touches polkit.
+        #[test]
+        fn only_the_installed_copy_touches_polkit() {
+            let base = temp("notours");
+            let (install, _, rule) = installed(&base, Some("deck"));
+            let deb = Path::new("/usr/bin/proxysvpn-desktop");
+            assert_eq!(sync_rule(deb, &install, &base, &rule, me()), RuleSync::NotOurs);
+            let beside = install.join(BIN_DIR).join(ENGINE_BIN);
+            assert_eq!(sync_rule(&beside, &install, &base, &rule, me()), RuleSync::NotOurs);
+            assert!(!rule.exists());
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        /// A folder of the chain others can change: no rule, and an existing
+        /// one is taken away. A record that is not the owner's alone, or not
+        /// a name, changes nothing.
+        #[test]
+        fn a_rule_is_never_written_for_a_path_others_can_swap() {
+            let base = temp("swap-rule");
+            let (install, helper, rule) = installed(&base, Some("deck"));
+            assert_eq!(sync_rule(&helper, &install, &base, &rule, me()), RuleSync::Written("deck".to_string()));
+
+            std::fs::set_permissions(install.join(BIN_DIR), std::fs::Permissions::from_mode(0o777)).expect("chmod");
+            assert!(matches!(sync_rule(&helper, &install, &base, &rule, me()), RuleSync::Failed(r) if r.contains("writable")));
+            assert!(!rule.exists(), "the grant goes while the path is not safe");
+            std::fs::set_permissions(install.join(BIN_DIR), std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+            let record = install.join(GAMING_RECORD);
+            assert_eq!(sync_rule(&helper, &install, &base, &rule, me()), RuleSync::Written("deck".to_string()));
+            std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o666)).expect("chmod");
+            assert!(matches!(sync_rule(&helper, &install, &base, &rule, me()), RuleSync::Failed(_)));
+            assert!(!rule.exists(), "a record others may write names nobody");
+            std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+
+            std::fs::write(&record, "deck\"; return polkit.Result.YES; //\n").expect("forged");
+            assert!(matches!(sync_rule(&helper, &install, &base, &rule, me()), RuleSync::Failed(_)));
+            assert!(!rule.exists());
+
+            std::fs::remove_file(&record).expect("remove");
+            std::os::unix::fs::symlink(base.join("elsewhere"), &record).expect("link");
+            assert!(matches!(sync_rule(&helper, &install, &base, &rule, me()), RuleSync::Failed(_)));
             let _ = std::fs::remove_dir_all(&base);
         }
 
