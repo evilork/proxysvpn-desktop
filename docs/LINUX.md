@@ -1,11 +1,11 @@
 # ProxysVPN Desktop on Linux
 
 Status: built and packaged by CI (`.github/workflows/desktop-build.yml`,
-ubuntu-22.04). The 0.3.1 `.deb` was installed on a Debian 13 live VM on
-01.10.2026, redeemed a pair code and connected (VLESS, Germany). Not yet run
-on real hardware, not yet tried on a Hysteria2 location, and 0.3.2 (the audit
-fixes) has not been run live yet. What else is verified and what is not is
-listed at the bottom.
+ubuntu-22.04). On a Debian 13 live VM the 0.3.1 `.deb` redeemed a pair code
+and connected (VLESS, Germany) on 01.10.2026, and 0.3.2 upgraded over it,
+connected, reconnected, ran a Hysteria2 location and switched between VLESS
+and Hysteria2 both ways without disconnecting on 02.10.2026. Not yet run on
+real hardware. What else is verified and what is not is listed at the bottom.
 
 ## Build dependencies
 

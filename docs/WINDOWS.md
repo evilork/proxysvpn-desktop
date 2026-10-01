@@ -1,11 +1,12 @@
 # ProxysVPN Desktop on Windows
 
-Status: built and packaged by CI (`windows-latest`). The 0.3.1 installer was
-installed on a Windows 11 ARM VM (x64 emulation) on 01.10.2026, redeemed a pair
-code and connected (VLESS, Germany). That run also showed the host-route bug
-fixed in 0.3.2 (`netsh delete route` without the interface). Not yet run on
-real x64 hardware, not yet tried on a Hysteria2 location, and 0.3.2 has not
-been run live yet; everything below marked "unverified" still is.
+Status: built and packaged by CI (`windows-latest`). Run live only on a
+Windows 11 ARM VM (x64 emulation): 0.3.1 connected on 01.10.2026; 0.3.2 failed
+to configure the adapter ("Element not found"), and the build that became 0.3.3
+connected and reconnected (VLESS, Germany) on 02.10.2026. On that VM a connect
+takes 30 s to 2 min because Wintun under emulation cannot remove the previous
+run's adapter; a native arm64 build would avoid it. Not yet run on real x64
+hardware; everything below marked "unverified" still is.
 
 ## How the tunnel works
 
