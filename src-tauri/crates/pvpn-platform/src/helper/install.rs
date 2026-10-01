@@ -166,7 +166,9 @@ pub const EXIT_COPY: i32 = 74;
 
 /// The script root runs, through pkexec, to make the copy and start it.
 ///
-/// Arguments: `$1` the install folder ([`INSTALL_DIR`]), `$2` the staging
+/// Arguments: `$1` the install folder ([`INSTALL_DIR`] with its parent
+/// resolved to the physical folder, so `/var/home/.proxysvpn` where `/home`
+/// is a link), `$2` the staging
 /// folder, `$3` and `$4` the SHA-256 of the helper and of tun2socks as the GUI
 /// read them in its mount, `$5` [`GAMING_FLAG`] on SteamOS and `-` elsewhere.
 /// The user the record names is pkexec's `PKEXEC_UID`, the person who typed
@@ -756,11 +758,13 @@ fn staging_dir() -> anyhow::Result<PathBuf> {
 }
 
 /// Gather the facts [`judge`] needs about `install_dir` on this machine.
+/// Returns the verdict and the physical install folder.
 #[cfg(target_os = "linux")]
 fn inspect(install_dir: &Path, wants: &[(&'static str, &str)]) -> (Installed, PathBuf) {
     // Physical paths throughout: pkexec runs realpath(3) on the program it is
-    // given, and a /home that is a link (/var/home on some systems) must be
-    // judged as the folder it really is.
+    // given, and a /home that is a link (/var/home on Fedora's atomic
+    // desktops, Bazzite among them) must be judged — and handed to the setup,
+    // which refuses a linked parent — as the folder it really is.
     let physical = std::fs::canonicalize(install_dir).unwrap_or_else(|_| {
         let parent = install_dir.parent().unwrap_or(Path::new("/"));
         let name = install_dir.file_name().unwrap_or_default();
@@ -789,7 +793,7 @@ fn inspect(install_dir: &Path, wants: &[(&'static str, &str)]) -> (Installed, Pa
             }
         })
         .collect();
-    (judge(&parents, &own, &files), installed_helper(&physical))
+    (judge(&parents, &own, &files), physical)
 }
 
 /// Decide how the AppImage starts its helper: the installed copy when it is
@@ -812,11 +816,10 @@ pub fn plan_appimage_spawn(own_exe: &Path, gaming: bool) -> Result<SpawnPlan, cr
         .map_err(|e| Fail(format!("this AppImage carries no usable {HELPER_BIN}: {e}")))?;
     let engine_sum = sha256_file(&engine).map_err(|e| Fail(format!("{}: {e}", engine.display())))?;
 
-    let install_dir = Path::new(INSTALL_DIR);
-    let (state, helper_path) = inspect(install_dir, &[(HELPER_BIN, &helper_sum), (ENGINE_BIN, &engine_sum)]);
+    let (state, install_dir) = inspect(Path::new(INSTALL_DIR), &[(HELPER_BIN, &helper_sum), (ENGINE_BIN, &engine_sum)]);
     match state {
         Installed::Current => Ok(SpawnPlan {
-            program: helper_path,
+            program: installed_helper(&install_dir),
             args: vec![OsString::from(super::HELPER_FLAG)],
             staged: None,
             setup: false,
@@ -832,7 +835,7 @@ pub fn plan_appimage_spawn(own_exe: &Path, gaming: bool) -> Result<SpawnPlan, cr
             })?;
             Ok(SpawnPlan {
                 program: PathBuf::from(SHELL),
-                args: setup_args(install_dir, &staged, &helper_sum, &engine_sum, gaming),
+                args: setup_args(&install_dir, &staged, &helper_sum, &engine_sum, gaming),
                 staged: Some(staged),
                 setup: true,
             })
