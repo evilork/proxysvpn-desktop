@@ -190,6 +190,91 @@ pub mod windows {
     pub const DEVICE: &str = "ProxysVPN";
     pub const DEVICE_MASK: &str = "255.255.255.0";
 
+    /// `IF_OPER_STATUS::IfOperStatusNotPresent`: the interface of a device
+    /// that is gone. Windows keeps such interfaces, alias included.
+    pub const OPER_NOT_PRESENT: i32 = 6;
+
+    /// One row of the interface table: as much as choosing our adapter needs.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct AdapterRow {
+        pub alias: String,
+        pub index: u32,
+        /// `IF_OPER_STATUS` as a number; see `OPER_NOT_PRESENT`.
+        pub oper: i32,
+        /// The interface GUID in registry form, `{XXXXXXXX-XXXX-…}`.
+        pub guid: String,
+    }
+
+    /// Our alias, or the one Windows gives a second adapter while the name is
+    /// still held: "ProxysVPN 2", "ProxysVPN #2".
+    pub fn is_our_alias(alias: &str) -> bool {
+        match alias.strip_prefix(DEVICE) {
+            Some("") => true,
+            Some(rest) if rest.starts_with(' ') => {
+                let number = rest.trim_start();
+                let number = number.strip_prefix('#').unwrap_or(number);
+                !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
+            }
+            _ => false,
+        }
+    }
+
+    /// The adapter to address: one that is present and ours by name, the
+    /// exact name first, else the newest numbered one.
+    ///
+    /// Present matters. tun2socks asks Wintun for a new adapter with a random
+    /// GUID on every start, and Windows keeps the interface of a removed one,
+    /// name and all. On a Windows VM (02.10.2026) such a leftover held
+    /// "ProxysVPN": the alias lookup found it, netsh answered «Элемент не
+    /// найден» and every connect failed.
+    pub fn pick_device(rows: &[AdapterRow]) -> Option<u32> {
+        let ours = || rows.iter().filter(|r| r.oper != OPER_NOT_PRESENT && is_our_alias(&r.alias));
+        ours()
+            .find(|r| r.alias == DEVICE)
+            .or_else(|| ours().max_by_key(|r| r.index))
+            .map(|r| r.index)
+    }
+
+    /// Interfaces under our name whose device is gone.
+    pub fn stale_devices(rows: &[AdapterRow]) -> Vec<&AdapterRow> {
+        rows.iter()
+            .filter(|r| r.oper == OPER_NOT_PRESENT && is_our_alias(&r.alias))
+            .collect()
+    }
+
+    /// `{` + 8-4-4-4-12 hex digits + `}`, and nothing else: the only shape
+    /// `remove_stale_device` puts inside a PowerShell string.
+    pub fn is_registry_guid(text: &str) -> bool {
+        let Some(inner) = text.strip_prefix('{').and_then(|t| t.strip_suffix('}')) else {
+            return false;
+        };
+        let groups: Vec<&str> = inner.split('-').collect();
+        groups.len() == 5
+            && groups.iter().zip([8, 4, 4, 4, 12]).all(|(g, len)| {
+                g.len() == len && g.bytes().all(|b| b.is_ascii_hexdigit())
+            })
+    }
+
+    /// PowerShell that removes the not-present device whose instance id
+    /// carries `guid` (a Wintun adapter is `SWD\WINTUN\{guid}`) and prints
+    /// the instance ids it removed. `None` for anything that is not a GUID.
+    /// Only devices that are not running are touched, so a live adapter of
+    /// ours or anything else is never removed.
+    pub fn remove_stale_device(guid: &str) -> Option<Argv> {
+        if !is_registry_guid(guid) {
+            return None;
+        }
+        let script = format!(
+            "Get-PnpDevice -ErrorAction SilentlyContinue | \
+             Where-Object {{ $_.Status -ne 'OK' -and $_.InstanceId -like '*{guid}*' }} | \
+             ForEach-Object {{ & \"$env:SystemRoot\\System32\\pnputil.exe\" /remove-device $_.InstanceId | Out-Null; $_.InstanceId }}"
+        );
+        Some(Argv::new(
+            system32(r"WindowsPowerShell\v1.0\powershell.exe"),
+            ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &script],
+        ))
+    }
+
     /// Absolute path of a System32 tool.
     ///
     /// Not the bare name. The process runs with `requireAdministrator`, and
@@ -358,7 +443,7 @@ pub mod windows {
         Argv::new(netsh(), args)
     }
 
-    pub fn split_default_add(half: &str) -> Argv {
+    pub fn split_default_add(half: &str, if_index: u32) -> Argv {
         Argv::new(
             netsh(),
             [
@@ -367,13 +452,13 @@ pub mod windows {
                 "add",
                 "route",
                 &format!("prefix={}", half),
-                &format!("interface={}", DEVICE),
+                &format!("interface={}", if_index),
                 "store=active",
             ],
         )
     }
 
-    pub fn split_default_delete(half: &str) -> Argv {
+    pub fn split_default_delete(half: &str, if_index: u32) -> Argv {
         Argv::new(
             netsh(),
             [
@@ -382,13 +467,13 @@ pub mod windows {
                 "delete",
                 "route",
                 &format!("prefix={}", half),
-                &format!("interface={}", DEVICE),
+                &format!("interface={}", if_index),
                 "store=active",
             ],
         )
     }
 
-    pub fn device_set_address() -> Argv {
+    pub fn device_set_address(if_index: u32) -> Argv {
         Argv::new(
             netsh(),
             [
@@ -396,7 +481,7 @@ pub mod windows {
                 "ipv4",
                 "set",
                 "address",
-                &format!("name={}", DEVICE),
+                &format!("name={}", if_index),
                 "source=static",
                 &format!("address={}", DEVICE_ADDR),
                 &format!("mask={}", DEVICE_MASK),
@@ -407,7 +492,7 @@ pub mod windows {
     /// Lowest interface metric: Windows breaks ties by metric when several
     /// adapters offer a route of the same length, and prefers the tunnel's
     /// source address for traffic it sends over it.
-    pub fn device_set_metric() -> Argv {
+    pub fn device_set_metric(if_index: u32) -> Argv {
         Argv::new(
             netsh(),
             [
@@ -415,7 +500,7 @@ pub mod windows {
                 "ipv4",
                 "set",
                 "interface",
-                &format!("interface={}", DEVICE),
+                &format!("interface={}", if_index),
                 "metric=1",
                 "store=active",
             ],
@@ -432,7 +517,7 @@ pub mod windows {
     /// through the physical adapter's servers — exactly what macOS does today.
     /// Closing that leak needs a resolver inside the tunnel plus NRPT rules;
     /// it is deliberately out of scope and called out in the PR.
-    pub fn device_clear_dns() -> Argv {
+    pub fn device_clear_dns(if_index: u32) -> Argv {
         Argv::new(
             netsh(),
             [
@@ -440,7 +525,7 @@ pub mod windows {
                 "ipv4",
                 "set",
                 "dnsservers",
-                &format!("name={}", DEVICE),
+                &format!("name={}", if_index),
                 "source=static",
                 "address=none",
                 "register=none",
@@ -864,30 +949,82 @@ mod tests {
             "interface ipv4 delete route prefix=203.0.113.7/32 interface=11 nexthop=192.168.1.1 store=active"
         );
         assert_eq!(
-            args(windows::split_default_add(SPLIT_LOW)),
-            "interface ipv4 add route prefix=0.0.0.0/1 interface=ProxysVPN store=active"
+            args(windows::split_default_add(SPLIT_LOW, 15)),
+            "interface ipv4 add route prefix=0.0.0.0/1 interface=15 store=active"
         );
         assert_eq!(
-            args(windows::split_default_delete(SPLIT_HIGH)),
-            "interface ipv4 delete route prefix=128.0.0.0/1 interface=ProxysVPN store=active"
+            args(windows::split_default_delete(SPLIT_HIGH, 15)),
+            "interface ipv4 delete route prefix=128.0.0.0/1 interface=15 store=active"
         );
         assert_eq!(
-            args(windows::device_set_address()),
-            "interface ipv4 set address name=ProxysVPN source=static address=198.18.0.1 mask=255.255.255.0"
+            args(windows::device_set_address(15)),
+            "interface ipv4 set address name=15 source=static address=198.18.0.1 mask=255.255.255.0"
         );
         assert_eq!(
-            args(windows::device_set_metric()),
-            "interface ipv4 set interface interface=ProxysVPN metric=1 store=active"
+            args(windows::device_set_metric(15)),
+            "interface ipv4 set interface interface=15 metric=1 store=active"
         );
         assert_eq!(
-            args(windows::device_clear_dns()),
-            "interface ipv4 set dnsservers name=ProxysVPN source=static address=none register=none"
+            args(windows::device_clear_dns(15)),
+            "interface ipv4 set dnsservers name=15 source=static address=none register=none"
         );
         assert_eq!(
             args(windows::kill_stray("tun2socks.exe")),
             "/F /T /IM tun2socks.exe"
         );
         assert_eq!(windows::image_name("xray"), "xray.exe");
+    }
+
+    fn adapter(alias: &str, index: u32, oper: i32) -> windows::AdapterRow {
+        windows::AdapterRow {
+            alias: alias.into(),
+            index,
+            oper,
+            guid: "{6B29FC40-CA47-1067-B31D-00DD010662DA}".into(),
+        }
+    }
+
+    #[test]
+    fn windows_picks_the_present_adapter_not_the_leftover_holding_the_name() {
+        const UP: i32 = 1;
+        let gone = windows::OPER_NOT_PRESENT;
+        // The VM of 02.10.2026: only a leftover holds the name.
+        assert_eq!(windows::pick_device(&[adapter("ProxysVPN", 15, gone)]), None);
+        // The new adapter got a numbered name next to the leftover.
+        let rows = [adapter("ProxysVPN", 15, gone), adapter("ProxysVPN 2", 21, UP), adapter("Ethernet", 4, UP)];
+        assert_eq!(windows::pick_device(&rows), Some(21));
+        // The exact name wins over a numbered one when both are present.
+        let rows = [adapter("ProxysVPN 3", 30, UP), adapter("ProxysVPN", 22, UP)];
+        assert_eq!(windows::pick_device(&rows), Some(22));
+        // Newest numbered one when the exact name is not present.
+        let rows = [adapter("ProxysVPN #2", 18, UP), adapter("ProxysVPN 3", 30, UP)];
+        assert_eq!(windows::pick_device(&rows), Some(30));
+        // Names that only start like ours are someone else's.
+        let rows = [adapter("ProxysVPN-old", 9, UP), adapter("ProxysVPN 2x", 10, UP), adapter("proxysvpn", 11, UP)];
+        assert_eq!(windows::pick_device(&rows), None);
+        let rows = [adapter("ProxysVPN", 15, gone), adapter("ProxysVPN 2", 21, UP)];
+        let stale = windows::stale_devices(&rows);
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].index, 15);
+    }
+
+    #[test]
+    fn windows_removes_a_stale_device_only_by_a_well_formed_guid() {
+        let argv = windows::remove_stale_device("{6B29FC40-CA47-1067-B31D-00DD010662DA}").expect("a GUID");
+        assert!(argv.program.to_ascii_lowercase().ends_with(r"\system32\windowspowershell\v1.0\powershell.exe"));
+        let script = argv.args.last().expect("script");
+        assert!(script.contains("-like '*{6B29FC40-CA47-1067-B31D-00DD010662DA}*'"));
+        assert!(script.contains("$_.Status -ne 'OK'"), "never a running device");
+        assert!(script.contains("pnputil.exe"));
+        for bad in [
+            "",
+            "6B29FC40-CA47-1067-B31D-00DD010662DA",
+            "{6B29FC40-CA47-1067-B31D-00DD010662D}",
+            "{6B29FC40-CA47-1067-B31D-00DD010662DA}' ; Remove-Item C:\\",
+            "{*}",
+        ] {
+            assert!(windows::remove_stale_device(bad).is_none(), "{bad:?} must not reach PowerShell");
+        }
     }
 
     /// An elevated process must not let `CreateProcess` find these tools by
@@ -909,8 +1046,8 @@ mod tests {
         assert_eq!(windows::explorer_in(r"D:\WINNT\"), r"D:\WINNT\explorer.exe");
 
         for argv in [
-            windows::device_set_address(),
-            windows::split_default_add(SPLIT_LOW),
+            windows::device_set_address(15),
+            windows::split_default_add(SPLIT_LOW, 15),
             windows::kill_stray("tun2socks.exe"),
             windows::process_alive("tun2socks.exe"),
         ] {
@@ -935,8 +1072,8 @@ mod tests {
         for argv in [
             windows::host_route_add(NODE, &gw_route()).expect("plan"),
             windows::host_route_delete(NODE, windows::HostRouteRow { if_index: 7, next_hop: None }),
-            windows::split_default_add(SPLIT_LOW),
-            windows::split_default_delete(SPLIT_LOW),
+            windows::split_default_add(SPLIT_LOW, 15),
+            windows::split_default_delete(SPLIT_LOW, 15),
         ] {
             assert!(
                 argv.args.iter().any(|a| a == "store=active"),
