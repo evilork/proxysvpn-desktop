@@ -30,6 +30,7 @@ pub mod net;
 pub mod paths;
 pub mod privilege;
 pub mod process;
+pub mod shell;
 pub mod tray;
 pub mod triple;
 

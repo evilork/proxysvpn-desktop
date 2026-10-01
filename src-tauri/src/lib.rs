@@ -3356,6 +3356,27 @@ async fn onboarding_run(step: String) -> Cmd<()> {
     run_onboarding(&step).await.map_err(|e| e.to_payload())
 }
 
+/// Windows: open a link through the person's own, unelevated shell
+/// (pvpn-platform shell.rs). The app runs as administrator there, and the
+/// opener plugin would start a browser that is not yet running with those
+/// rights. The window calls this on Windows only; elsewhere the opener plugin
+/// is used as before. The link is never logged: it can carry a token.
+#[tauri::command]
+fn open_external_unelevated(url: String) -> Cmd<()> {
+    #[cfg(target_os = "windows")]
+    {
+        pvpn_platform::shell::open_url_unelevated(&url).map_err(|e| {
+            logger::log("warn", "app", &format!("link not opened: {e:#}"));
+            AppError::new(ErrorCode::Unknown).to_payload()
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        drop(url);
+        Err(AppError::new(ErrorCode::Unknown).to_payload())
+    }
+}
+
 #[tauri::command]
 async fn app_info(core: tauri::State<'_, Arc<Core>>) -> Cmd<AppInfo> {
     let (support, site) = {
@@ -4505,6 +4526,7 @@ pub fn run() {
             onboarding_state,
             onboarding_run,
             app_info,
+            open_external_unelevated,
             motion::motion_start,
             motion::motion_stop
         ])

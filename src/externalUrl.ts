@@ -126,3 +126,16 @@ export function isAllowedExternal(url: string, isAppstore: boolean): boolean {
   const path = normalPath(parsed.pathname);
   return path !== null && paths.has(`${path}${parsed.search}`);
 }
+
+/**
+ * Does this window hand links to the system shell instead of the opener
+ * plugin? Windows only: the whole app runs as administrator there, and a
+ * browser the plugin starts would inherit that. `open_external_unelevated`
+ * (lib.rs, pvpn-platform shell.rs) gives the link to the person's own,
+ * unelevated Explorer. Decided by the web view's user agent, which is
+ * synchronous and needs no round trip to the core: WebView2 always reports
+ * "Windows NT".
+ */
+export function opensThroughShell(userAgent: string): boolean {
+  return /\bWindows NT\b/.test(userAgent);
+}

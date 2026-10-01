@@ -61,6 +61,16 @@ running the WebView elevated too. A split helper (unprivileged GUI + small
 elevated service) is the right next step for both Windows and Linux; the `net`
 contract is narrow enough to move behind IPC without touching callers.
 
+Links do not inherit that. The opener plugin would call ShellExecute from the
+elevated process, and a browser or Telegram that is not yet running would start
+as administrator. On Windows the window hands links to the core's
+`open_external_unelevated` instead, which gives them to the person's own
+Explorer (`%SystemRoot%\explorer.exe <url>`, pvpn-platform `shell.rs`): the
+running shell starts the default handler with normal rights. Only the opener
+plugin's four schemes pass, commas are encoded, and anything Explorer would
+read as a switch or a path is refused. Unverified on a real machine: that the
+hand-off to the running shell happens for URLs on every supported build.
+
 **DNS is deliberately not redirected (yet).** The 0.3.1 xray config does answer
 DNS inside the tunnel now (`198.18.0.2`, routed to `dns-out`; macOS points its
 system resolver there, Linux publishes it on the device), but Windows still

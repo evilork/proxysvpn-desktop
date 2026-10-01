@@ -199,12 +199,26 @@ pub mod windows {
     /// Files and unwritable, but a portable copy, an unpacked folder or a dev
     /// build are all ordinary user-writable directories. macOS already resolves
     /// `/sbin/route` for the same reason.
-    fn system32(exe: &str) -> String {
-        let root = std::env::var("SystemRoot")
+    fn windows_root() -> String {
+        std::env::var("SystemRoot")
             .ok()
             .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| WINDOWS_ROOT_FALLBACK.to_string());
-        system32_in(&root, exe)
+            .unwrap_or_else(|| WINDOWS_ROOT_FALLBACK.to_string())
+    }
+
+    fn system32(exe: &str) -> String {
+        system32_in(&windows_root(), exe)
+    }
+
+    /// Explorer, which lives in the Windows folder itself, not in System32:
+    /// the unelevated shell links are handed to (shell.rs). Absolute for the
+    /// same reason as the System32 tools.
+    pub fn explorer_path() -> String {
+        explorer_in(&windows_root())
+    }
+
+    pub fn explorer_in(root: &str) -> String {
+        format!(r"{}\explorer.exe", root.trim_end_matches('\\'))
     }
 
     /// Where Windows itself is when `%SystemRoot%` is missing from the
@@ -785,6 +799,9 @@ mod tests {
             windows::system32_in(r"D:\WINNT\", "taskkill.exe"),
             r"D:\WINNT\System32\taskkill.exe"
         );
+        // Explorer, the shell links are handed to, is in the Windows folder.
+        assert_eq!(windows::explorer_in(r"C:\Windows"), r"C:\Windows\explorer.exe");
+        assert_eq!(windows::explorer_in(r"D:\WINNT\"), r"D:\WINNT\explorer.exe");
 
         for argv in [
             windows::device_set_address(),

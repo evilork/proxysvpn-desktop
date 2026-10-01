@@ -47,6 +47,8 @@
 //   onboarding_state -> OnboardingState
 //   onboarding_run{ step } -> ()
 //   app_info       -> AppInfo
+//   open_external_unelevated{ url } -> ()   Windows only: links through the
+//                                           unelevated shell (externalUrl.ts)
 //
 // Commands answer `Result<T, String>` with `AppError::to_payload()` in the
 // error, exactly as errors.rs describes; `call()` below turns that back into
@@ -58,7 +60,7 @@ import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { IS_APPSTORE } from "./dist";
-import { isAllowedExternal } from "./externalUrl";
+import { isAllowedExternal, opensThroughShell } from "./externalUrl";
 import { normalisePairCode } from "./pairCode";
 import {
   ERROR_ACTION,
@@ -544,6 +546,11 @@ class TauriBridge implements CoreBridge {
     if (IS_APPSTORE && !isAllowedExternal(url, true)) {
       console.warn({ event: "external_url_blocked", dist: "appstore", ...urlOrigin(url) });
       return;
+    }
+    // Windows: through the person's own shell, so a browser that is not yet
+    // running does not start with this app's administrator rights.
+    if (opensThroughShell(navigator.userAgent)) {
+      return call<void>("open_external_unelevated", { url });
     }
     try {
       await openUrl(url);
