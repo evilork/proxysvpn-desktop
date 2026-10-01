@@ -4870,6 +4870,16 @@ mod tests {
         assert!(window["minWidth"].as_f64().is_some_and(|w| w <= 480.0), "{window}");
     }
 
+    /// xray 26.3.27 and hysteria 2.9.3 are built with Go 1.26, whose
+    /// binaries need macOS 12 (`otool -l`: minos 12.0). Declaring 11.0 let
+    /// Big Sur install an app whose engines it does not support.
+    #[test]
+    fn the_bundle_does_not_claim_a_macos_its_engines_cannot_run_on() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json parses");
+        assert_eq!(conf["bundle"]["macOS"]["minimumSystemVersion"], "12.0");
+    }
+
     #[test]
     fn green_by_warm_up_is_checked_at_the_warm_up_pace_until_a_probe_answers() {
         let now = Instant::now();
