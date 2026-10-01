@@ -184,3 +184,133 @@ test("a name is matched whole, not as a suffix of a longer one", { skip: SKIP },
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── Which installers a release carries ──────────────────────────────────────
+// Three required (dmg, x64 exe, deb); the arm64 Windows installer and an
+// AppImage are optional extras, attached when they are there.
+
+const ARM = "ProxysVPN_9.9.9_arm64-setup.exe";
+const APPIMAGE = "ProxysVPN_9.9.9_amd64.AppImage";
+
+function collect(dir: string, sums: string[] = []): Run {
+  return bash(`release_collect_assets "$@"`, [dir, "9.9.9", ...sums]);
+}
+
+function lines(out: string): string[] {
+  return out.trim() === "" ? [] : out.trim().split("\n");
+}
+
+test("an optional installer that is not there is no error and prints nothing", { skip: SKIP }, () => {
+  const dir = scratch();
+  try {
+    const r = bash(`release_find_optional_asset "$1" "$2"`, [dir, ARM]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout, "");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an optional installer is found at any depth, and twice is still an error", { skip: SKIP }, () => {
+  const dir = scratch();
+  try {
+    const path = put(dir, `nsis/${ARM}`, "x");
+    let r = bash(`release_find_optional_asset "$1" "$2"`, [dir, ARM]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.trim(), path);
+
+    put(dir, ARM, "y");
+    r = bash(`release_find_optional_asset "$1" "$2"`, [dir, ARM]);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /twice/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the three required installers alone make a release, and the extras are named as left out", { skip: SKIP }, () => {
+  const dir = scratch();
+  try {
+    const want = [put(dir, DMG, "1"), put(dir, `nsis/${EXE}`, "2"), put(dir, DEB, "3")];
+    const r = collect(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(lines(r.stdout), want);
+    assert.match(r.stderr, new RegExp(`no ${ARM.replace(/\./g, "\\.")} under`));
+    assert.match(r.stderr, /AppImage under/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the arm64 installer and an AppImage are attached after the required ones", { skip: SKIP }, () => {
+  const dir = scratch();
+  try {
+    const appimage = put(dir, `appimage/${APPIMAGE}`, "5");
+    const arm = put(dir, ARM, "4");
+    const required = [put(dir, `dmg/${DMG}`, "1"), put(dir, EXE, "2"), put(dir, DEB, "3")];
+    const r = collect(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(lines(r.stdout), [...required, arm, appimage]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a missing required installer fails even when every extra is there", { skip: SKIP }, () => {
+  const dir = scratch();
+  try {
+    put(dir, DMG, "1");
+    put(dir, DEB, "3");
+    put(dir, ARM, "4");
+    const r = collect(dir);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, new RegExp(`missing ${EXE.replace(/\./g, "\\.")}`));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an extra the CI run built but the folder lacks is an incomplete download", { skip: SKIP }, () => {
+  const dir = scratch();
+  try {
+    put(dir, DMG, "1");
+    put(dir, EXE, "2");
+    put(dir, DEB, "3");
+    const armSums = put(dir, "SHA256SUMS-proxysvpn-windows-arm64.txt", `${H1} *${ARM}\r\n`);
+    const r = collect(dir, [armSums]);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /CI run built .*arm64-setup\.exe/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("release_ci_names reads both line forms and needs at least one file", { skip: SKIP }, () => {
+  const dir = scratch();
+  try {
+    const win = put(dir, "SHA256SUMS-proxysvpn-windows-arm64.txt", `${H1} *${ARM}\r\n`);
+    const lin = put(dir, "SHA256SUMS-proxysvpn-linux-x86_64.txt", `${H3}  ${APPIMAGE}\n`);
+    assert.equal(bash(`release_ci_names "$@"`, [ARM, win, lin]).status, 0);
+    assert.equal(bash(`release_ci_names "$@"`, [APPIMAGE, win, lin]).status, 0);
+    assert.notEqual(bash(`release_ci_names "$@"`, [`old-${ARM}`, win]).status, 0);
+    assert.notEqual(bash(`release_ci_names "$@"`, [ARM]).status, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("four installers with four CI sums files pass the cross-check", { skip: SKIP }, () => {
+  const dir = scratch();
+  try {
+    const H4 = "d".repeat(64);
+    const mac = put(dir, "SHA256SUMS-proxysvpn-macos-aarch64.txt", `${H1}  ${DMG}\n`);
+    const win = put(dir, "SHA256SUMS-proxysvpn-windows-x86_64.txt", `${H2} *${EXE}\n`);
+    const arm = put(dir, "SHA256SUMS-proxysvpn-windows-arm64.txt", `${H4} *${ARM}\n`);
+    const lin = put(dir, "SHA256SUMS-proxysvpn-linux-x86_64.txt", `${H3}  ${DEB}\n`);
+    const ours = put(dir, "SHA256SUMS.txt", `${H1}  ${DMG}\n${H2}  ${EXE}\n${H3}  ${DEB}\n${H4}  ${ARM}\n`);
+    const r = bash(`release_check_against_ci "$@"`, [ours, mac, win, arm, lin]);
+    assert.equal(r.status, 0, r.stderr);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

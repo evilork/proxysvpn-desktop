@@ -15,11 +15,15 @@
 # Steps for a release (see RELEASE_NOTES.md, top section):
 #   1. Merge the release branch to main and wait for desktop-build to pass.
 #   2. Actions -> desktop-build -> Run workflow on main, tick upload_installers.
-#   3. Download the three artifacts of THAT run into one folder and unzip
-#      them there (each brings its SHA256SUMS-<artifact>.txt). Subfolders are
+#   3. Download every artifact of THAT run into one folder and unzip them
+#      there (each brings its SHA256SUMS-<artifact>.txt). Subfolders are
 #      fine: the files are looked up at any depth (scripts/release-sums.sh).
 #   4. bash scripts/publish-release.sh <that folder>
 #   5. Read the draft on GitHub, then publish it.
+#
+# The dmg, the x64 Windows installer and the deb are required. The arm64
+# Windows installer and an AppImage are attached when the folder has them;
+# which installers count is release_collect_assets in scripts/release-sums.sh.
 #
 # Requirements: gh (authenticated), git, node, shasum or sha256sum.
 #
@@ -30,7 +34,7 @@ set -euo pipefail
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-[[ $# -eq 1 ]] || die "usage: bash scripts/publish-release.sh <folder with the three installers>"
+[[ $# -eq 1 ]] || die "usage: bash scripts/publish-release.sh <folder with the downloaded installers>"
 ASSETS_DIR="$(cd "$1" && pwd)" || die "no such folder: $1"
 
 cd "$(git rev-parse --show-toplevel)"
@@ -72,29 +76,39 @@ if gh release view "$TAG" >/dev/null 2>&1; then
     die "a release $TAG already exists; this script never deletes or overwrites releases"
 fi
 
-# ── The three installers, nothing else ──────────────────────────────────
-DMG="ProxysVPN_${VERSION}_aarch64.dmg"
-EXE="ProxysVPN_${VERSION}_x64-setup.exe"
-DEB="ProxysVPN_${VERSION}_amd64.deb"
+# ── The installers, nothing else ────────────────────────────────────────
+# The CI run's own SHA256SUMS-*.txt files first: an optional installer they
+# list must be in the folder too (see release_collect_assets).
+ci_sums=()
+while IFS= read -r f; do
+    ci_sums+=("$f")
+done < <(release_find_ci_sums "$ASSETS_DIR")
+
+# Three required, then the optional ones that are there. The `+` form passes
+# no argument for an empty list: bash 3.2 calls an empty array unbound under
+# `set -u`. Never empty afterwards, so ASSETS is safe to expand as it is.
 hint="download the artifacts of the CI run on $MAIN_SHA"
-DMG_PATH="$(release_find_asset "$ASSETS_DIR" "$DMG")" || die "no single $DMG under $ASSETS_DIR ($hint)"
-EXE_PATH="$(release_find_asset "$ASSETS_DIR" "$EXE")" || die "no single $EXE under $ASSETS_DIR ($hint)"
-DEB_PATH="$(release_find_asset "$ASSETS_DIR" "$DEB")" || die "no single $DEB under $ASSETS_DIR ($hint)"
+ASSETS_LIST="$(release_collect_assets "$ASSETS_DIR" "$VERSION" ${ci_sums[@]+"${ci_sums[@]}"})" \
+    || die "the installers under $ASSETS_DIR are not a complete release of $VERSION ($hint)"
+ASSETS=()
+while IFS= read -r path; do
+    ASSETS+=("$path")
+done <<< "$ASSETS_LIST"
+NAMES=""
+for path in "${ASSETS[@]}"; do
+    NAMES="$NAMES$(basename "$path"), "
+done
 
 # Bare file names, whatever subfolder each installer came in, so
 # `sha256sum -c SHA256SUMS.txt` works next to the downloaded release assets.
 SUMS="$ASSETS_DIR/SHA256SUMS.txt"
-for path in "$DMG_PATH" "$EXE_PATH" "$DEB_PATH"; do
+for path in "${ASSETS[@]}"; do
     ( cd "$(dirname "$path")" && sha256 "$(basename "$path")" )
 done > "$SUMS"
 
 # Cross-check against the sums the CI run wrote into its artifacts. Once any
 # of those files is there, every installer must have a matching line in them:
 # a missing line is an installer the run never vouched for.
-ci_sums=()
-while IFS= read -r f; do
-    ci_sums+=("$f")
-done < <(release_find_ci_sums "$ASSETS_DIR")
 if [[ ${#ci_sums[@]} -gt 0 ]]; then
     release_check_against_ci "$SUMS" "${ci_sums[@]}" \
         || die "the installers do not match the CI run's SHA256SUMS files (${#ci_sums[@]} found)"
@@ -125,7 +139,7 @@ KIND="--latest"
 echo ""
 echo "About to create a DRAFT release:"
 echo "  tag:     $TAG (created by GitHub at $HEAD_SHA when the draft is published)"
-echo "  assets:  $DMG, $EXE, $DEB, SHA256SUMS.txt"
+echo "  assets:  ${NAMES}SHA256SUMS.txt"
 echo "  kind:    ${KIND#--}"
 read -r -p "Create the draft? [y/N] " answer
 [[ "$answer" =~ ^[yY]$ ]] || die "nothing created"
@@ -136,7 +150,7 @@ gh release create "$TAG" \
     --title "ProxysVPN Desktop $TAG" \
     --notes-file "$NOTES" \
     "$KIND" \
-    "$DMG_PATH" "$EXE_PATH" "$DEB_PATH" "$SUMS"
+    "${ASSETS[@]}" "$SUMS"
 
 echo ""
 echo "Draft created. Read it, then publish it on GitHub:"
