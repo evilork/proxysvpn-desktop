@@ -941,23 +941,11 @@ fn link_stored_at() -> Option<u64> {
 fn store_link(link: &str) -> Result<(), AppError> {
     let mut last: Option<std::io::Error> = None;
     for path in link_paths() {
-        if let Some(dir) = path.parent() {
-            if std::fs::create_dir_all(dir).is_err() {
-                continue;
-            }
-        }
-        match std::fs::write(&path, format!("{link}\n")) {
-            Ok(()) => {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    // The token in this link IS the credential; unlike the
-                    // device id it must not be world readable.
-                    let _ =
-                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-                }
-                return Ok(());
-            }
+        // The token in this link IS the credential; unlike the device id it
+        // must not be readable by anyone else, not even for the moment
+        // between a write and a chmod (appdirs::write_private).
+        match appdirs::write_private(&path, format!("{link}\n").as_bytes()) {
+            Ok(()) => return Ok(()),
             Err(e) => last = Some(e),
         }
     }

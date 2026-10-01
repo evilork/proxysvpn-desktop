@@ -21,7 +21,7 @@
 //   Linux   — $XDG_DATA_HOME/ProxysVPN (or ~/.local/share/ProxysVPN), owner
 //             only. The GUI is unprivileged there, so this is the user's own.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The directories app data may live in, most preferred first. Empty when the
 /// environment names none, which every store treats as "nothing stored yet".
@@ -56,9 +56,95 @@ pub fn state_dirs() -> Vec<PathBuf> {
     out
 }
 
+/// Write one of the app's small files so that only its owner can read it.
+///
+/// A temp file created owner-only (0600 on Unix) in the same folder, then
+/// renamed over the target: there is no moment when the content exists with
+/// looser permissions (the old write-then-chmod left a new subscription link
+/// at 0644 for a moment), an existing world-readable file is replaced by a
+/// private one rather than kept, and a symlink planted at the name is
+/// replaced, not written through. On macOS the folder is the shared
+/// /Library/Application Support/ProxysVPN, readable by every account on the
+/// Mac; the link holds the account credential and the tunnel preferences the
+/// person's own "always direct / always via VPN" lists.
+pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let dir = path
+        .parent()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no folder"))?;
+    std::fs::create_dir_all(dir)?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no name"))?;
+    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let result = options
+        .open(&tmp)
+        .and_then(|mut file| file.write_all(bytes))
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("pvpn-appdirs-{tag}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch");
+        dir
+    }
+
+    /// The link and the tunnel preferences live in a folder every account
+    /// on a Mac can read: they must be owner-only from the first byte, and a
+    /// file left world-readable by an older version must not stay so.
+    #[cfg(unix)]
+    #[test]
+    fn private_files_are_owner_only_even_over_an_old_readable_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("mode");
+        let path = dir.join("tunnel-prefs.json");
+        std::fs::write(&path, b"old").expect("old file");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        write_private(&path, b"new").expect("write");
+        assert_eq!(std::fs::read(&path).expect("read"), b"new");
+        let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_at_the_name_is_replaced_not_written_through() {
+        let dir = scratch("link");
+        let victim = dir.join("victim");
+        std::fs::write(&victim, b"keep").expect("victim");
+        let path = dir.join("sub-link");
+        std::os::unix::fs::symlink(&victim, &path).expect("link");
+
+        write_private(&path, b"https://proxysvpn.com/api/sub/x\n").expect("write");
+        assert_eq!(std::fs::read(&victim).expect("victim"), b"keep");
+        assert!(!std::fs::symlink_metadata(&path).expect("meta").file_type().is_symlink());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// The macOS list is the one every store built by hand before this module
     /// existed; an upgrade must keep finding the same files.

@@ -375,17 +375,10 @@ pub fn store(prefs: &TunnelPrefs) -> bool {
     let Ok(text) = serde_json::to_string_pretty(prefs) else {
         return false;
     };
-    for path in paths() {
-        if let Some(dir) = path.parent() {
-            if std::fs::create_dir_all(dir).is_err() {
-                continue;
-            }
-        }
-        if std::fs::write(&path, format!("{text}\n")).is_ok() {
-            return true;
-        }
-    }
-    false
+    // Owner-only: on macOS the first folder is shared by every account.
+    paths()
+        .iter()
+        .any(|path| crate::appdirs::write_private(path, format!("{text}\n").as_bytes()).is_ok())
 }
 
 #[cfg(test)]
