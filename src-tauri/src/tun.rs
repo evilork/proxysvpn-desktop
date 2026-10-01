@@ -404,28 +404,42 @@ async fn configure_device() -> Result<(), AppError> {
     add_split_defaults().await
 }
 
-/// The person pressed Connect: ours must be the half-defaults that carry the
-/// traffic, so a /1 another VPN left in place is removed here — and only here,
-/// where they asked for it (it used to happen at every launch and quit too,
-/// see `half_default_is_ours`). Said in the log, because the other VPN keeps
-/// saying "connected" while its traffic now goes through ours.
+/// The tunnel is being raised because the person asked for it (Connect, or
+/// the engine restart that keeps that connection): ours must be the
+/// half-defaults that carry the traffic, so a /1 already in the table is
+/// removed first, or `add_split_defaults` would fail on it. It used to happen
+/// at every launch and quit too, see `half_default_is_ours`.
+///
+/// Whether a /1 is there at all is read from what `route get` PRINTS:
+/// route(8) exits 0 for "not in table" as well, so its status said "present"
+/// on every connect, logged a phantom other VPN and ran a delete that failed
+/// as an `[error]`. Only a /1 on another interface is reported — the other
+/// VPN keeps saying "connected" while its traffic now goes through ours.
 async fn take_over_half_defaults() {
     for half in HALF_DEFAULTS {
-        let present = Command::new("/sbin/route")
+        let out = Command::new("/sbin/route")
             .args(["-n", "get", "-net", half])
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
-            .await
-            .is_ok_and(|s| s.success());
-        if present {
-            crate::logger::log(
-                "warn",
-                "tun",
-                &format!("{half} was already routed elsewhere (another VPN?); replaced by ours for this session"),
-            );
-            let _ = run_cmd("/sbin/route", &["-n", "delete", "-net", half]).await;
+            .output()
+            .await;
+        let found = match out {
+            Ok(o) if o.status.success() => classify_half_default(&String::from_utf8_lossy(&o.stdout)),
+            _ => HalfDefault::Absent,
+        };
+        match found {
+            HalfDefault::Absent => {}
+            HalfDefault::Ours => {
+                let _ = run_cmd("/sbin/route", &["-n", "delete", "-net", half]).await;
+            }
+            HalfDefault::Foreign => {
+                crate::logger::log(
+                    "warn",
+                    "tun",
+                    &format!("{half} was already routed elsewhere (another VPN?); replaced by ours for this session"),
+                );
+                let _ = run_cmd("/sbin/route", &["-n", "delete", "-net", half]).await;
+            }
         }
     }
 }
@@ -611,13 +625,35 @@ const HALF_DEFAULTS: [&str; 2] = ["0.0.0.0/1", "128.0.0.0/1"];
 /// name at every launch, connect and quit silently sent the other VPN's
 /// traffic out in the clear while it still said "connected".
 fn half_default_is_ours(route_get: &str) -> bool {
+    classify_half_default(route_get) == HalfDefault::Ours
+}
+
+/// What `route -n get -net <half>` printed about a /1 half-default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HalfDefault {
+    /// No /1 in the table: "not in table" (on stderr, exit 0), or an answer
+    /// about some other route.
+    Absent,
+    /// The /1 on utun225.
+    Ours,
+    /// A /1 on another interface — another VPN's `def1`.
+    Foreign,
+}
+
+fn classify_half_default(route_get: &str) -> HalfDefault {
     let field = |name: &str| {
         route_get.lines().find_map(|line| {
             let (key, value) = line.split_once(':')?;
             (key.trim() == name).then(|| value.trim().to_string())
         })
     };
-    field("mask").as_deref() == Some("128.0.0.0") && field("interface").as_deref() == Some(TUN_NAME)
+    if field("mask").as_deref() != Some("128.0.0.0") {
+        HalfDefault::Absent
+    } else if field("interface").as_deref() == Some(TUN_NAME) {
+        HalfDefault::Ours
+    } else {
+        HalfDefault::Foreign
+    }
 }
 
 async fn delete_half_default_if_ours(half: &str) {
@@ -627,7 +663,7 @@ async fn delete_half_default_if_ours(half: &str) {
         .stderr(Stdio::null())
         .output()
         .await;
-    // "not in table" (no such route) exits non-zero: nothing to delete.
+    // route(8) exits 0 even for "not in table"; what it printed decides.
     let ours = out
         .ok()
         .filter(|o| o.status.success())
@@ -831,6 +867,24 @@ default            192.168.1.1        UGScg                 en0
         assert!(!half_default_is_ours(""));
         // Same name, longer: utun2250 is not utun225.
         assert!(!half_default_is_ours(&ours.replace("utun225", "utun2250")));
+    }
+
+    /// What Connect does with each answer: nothing for "not in table" (route
+    /// exits 0 for it and prints nothing on stdout), a quiet delete of our
+    /// own leftover, and a warning only for a /1 that really is another VPN's.
+    #[test]
+    fn only_a_half_default_on_another_interface_is_reported_as_another_vpn() {
+        let ours = "   route to: 0.0.0.0\ndestination: 0.0.0.0\n       mask: 128.0.0.0\n  interface: utun225\n";
+        let wireguard = "   route to: 128.0.0.0\ndestination: 128.0.0.0\n       mask: 128.0.0.0\n  interface: utun3\n";
+        let default = "   route to: default\ndestination: default\n       mask: default\n    gateway: 192.168.1.1\n  interface: en0\n";
+        assert_eq!(classify_half_default(""), HalfDefault::Absent, "not in table");
+        assert_eq!(
+            classify_half_default("route: writing to routing socket: not in table\n"),
+            HalfDefault::Absent
+        );
+        assert_eq!(classify_half_default(default), HalfDefault::Absent);
+        assert_eq!(classify_half_default(ours), HalfDefault::Ours);
+        assert_eq!(classify_half_default(wireguard), HalfDefault::Foreign);
     }
 
     /// Another account on the Mac can leave a file at the fixed /tmp name;
