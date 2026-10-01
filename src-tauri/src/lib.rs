@@ -674,6 +674,10 @@ struct Core {
     /// `set_ui_lang` при старте и при каждой смене. `false` = ru, значение по
     /// умолчанию до первого вызова - то же, что и умолчание окна.
     ui_lang_en: std::sync::atomic::AtomicBool,
+    /// Pair code v1.1: the request id of the code on the sign-in screen, the
+    /// same on every press for that code until a sign-in forgets it
+    /// (pair_code.rs). Its own lock, held for no network call.
+    pair_code_ids: pair_code::RedeemIds,
 
     #[cfg(target_os = "macos")]
     xray: xray_manager::SharedXrayState,
@@ -706,6 +710,7 @@ impl Core {
             operation: Mutex::new(()),
             window_focused: std::sync::atomic::AtomicBool::new(true),
             ui_lang_en: std::sync::atomic::AtomicBool::new(false),
+            pair_code_ids: pair_code::RedeemIds::default(),
             #[cfg(target_os = "macos")]
             xray: xray_manager::new_state(),
             #[cfg(target_os = "macos")]
@@ -3053,6 +3058,8 @@ async fn sub_state(core: tauri::State<'_, Arc<Core>>) -> Cmd<SubState> {
 async fn sub_set(core: tauri::State<'_, Arc<Core>>, link: String) -> Cmd<()> {
     let link = validate_link(&link).map_err(|e| e.to_payload())?;
     store_link(&link).map_err(|e| e.to_payload())?;
+    // A pasted link is a sign-in too: a code tried before it is done with.
+    core.pair_code_ids.forget();
     let mut s = core.session.lock().await;
     // A new link is a new account: everything learned about the old one is
     // about somebody else's list.
@@ -3261,17 +3268,21 @@ async fn pair_poll(core: tauri::State<'_, Arc<Core>>, token: String) -> Cmd<Pair
     })
 }
 
-/// Pair code v1: the eight characters from the cabinet or the bot, typed on
+/// Pair code v1.1: the eight characters from the cabinet or the bot, typed on
 /// the sign-in screen. On success the link is kept exactly as a scanned QR
 /// keeps it, and the window connects the same way.
 ///
+/// Every press with the same code carries the same request id
+/// (`core.pair_code_ids`), so pressing again after "could not reach the
+/// service" gets back a link whose first answer was lost on the way.
+///
 /// The log gets the outcome class and nothing else: never the code, never
-/// the link (pair_code.rs).
+/// the link, never the request id (pair_code.rs).
 #[tauri::command]
 async fn redeem_pair_code(core: tauri::State<'_, Arc<Core>>, code: String) -> Cmd<()> {
     let core = core.inner().clone();
     let wire = site_ladder::HttpWire::new(http_client().map_err(|e| e.to_payload())?);
-    let link = match pair_code::redeem(&wire, &SITE_LADDER, &code).await {
+    let link = match pair_code::redeem(&wire, &SITE_LADDER, &core.pair_code_ids, &code).await {
         Ok(link) => link,
         Err(e) => {
             // A wrong or spent code is the person's everyday, not our error.
@@ -3293,6 +3304,10 @@ async fn redeem_pair_code(core: tauri::State<'_, Arc<Core>>, code: String) -> Cm
 
 /// A pairing delivered a link, by QR or by code: keep it, and forget the list
 /// fetched for whatever link came before, so the next connect reads this one.
+///
+/// The pair code's request id is forgotten only once the link is stored: a
+/// link that arrived but could not be kept may be asked for again with the
+/// same code, and the service repeats it for five minutes.
 async fn adopt_paired_link(core: &Core, link: &str) -> Result<(), AppError> {
     let link = match validate_link(link) {
         Ok(link) => link,
@@ -3308,6 +3323,7 @@ async fn adopt_paired_link(core: &Core, link: &str) -> Result<(), AppError> {
         return Err(e);
     }
     logger::log("info", "pair", "link stored");
+    core.pair_code_ids.forget();
     let mut s = core.session.lock().await;
     s.servers.clear();
     s.sub_fetched_at = None;
