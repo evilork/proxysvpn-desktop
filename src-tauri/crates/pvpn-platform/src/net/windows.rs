@@ -378,24 +378,24 @@ pub fn has_usable_link() -> bool {
     physical_default(device_index().ok()).is_ok()
 }
 
-/// Is there a /32 route to `dest` in the table, on any adapter?
+/// Every /32 row to `dest` in the table, on any adapter, or `None` when the
+/// table cannot be read.
 ///
 /// Asked before the pre-install delete below so that the delete runs only
-/// when there is something to delete. Run blind, it failed on every connect
-/// and location change — there normally is no leftover — and each failure
-/// put a netsh command line naming the node into the log.
-fn host_route_present(dest: Ipv4Addr) -> bool {
+/// when there is something to delete — run blind, it failed on every connect
+/// and location change and put a netsh line naming the node into the log —
+/// and so that the delete can name the interface and next hop, without which
+/// netsh refuses to delete anything.
+fn host_route_rows(dest: Ipv4Addr) -> Option<Vec<p::HostRouteRow>> {
     let mut table: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
     // SAFETY: `table` is an out-pointer that IP Helper allocates; it is freed
     // with FreeMibTable below on every path that reaches it.
     let err = unsafe { GetIpForwardTable2(AF_INET, &mut table) };
     if err != NO_ERROR {
-        // Unknown: let the caller delete as before rather than add over a
-        // leftover and fail.
-        return true;
+        return None;
     }
     let wanted = u32::from_ne_bytes(dest.octets());
-    let mut found = false;
+    let mut rows_found = Vec::new();
     // SAFETY: the table is non-null (NO_ERROR) and NumEntries describes the
     // length of the trailing Table array; nothing escapes the loop by pointer.
     unsafe {
@@ -407,21 +407,35 @@ fn host_route_present(dest: Ipv4Addr) -> bool {
                 && row.DestinationPrefix.Prefix.si_family == AF_INET
                 && row.DestinationPrefix.Prefix.Ipv4.sin_addr.S_un.S_addr == wanted
             {
-                found = true;
-                break;
+                rows_found.push(p::HostRouteRow {
+                    if_index: row.InterfaceIndex,
+                    next_hop: next_hop_of(row),
+                });
             }
         }
         FreeMibTable(table as *const _);
     }
-    found
+    Some(rows_found)
 }
 
 pub async fn add_host_route(dest: Ipv4Addr, via: &PhysicalRoute) -> Result<()> {
-    // Drop a leftover from an earlier run before installing ours, otherwise
-    // netsh refuses the duplicate prefix. Only when there is one: see
-    // `host_route_present`.
-    if host_route_present(dest) {
-        p::host_route_delete(dest).run_best_effort().await;
+    let wanted = p::HostRouteRow::for_route(via);
+    match host_route_rows(dest) {
+        Some(existing) => {
+            let prep = p::prepare_host_route(&existing, wanted);
+            for row in &prep.delete {
+                p::host_route_delete(dest, *row).run_best_effort().await;
+            }
+            if prep.keep_existing {
+                // A leftover from the last session that is exactly the route
+                // we want: adding it again would fail with "object already
+                // exists" and take the whole connect down with it.
+                log::info("net", "host route already in place, reusing it");
+                return Ok(());
+            }
+        }
+        // Unreadable table: try the add; a duplicate fails loudly below.
+        None => log::warn("net", "route table unreadable before adding the host route"),
     }
     p::host_route_add(dest, via)?
         .run()
@@ -430,7 +444,14 @@ pub async fn add_host_route(dest: Ipv4Addr, via: &PhysicalRoute) -> Result<()> {
 }
 
 pub async fn delete_host_route(dest: Ipv4Addr) {
-    p::host_route_delete(dest).run_best_effort().await;
+    match host_route_rows(dest) {
+        Some(rows) => {
+            for row in rows {
+                p::host_route_delete(dest, row).run_best_effort().await;
+            }
+        }
+        None => log::warn("net", "route table unreadable, host route left in place"),
+    }
 }
 
 pub async fn host_route_ok(dest: Ipv4Addr) -> bool {
@@ -544,7 +565,9 @@ fn sync_cleanup_inner(stale_hosts: &[Ipv4Addr]) {
     run(p::split_default_delete(SPLIT_LOW));
     run(p::split_default_delete(SPLIT_HIGH));
     for host in stale_hosts {
-        run(p::host_route_delete(*host));
+        for row in host_route_rows(*host).unwrap_or_default() {
+            run(p::host_route_delete(*host, row));
+        }
     }
     // No engine sweep by image name: see `kill_stray`. An engine of ours that
     // existed when the previous run died went with it (job object).

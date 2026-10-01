@@ -291,18 +291,71 @@ pub mod windows {
         Ok(Argv::new(netsh(), args))
     }
 
-    pub fn host_route_delete(ip: Ipv4Addr) -> Argv {
-        Argv::new(
-            netsh(),
-            [
-                "interface",
-                "ipv4",
-                "delete",
-                "route",
-                &format!("prefix={}/32", ip),
-                "store=active",
-            ],
-        )
+    /// One /32 row of the forwarding table: the adapter it is on and its
+    /// next hop (`None` = on-link). netsh can only delete a route it can name
+    /// by both, so this is what a delete has to be built from.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct HostRouteRow {
+        pub if_index: u32,
+        pub next_hop: Option<Ipv4Addr>,
+    }
+
+    impl HostRouteRow {
+        /// The row `host_route_add` would install for `via`, or `None` when
+        /// `via` cannot be expressed as one (no index, or a next hop that is
+        /// not an IPv4 address).
+        pub fn for_route(via: &PhysicalRoute) -> Option<Self> {
+            let if_index = via.if_index?;
+            let next_hop = match via.next_hop.as_deref() {
+                None => None,
+                Some(text) => Some(text.parse::<Ipv4Addr>().ok()?),
+            };
+            Some(Self { if_index, next_hop })
+        }
+    }
+
+    /// What to do with the /32 rows to the node that are already in the
+    /// table before ours goes in.
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct HostRoutePrep {
+        /// Rows to delete first: everything that is not exactly ours.
+        pub delete: Vec<HostRouteRow>,
+        /// True when exactly the route we want is already there, so adding it
+        /// again would only fail with "object already exists".
+        pub keep_existing: bool,
+    }
+
+    pub fn prepare_host_route(existing: &[HostRouteRow], wanted: Option<HostRouteRow>) -> HostRoutePrep {
+        let keep_existing = wanted.is_some_and(|w| existing.contains(&w));
+        let delete = existing
+            .iter()
+            .copied()
+            .filter(|row| !(keep_existing && Some(*row) == wanted))
+            .collect();
+        HostRoutePrep { delete, keep_existing }
+    }
+
+    /// Delete one /32 row. netsh's `delete route` REQUIRES the interface (its
+    /// usage line is `prefix=<…> [interface=]<string> …`, only the tag is
+    /// optional); without it the command exits with "one or more essential
+    /// parameters were not entered" and the route stays. Run best-effort,
+    /// that failure was silent, and the next connect to the same node then
+    /// failed to add the duplicate. The next hop is passed whenever the row has
+    /// one, mirroring `host_route_add`, so exactly that row goes.
+    pub fn host_route_delete(ip: Ipv4Addr, row: HostRouteRow) -> Argv {
+        let mut args = vec![
+            "interface".to_string(),
+            "ipv4".to_string(),
+            "delete".to_string(),
+            "route".to_string(),
+            format!("prefix={}/32", ip),
+            format!("interface={}", row.if_index),
+        ];
+        if let Some(gw) = row.next_hop {
+            args.push(format!("nexthop={}", gw));
+        }
+        args.push("store=active".to_string());
+        Argv::new(netsh(), args)
     }
 
     pub fn split_default_add(half: &str) -> Argv {
@@ -735,6 +788,65 @@ mod tests {
         );
     }
 
+    /// netsh refuses `delete route` without the interface, so a delete built
+    /// from the prefix alone never removed anything (verified on the
+    /// Windows 11 VM, 01.10) and the next connect to the same node failed.
+    #[test]
+    fn windows_host_route_delete_names_the_row_it_removes() {
+        let via_gw = windows::HostRouteRow::for_route(&gw_route()).expect("row");
+        let on_link = windows::HostRouteRow::for_route(&onlink_route()).expect("row");
+        // The delete is the add with "add" swapped for "delete": the same
+        // spelling netsh already accepts on connect.
+        let add = windows::host_route_add(NODE, &gw_route()).expect("plan").args.join(" ");
+        let delete = windows::host_route_delete(NODE, via_gw).args.join(" ");
+        assert_eq!(delete, add.replacen(" add ", " delete ", 1));
+        let add = windows::host_route_add(NODE, &onlink_route()).expect("plan").args.join(" ");
+        let delete = windows::host_route_delete(NODE, on_link).args.join(" ");
+        assert_eq!(delete, add.replacen(" add ", " delete ", 1));
+        assert!(delete.contains("interface=7"));
+    }
+
+    #[test]
+    fn windows_host_route_row_needs_an_index_and_an_ipv4_next_hop() {
+        let mut route = gw_route();
+        route.if_index = None;
+        assert!(windows::HostRouteRow::for_route(&route).is_none());
+        let mut route = gw_route();
+        route.next_hop = Some("fe80::1".into());
+        assert!(windows::HostRouteRow::for_route(&route).is_none());
+    }
+
+    /// Reconnecting to the same node: the leftover /32 from the last session
+    /// is exactly the route we want, so it is kept rather than deleted and
+    /// re-added (an add over it fails with "object already exists"). Rows on
+    /// any other adapter or next hop are cleared first.
+    #[test]
+    fn windows_host_route_prep_keeps_an_identical_leftover_and_clears_the_rest() {
+        let ours = windows::HostRouteRow { if_index: 11, next_hop: Some(Ipv4Addr::new(192, 168, 1, 1)) };
+        let stale = windows::HostRouteRow { if_index: 4, next_hop: Some(Ipv4Addr::new(10, 0, 0, 1)) };
+
+        let prep = windows::prepare_host_route(&[ours], Some(ours));
+        assert!(prep.keep_existing);
+        assert!(prep.delete.is_empty());
+
+        let prep = windows::prepare_host_route(&[stale, ours], Some(ours));
+        assert!(prep.keep_existing);
+        assert_eq!(prep.delete, vec![stale]);
+
+        let prep = windows::prepare_host_route(&[stale], Some(ours));
+        assert!(!prep.keep_existing);
+        assert_eq!(prep.delete, vec![stale]);
+
+        let prep = windows::prepare_host_route(&[], Some(ours));
+        assert!(!prep.keep_existing);
+        assert!(prep.delete.is_empty());
+
+        // Unknown target: clear everything, keep nothing.
+        let prep = windows::prepare_host_route(&[ours], None);
+        assert!(!prep.keep_existing);
+        assert_eq!(prep.delete, vec![ours]);
+    }
+
     #[test]
     fn windows_host_route_needs_an_interface_index() {
         let no_index = PhysicalRoute {
@@ -755,8 +867,11 @@ mod tests {
         let args = |argv: Argv| argv.args.join(" ");
 
         assert_eq!(
-            args(windows::host_route_delete(NODE)),
-            "interface ipv4 delete route prefix=203.0.113.7/32 store=active"
+            args(windows::host_route_delete(
+                NODE,
+                windows::HostRouteRow { if_index: 11, next_hop: Some(Ipv4Addr::new(192, 168, 1, 1)) }
+            )),
+            "interface ipv4 delete route prefix=203.0.113.7/32 interface=11 nexthop=192.168.1.1 store=active"
         );
         assert_eq!(
             args(windows::split_default_add(SPLIT_LOW)),
@@ -829,7 +944,7 @@ mod tests {
     fn windows_route_writes_are_volatile() {
         for argv in [
             windows::host_route_add(NODE, &gw_route()).expect("plan"),
-            windows::host_route_delete(NODE),
+            windows::host_route_delete(NODE, windows::HostRouteRow { if_index: 7, next_hop: None }),
             windows::split_default_add(SPLIT_LOW),
             windows::split_default_delete(SPLIT_LOW),
         ] {

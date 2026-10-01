@@ -52,6 +52,12 @@ which makes a crash cheap: the Wintun adapter dies with tun2socks and takes its
 addresses and routes with it, and the only thing that can outlive the process is
 the `/32` host route — recorded in the route hint
 (`%LOCALAPPDATA%\ProxysVPN\route-hint`) and removed on the next start.
+`netsh interface ipv4 delete route` needs the interface as well as the prefix
+(without it netsh exits with "essential parameters were not entered" and the
+route stays), so every delete is built from the row IP Helper reports for that
+`/32`: its interface index and next hop. A leftover that is exactly the route a
+connect wants is reused rather than re-added, because the add would fail with
+"object already exists".
 
 **Elevation: one UAC prompt at launch.** The exe carries
 `requestedExecutionLevel="requireAdministrator"`
