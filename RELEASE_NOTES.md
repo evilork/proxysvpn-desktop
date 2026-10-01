@@ -22,7 +22,7 @@
 - **Починка:** проверка во время починки не засчитывается, если туннель лежит (раньше щит мог стать зелёным при трафике мимо VPN); выбор локации во время починки больше не гоняется с ней; после неудачи «Повторить» берёт свежий список серверов; сохранённый список Watafast больше не перекрывает отказ подписки («ссылка занята», «нет средств») и не подменяет свежий список.
 - **macOS:** запуск и выход больше не удаляют маршруты другого VPN; минимальная версия — macOS 12 (движки на ней не работают на 11).
 - **Linux:** при смене сети отключение возвращает DNS текущей сети; отключение больше не убивает tun2socks других VPN-клиентов; удаление пакета восстанавливает /etc/resolv.conf; без агента polkit приложение говорит об этом прямо.
-- **Интерфейс:** названия стран и трей по-английски в английском интерфейсе; Esc закрывает только верхнее окно; на Windows нет квадратиков вместо флагов; экран лицензий полон для Windows и Linux, включая GPL-код внутри движков.
+- **Интерфейс:** названия стран и трей по-английски в английском интерфейсе; Esc закрывает только верхнее окно; на Windows нет квадратиков вместо флагов; экран лицензий теперь есть и для Windows и Linux: движки, компоненты Rust и JavaScript и GPL-модули Go внутри движков (остальные Go-модули движков под MIT, BSD, Apache-2.0 пока не перечислены поштучно).
 
 ## 🇷🇺 Известные ограничения
 
@@ -51,7 +51,7 @@ Compare each file's SHA-256 with `SHA256SUMS.txt` below. Nothing is code-signed 
 - **Repair:** a probe during repair no longer counts when the tunnel is down (the shield could turn green while traffic went outside the VPN); picking a location during repair no longer races the repair; "Retry" after a failure fetches a fresh server list; a cached Watafast list no longer overrides the subscription's refusals ("link in use", "no funds") or a fresh list.
 - **macOS:** launching and quitting no longer delete another VPN's routes; the minimum is now macOS 12 (the engines do not run on 11).
 - **Linux:** after a network change, Disconnect restores the current network's DNS; Disconnect no longer kills other VPN clients' tun2socks; removing the package restores /etc/resolv.conf; a session without a polkit agent is named as such.
-- **Interface:** country names and the tray in English in the English interface; Esc closes only the top layer; no boxed letters instead of flags on Windows; the licences screen is complete for Windows and Linux, including the GPL code inside the engines.
+- **Interface:** country names and the tray in English in the English interface; Esc closes only the top layer; no boxed letters instead of flags on Windows; the licences screen now covers Windows and Linux too: the engines, the Rust and JavaScript components and the GPL Go modules inside the engines (the engines' other Go modules, under MIT, BSD and Apache-2.0, are not listed one by one yet).
 
 ## 🇬🇧 Known limitations
 

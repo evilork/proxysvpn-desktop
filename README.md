@@ -171,9 +171,12 @@ The installers bundle third-party components under their own licences:
 Xray-core (MPL-2.0), Hysteria (MIT), tun2socks (MIT), Wintun on Windows
 (WireGuard LLC prebuilt-binaries licence), Tauri (MIT/Apache-2.0) and others.
 The stock Xray-core and Hysteria binaries also contain GPL-3.0-or-later Go
-modules. The full list, with versions and sources, is in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) and on the app's
-"Open-source licences" screen.
+modules. [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) and the app's
+"Open-source licences" screen list, with versions and sources, the engines,
+every Rust crate and npm package the app links, and those GPL modules. The
+other Go modules compiled into the desktop engines (under MIT, BSD,
+Apache-2.0 and similar licences) are not listed one by one yet;
+`go version -m <engine binary>` prints them.
 
 ## Links
 

@@ -172,9 +172,12 @@ MIT — см. [LICENSE](LICENSE).
 В установщиках есть сторонние компоненты под своими лицензиями: Xray-core
 (MPL-2.0), Hysteria (MIT), tun2socks (MIT), Wintun на Windows (лицензия
 WireGuard LLC на готовые бинари), Tauri (MIT/Apache-2.0) и другие. Стоковые
-бинари Xray-core и Hysteria содержат и Go-модули под GPL-3.0-or-later. Полный
-список с версиями и исходниками — в [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
-и на экране «Лицензии открытого ПО» в приложении.
+бинари Xray-core и Hysteria содержат и Go-модули под GPL-3.0-or-later.
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) и экран «Лицензии открытого ПО»
+в приложении перечисляют с версиями и исходниками движки, все Rust-крейты и
+npm-пакеты приложения и эти GPL-модули. Остальные Go-модули, вкомпилированные
+в движки для компьютеров (под MIT, BSD, Apache-2.0 и похожими лицензиями),
+поштучно пока не перечислены; их выводит `go version -m <файл движка>`.
 
 ## Ссылки
 

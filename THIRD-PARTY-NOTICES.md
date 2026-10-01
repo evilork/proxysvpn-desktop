@@ -35,6 +35,16 @@ licences" screen) and the components are listed there for macOS, Windows and
 Linux. The iOS engine is built without these modules
 (`scripts/libxray/xray-core-no-gpl.patch`).
 
+## Other Go modules inside the desktop engines
+
+Besides the GPL modules above, the three desktop sidecars statically link
+about a hundred more Go modules (for example `gvisor.dev/gvisor`,
+`golang.org/x/crypto`, `github.com/miekg/dns`, `github.com/apernet/quic-go`)
+under permissive licences such as MIT, BSD and Apache-2.0. They are not yet
+listed one by one here or on the "Open-source licences" screen; each binary
+names its modules and versions in `go version -m <binary>`, and each module's
+licence is the one in its upstream repository at that version.
+
 ## Wintun
 
 Wintun is the kernel TUN driver that tun2socks uses on Windows. The prebuilt
