@@ -77,8 +77,9 @@
 //! ── Gaming Mode on SteamOS ─────────────────────────────────────────────────
 //! Gaming Mode (gamescope) runs no polkit authentication agent, so any pkexec
 //! that needs a password fails at once with "No authentication agent found"
-//! (the app starts pkexec with `--disable-internal-agent`, so it does not try
-//! a terminal prompt first: `privilege::PKEXEC_NO_TEXT_AGENT`).
+//! (Steam starts the app without a terminal, so the app starts pkexec with
+//! `--disable-internal-agent` and it does not try a terminal prompt first:
+//! `privilege::PKEXEC_NO_TEXT_AGENT`).
 //! On SteamOS only (`ID=steamos` in /etc/os-release), the setup — made in
 //! Desktop Mode, behind the password — also writes
 //!
@@ -1461,6 +1462,15 @@ mod tests {
         String::from_utf8(short).expect("a message polkit can carry")
     }
 
+    /// pkexec's argv with and without its terminal prompt
+    /// (`privilege::pkexec_argv`): what polkit is told must not depend on it.
+    fn both_pkexec_argvs(program: &Path, args: Vec<OsString>) -> [Vec<OsString>; 2] {
+        [
+            crate::privilege::pkexec_argv(program, args.clone(), false),
+            crate::privilege::pkexec_argv(program, args, true),
+        ]
+    }
+
     /// What the password window quotes says what the setup is about to do,
     /// in full words at both ends, and says it before the person types.
     #[test]
@@ -1473,7 +1483,10 @@ mod tests {
                 E,
                 gaming,
             );
-            pkexec_cmdline_short(&pkexec_command_line(&crate::privilege::pkexec_args(Path::new(SHELL), args)))
+            let [quiet, prompt] = both_pkexec_argvs(Path::new(SHELL), args);
+            let shown = pkexec_cmdline_short(&pkexec_command_line(&quiet));
+            assert_eq!(shown, pkexec_cmdline_short(&pkexec_command_line(&prompt)));
+            shown
         };
         assert_eq!(
             window(Gaming::Granted),
@@ -1493,14 +1506,15 @@ mod tests {
     /// reads its end like the setup's: its own lines first, then pkexec's.
     #[test]
     fn the_removal_is_read_like_the_setup() {
-        let argv = crate::privilege::pkexec_args(
+        for argv in both_pkexec_argvs(
             Path::new(SHELL),
             remove_args(Path::new("/var/home/.proxysvpn"), Path::new(POLKIT_RULE)),
-        );
-        assert_eq!(
-            pkexec_cmdline_short(&pkexec_command_line(&argv)),
-            "/bin/sh -c # ProxysVPN: remove helper, ... and the Gaming Mode no-password rule."
-        );
+        ) {
+            assert_eq!(
+                pkexec_cmdline_short(&pkexec_command_line(&argv)),
+                "/bin/sh -c # ProxysVPN: remove helper, ... and the Gaming Mode no-password rule."
+            );
+        }
         assert!(REMOVE_SCRIPT.is_ascii() && REMOVE_TAIL.len() == 37);
         assert!(!REMOVE_SCRIPT.contains("$3"), "$3 is for the window");
 
@@ -1518,26 +1532,27 @@ mod tests {
     }
 
     /// The option that stops pkexec's terminal prompt is pkexec's own and
-    /// never reaches `command_line`, so the Gaming Mode rule still matches
-    /// the helper the GUI starts — and only it.
+    /// never reaches `command_line`, so the Gaming Mode rule matches the
+    /// helper the GUI starts — and only it — with the option or without.
     #[test]
     fn the_rule_matches_what_pkexec_reports_for_the_installed_helper() {
         let helper = Path::new("/home/.proxysvpn/bin/proxysvpn-helper");
-        let argv = crate::privilege::pkexec_args(helper, [super::super::HELPER_FLAG]);
-        assert_eq!(argv[0], OsStr::new(crate::privilege::PKEXEC_NO_TEXT_AGENT));
-        let command_line = pkexec_command_line(&argv);
-        assert_eq!(command_line, "/home/.proxysvpn/bin/proxysvpn-helper --helper");
         let rule = polkit_rule("deck", helper).expect("rule");
-        assert!(rule.contains(&format!(r#"action.lookup("command_line") === "{command_line}""#)), "{rule}");
+        let [quiet, prompt] = both_pkexec_argvs(helper, vec![OsString::from(super::super::HELPER_FLAG)]);
+        assert_eq!(quiet[0], OsStr::new(crate::privilege::PKEXEC_NO_TEXT_AGENT));
+        assert_eq!(prompt[0], helper.as_os_str());
+        for argv in [quiet, prompt] {
+            let command_line = pkexec_command_line(&argv);
+            assert_eq!(command_line, "/home/.proxysvpn/bin/proxysvpn-helper --helper");
+            assert!(rule.contains(&format!(r#"action.lookup("command_line") === "{command_line}""#)), "{rule}");
+        }
 
         // The setup and anything else started through pkexec do not match.
-        let setup = crate::privilege::pkexec_args(
-            Path::new(SHELL),
-            setup_args(Path::new(INSTALL_DIR), Path::new("/s"), "h", "e", Gaming::Granted),
-        );
-        assert!(!rule.contains(&format!(r#"=== "{}""#, pkexec_command_line(&setup))));
-        let dev = crate::privilege::pkexec_args(helper, ["--helper", "--dev"]);
-        assert!(!rule.contains(&format!(r#"=== "{}""#, pkexec_command_line(&dev))));
+        let setup = setup_args(Path::new(INSTALL_DIR), Path::new("/s"), "h", "e", Gaming::Granted);
+        let dev = vec![OsString::from("--helper"), OsString::from("--dev")];
+        for argv in both_pkexec_argvs(Path::new(SHELL), setup).into_iter().chain(both_pkexec_argvs(helper, dev)) {
+            assert!(!rule.contains(&format!(r#"=== "{}""#, pkexec_command_line(&argv))));
+        }
     }
 
     #[cfg(unix)]

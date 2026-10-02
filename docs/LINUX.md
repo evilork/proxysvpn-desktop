@@ -66,11 +66,16 @@ lets the person who made it start that one helper without a password, so that
 Gaming Mode, which has no polkit agent, can connect; More → Remove system
 files takes all of it away again (docs/STEAMDECK.md). Everything about the
 `.deb` below is unchanged — the same executable, helper arguments and polkit
-action — except that every pkexec the app starts, the `.deb`'s included, now
-carries pkexec's own `--disable-internal-agent`: without a polkit agent it
-says "No authentication agent found" instead of trying a password prompt on a
-terminal the app does not have. pkexec reads the option before the program,
-so the command polkit matches is the same (`privilege::PKEXEC_NO_TEXT_AGENT`).
+action — except that a pkexec the app starts without a terminal, the
+`.deb`'s included, carries pkexec's own `--disable-internal-agent`: without a
+polkit agent it says "No authentication agent found" instead of trying a
+password prompt on a terminal the app does not have. An app started from a
+terminal, in the foreground, leaves the option out, so in a session without
+an agent (i3, sway) pkexec still asks for the password on that terminal; the
+app reads both of pkexec's "nobody can ask" lines the same way
+(`privilege::pkexec_wants_text_prompt`, `privilege::pkexec_unavailable`).
+pkexec reads the option before the program, so the command polkit matches is
+the same either way (`privilege::PKEXEC_NO_TEXT_AGENT`).
 The FUSE check is still there for a FUSE mount that is not a recognised
 AppImage (`ELEVATION_UNAVAILABLE`).
 

@@ -105,30 +105,103 @@ pub enum ElevationUnavailable {
 /// pkexec's own option that keeps it from falling back to a password prompt
 /// on the terminal when the session has no polkit agent.
 ///
-/// The app starts pkexec without a terminal, so that fallback can only fail,
-/// and with words of its own ("Error creating textual authentication agent:
-/// … /dev/tty …") instead of "No authentication agent found". Gaming Mode on
-/// SteamOS would then read as a refused password. pkexec has taken the option
-/// since PolicyKit 0.98, and parses it before the program (pkexec.c): it is
-/// not part of the `command_line` polkit hands to its rules, which is what the
-/// SteamOS rule matches (helper/install.rs, `polkit_rule`).
+/// That fallback opens the process's controlling terminal (/dev/tty). An app
+/// started from a menu, by Steam or at login has none, so there the fallback
+/// can only fail, and with words of its own ("Error creating textual
+/// authentication agent: … /dev/tty …") instead of "No authentication agent
+/// found"; the option is passed then ([`pkexec_wants_text_prompt`]). An app
+/// started from a terminal keeps the prompt: in a session without an agent
+/// (i3, sway, a console) it is where the password can be typed, as before the
+/// option was added. pkexec has taken the option since PolicyKit 0.98, and
+/// parses it before the program (pkexec.c): it is not part of the
+/// `command_line` polkit hands to its rules, which is what the SteamOS rule
+/// matches (helper/install.rs, `polkit_rule`).
 pub const PKEXEC_NO_TEXT_AGENT: &str = "--disable-internal-agent";
 
-/// The arguments of every pkexec the app starts: [`PKEXEC_NO_TEXT_AGENT`],
-/// then the program and its own arguments.
+/// This process's terminal, as far as a password prompt on it is concerned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Terminal {
+    /// /dev/tty opens: the process has a controlling terminal.
+    pub controlling: bool,
+    /// Its foreground process group is ours. A job started with `&` is not
+    /// in the foreground, and a prompt there would stop at its first read
+    /// (SIGTTIN) and leave the connect waiting for nothing.
+    pub foreground: bool,
+}
+
+/// May pkexec fall back to its password prompt on the terminal? Only on a
+/// controlling terminal this process holds in the foreground.
+pub fn pkexec_wants_text_prompt(terminal: Terminal) -> bool {
+    terminal.controlling && terminal.foreground
+}
+
+/// The arguments of a pkexec: [`PKEXEC_NO_TEXT_AGENT`] unless the terminal
+/// prompt is wanted, then the program and its own arguments.
+pub fn pkexec_argv<I, S>(program: &std::path::Path, args: I, text_prompt: bool) -> Vec<std::ffi::OsString>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<std::ffi::OsString>,
+{
+    let mut argv = Vec::new();
+    if !text_prompt {
+        argv.push(std::ffi::OsString::from(PKEXEC_NO_TEXT_AGENT));
+    }
+    argv.push(program.as_os_str().to_os_string());
+    argv.extend(args.into_iter().map(Into::into));
+    argv
+}
+
+/// The arguments of every pkexec the app starts: [`pkexec_argv`] as this
+/// process's terminal decides ([`this_terminal`]).
 pub fn pkexec_args<I, S>(program: &std::path::Path, args: I) -> Vec<std::ffi::OsString>
 where
     I: IntoIterator<Item = S>,
     S: Into<std::ffi::OsString>,
 {
-    let mut argv = vec![std::ffi::OsString::from(PKEXEC_NO_TEXT_AGENT), program.as_os_str().to_os_string()];
-    argv.extend(args.into_iter().map(Into::into));
-    argv
+    pkexec_argv(program, args, pkexec_wants_text_prompt(this_terminal()))
+}
+
+/// This process's terminal, found the way pkexec's prompt finds it: by
+/// opening /dev/tty (ctermid(3)), which fails with ENXIO for a process
+/// without one. Not `isatty(stdin)`: pkexec's stdin is the helper's protocol
+/// pipe, and the prompt never reads it.
+pub fn this_terminal() -> Terminal {
+    #[cfg(unix)]
+    {
+        terminal_at(std::path::Path::new("/dev/tty"))
+    }
+    #[cfg(not(unix))]
+    {
+        Terminal { controlling: false, foreground: false }
+    }
+}
+
+/// [`Terminal`] for `path`, opened as a prompt opens it. O_NOCTTY so that the
+/// check never acquires a terminal, O_NONBLOCK so that it never waits on one.
+#[cfg(unix)]
+fn terminal_at(path: &std::path::Path) -> Terminal {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::io::AsRawFd;
+
+    let Ok(tty) = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK)
+        .open(path)
+    else {
+        return Terminal { controlling: false, foreground: false };
+    };
+    // SAFETY: `tty` is an open descriptor for the duration of the call;
+    // tcgetpgrp(3) only reads it and returns -1 for anything not a terminal.
+    // getpgrp(2) takes no arguments and cannot fail.
+    let foreground = unsafe { libc::tcgetpgrp(tty.as_raw_fd()) == libc::getpgrp() };
+    Terminal { controlling: true, foreground }
 }
 
 /// pkexec's stderr lines for "there is nobody to ask": the one it prints
-/// with [`PKEXEC_NO_TEXT_AGENT`], and the one an older start without it gave
-/// when its terminal prompt found no terminal.
+/// with [`PKEXEC_NO_TEXT_AGENT`], and the one its terminal prompt gives when
+/// it finds no terminal after all (the terminal went away, or a pkexec that
+/// ignores the option).
 const NO_AGENT_LINES: [&str; 2] = ["No authentication agent found", "Error creating textual authentication agent"];
 
 /// What a pkexec that exited before the helper answered says about this
@@ -422,7 +495,8 @@ mod tests {
 
     /// pkexec's own words, from pkexec.c: the line it prints with
     /// --disable-internal-agent, and the one its terminal prompt prints when
-    /// there is no terminal — what an app started from Gaming Mode has.
+    /// there is no terminal. Both are read as "no agent", whichever way the
+    /// app started pkexec.
     const NO_AGENT: &str = "Error executing command as another user: No authentication agent found.\n";
     const NO_TTY: &str = "Error creating textual authentication agent: Error opening current controlling terminal for the process (`/dev/tty'): No such device or address\n";
 
@@ -465,15 +539,48 @@ mod tests {
         assert!(handshake_error(HandshakeFailure::SetupFailed(65), true).is_none());
     }
 
-    /// Every pkexec the app starts asks for no terminal prompt, before the
-    /// program, which pkexec reads as the first argument that is not one of
-    /// its options.
+    /// Without a controlling terminal in the foreground pkexec asks for no
+    /// terminal prompt, and says so before the program, which pkexec reads
+    /// as the first argument that is not one of its options. With one, the
+    /// prompt stays: it is how the password is typed in a session without a
+    /// polkit agent.
     #[test]
-    fn pkexec_gets_its_option_before_the_program() {
-        let argv = pkexec_args(std::path::Path::new("/usr/bin/proxysvpn-desktop"), ["--helper"]);
-        let text: Vec<String> = argv.iter().map(|a| a.to_string_lossy().into_owned()).collect();
-        assert_eq!(text, ["--disable-internal-agent", "/usr/bin/proxysvpn-desktop", "--helper"]);
-        assert_eq!(pkexec_args(std::path::Path::new("/bin/sh"), Vec::<String>::new()).len(), 2);
+    fn pkexec_skips_its_terminal_prompt_only_without_a_terminal_to_put_it_on() {
+        let program = std::path::Path::new("/usr/bin/proxysvpn-desktop");
+        let text = |argv: Vec<std::ffi::OsString>| -> Vec<String> {
+            argv.iter().map(|a| a.to_string_lossy().into_owned()).collect()
+        };
+        let none = Terminal { controlling: false, foreground: false };
+        let background = Terminal { controlling: true, foreground: false };
+        let foreground = Terminal { controlling: true, foreground: true };
+
+        for terminal in [none, background] {
+            assert!(!pkexec_wants_text_prompt(terminal), "{terminal:?}");
+            let argv = pkexec_argv(program, ["--helper"], pkexec_wants_text_prompt(terminal));
+            assert_eq!(text(argv), ["--disable-internal-agent", "/usr/bin/proxysvpn-desktop", "--helper"]);
+        }
+        assert!(pkexec_wants_text_prompt(foreground));
+        let argv = pkexec_argv(program, ["--helper"], pkexec_wants_text_prompt(foreground));
+        assert_eq!(text(argv), ["/usr/bin/proxysvpn-desktop", "--helper"]);
+
+        assert_eq!(pkexec_argv(std::path::Path::new("/bin/sh"), Vec::<String>::new(), false).len(), 2);
+        assert_eq!(pkexec_argv(std::path::Path::new("/bin/sh"), Vec::<String>::new(), true).len(), 1);
+        // What every real start passes follows this process's terminal.
+        let real = pkexec_args(program, ["--helper"]);
+        assert_eq!(real[0] == PKEXEC_NO_TEXT_AGENT, !pkexec_wants_text_prompt(this_terminal()));
+    }
+
+    /// The check opens the path a terminal prompt would: nothing there is no
+    /// terminal, and a file that opens but is not a terminal has no
+    /// foreground of ours.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_that_is_no_terminal_gets_no_prompt() {
+        let missing = terminal_at(std::path::Path::new("/definitely/not/a/tty"));
+        assert_eq!(missing, Terminal { controlling: false, foreground: false });
+        let null = terminal_at(std::path::Path::new("/dev/null"));
+        assert_eq!(null, Terminal { controlling: true, foreground: false });
+        assert!(!pkexec_wants_text_prompt(null));
     }
 
     /// A setup that failed is told apart from the person's answer by its
