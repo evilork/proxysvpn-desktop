@@ -950,20 +950,23 @@ pub fn this_launch() -> Launch {
     launch_kind(std::env::var_os("APPIMAGE").as_deref(), appdir.as_deref(), &exe)
 }
 
-/// `install_dir` with its parent resolved to the physical folder: pkexec runs
-/// realpath(3) on the program it is given, and a /home that is a link
-/// (/var/home on Fedora's atomic desktops, Bazzite among them) must be judged
-/// — and handed to the scripts, which refuse a linked parent — as the folder
-/// it really is.
-#[cfg(target_os = "linux")]
-fn physical_install_dir(install_dir: &Path) -> PathBuf {
-    std::fs::canonicalize(install_dir).unwrap_or_else(|_| {
-        let parent = install_dir.parent().unwrap_or(Path::new("/"));
-        let name = install_dir.file_name().unwrap_or_default();
-        std::fs::canonicalize(parent)
-            .unwrap_or_else(|_| parent.to_path_buf())
-            .join(name)
-    })
+/// `install_dir` with its parent resolved to the physical folder and its own
+/// name kept as it is. pkexec runs realpath(3) on the program it is given,
+/// and a /home that is a link (/var/home on Fedora's atomic desktops, Bazzite
+/// among them) must be judged — and handed to the scripts, which refuse a
+/// linked parent — as the folder it really is. The install folder itself is
+/// never resolved: a link in its place (nothing of ours makes one) is judged
+/// as a link ([`judge`]: unsafe) and removed as a link by [`REMOVE_SCRIPT`],
+/// never followed to what it points at, which the removal's `rm -rf` would
+/// otherwise take.
+#[cfg(unix)]
+pub fn physical_install_dir(install_dir: &Path) -> PathBuf {
+    let (Some(parent), Some(name)) = (install_dir.parent(), install_dir.file_name()) else {
+        return install_dir.to_path_buf();
+    };
+    std::fs::canonicalize(parent)
+        .unwrap_or_else(|_| parent.to_path_buf())
+        .join(name)
 }
 
 /// The person read the app's screen about Gaming Mode in this run of the
@@ -2066,12 +2069,14 @@ close($out) or die "dd: $op{of}: $!\n";
         }
 
         /// A setup's whole tree and the rule go; links in the way are
-        /// removed, not followed; removing twice is fine.
+        /// removed, not followed; removing twice is fine. The folder is
+        /// named as the GUI names it ([`physical_install_dir`]).
         #[test]
         fn the_removal_takes_the_folder_and_the_rule_and_nothing_else() {
             let base = temp("remove");
             let (staged, hs, es) = staged_from(&base);
-            let dest = base.join(".proxysvpn");
+            let dest = physical_install_dir(&base.join(".proxysvpn"));
+            assert_eq!(dest, base.join(".proxysvpn"));
             let run = run_setup_as(&base, &dest, &staged, &hs, &es, true);
             assert_eq!(run.code, Some(0), "{}", run.stderr);
             std::fs::write(dest.join(GAMING_OFF), b"").expect("off");
@@ -2098,17 +2103,63 @@ close($out) or die "dd: $op{of}: $!\n";
             assert_eq!(again.code, Some(0), "{}", again.stderr);
 
             // Links where the folder and the rule should be: the links go,
-            // what they point at stays.
+            // what they point at stays. The GUI names the link itself, not
+            // its target — resolving the whole path handed the removal the
+            // target, and `rm -rf` took a folder that was never ours.
             let elsewhere = base.join("elsewhere");
             std::fs::create_dir(&elsewhere).expect("dir");
             std::fs::write(elsewhere.join("f"), b"keep").expect("f");
-            std::os::unix::fs::symlink(&elsewhere, &dest).expect("link");
+            std::os::unix::fs::symlink(&elsewhere, base.join(".proxysvpn")).expect("link");
             std::os::unix::fs::symlink(&outside, &rule).expect("link");
+            let dest = physical_install_dir(&base.join(".proxysvpn"));
+            assert_eq!(dest, base.join(".proxysvpn"), "the link, not {}", elsewhere.display());
             let run = run_remove(&base, &dest, &rule);
             assert_eq!(run.code, Some(0), "{}", run.stderr);
             assert!(std::fs::symlink_metadata(&dest).is_err() && std::fs::symlink_metadata(&rule).is_err());
             assert_eq!(std::fs::read(elsewhere.join("f")).expect("f"), b"keep");
             assert_eq!(std::fs::read(&outside).expect("outside"), b"keep");
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        /// /home a link, as on Fedora's atomic desktops: the GUI hands the
+        /// scripts the physical parent, which they accept, and the install
+        /// folder's own name — a link there included — as it is.
+        #[test]
+        fn a_linked_parent_is_resolved_and_a_linked_install_folder_is_not() {
+            let base = temp("linked-home");
+            let real_home = base.join("var-home");
+            std::fs::create_dir(&real_home).expect("dir");
+            std::fs::set_permissions(&real_home, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+            let home = base.join("home");
+            std::os::unix::fs::symlink(&real_home, &home).expect("link");
+
+            // What the GUI passes for /home/.proxysvpn.
+            let dest = physical_install_dir(&home.join(".proxysvpn"));
+            assert_eq!(dest, real_home.join(".proxysvpn"));
+            let (staged, hs, es) = staged_from(&base);
+            let run = run_setup(&base, &dest, &staged, &hs, &es);
+            assert_eq!(run.code, Some(0), "{}", run.stderr);
+            let rule = base.join("49-proxysvpn.rules");
+            let run = run_remove(&base, &dest, &rule);
+            assert_eq!(run.code, Some(0), "{}", run.stderr);
+            assert!(std::fs::symlink_metadata(&dest).is_err(), "the physical folder is gone");
+
+            // A link someone put where the install folder goes: judged as a
+            // link, so never run from, and removed without following it.
+            let target = base.join("target");
+            std::fs::create_dir(&target).expect("dir");
+            std::fs::write(target.join("f"), b"keep").expect("f");
+            std::os::unix::fs::symlink(&target, real_home.join(".proxysvpn")).expect("link");
+            let dest = physical_install_dir(&home.join(".proxysvpn"));
+            assert_eq!(dest, real_home.join(".proxysvpn"), "not {}", target.display());
+            let facts = node_facts(&dest).expect("there");
+            assert_eq!(facts.kind, NodeKind::Other, "lstat sees the link");
+            let own = [(dest.clone(), Some(facts)), (dest.join(BIN_DIR), node_facts(&dest.join(BIN_DIR)))];
+            assert!(matches!(judge(&[], &own, &[]), Installed::Unsafe(_)));
+            let run = run_remove(&base, &dest, &rule);
+            assert_eq!(run.code, Some(0), "{}", run.stderr);
+            assert!(std::fs::symlink_metadata(&dest).is_err(), "the link is gone");
+            assert_eq!(std::fs::read(target.join("f")).expect("f"), b"keep", "its target is not");
             let _ = std::fs::remove_dir_all(&base);
         }
 
