@@ -102,14 +102,44 @@ pub enum ElevationUnavailable {
     NoAgent,
 }
 
+/// pkexec's own option that keeps it from falling back to a password prompt
+/// on the terminal when the session has no polkit agent.
+///
+/// The app starts pkexec without a terminal, so that fallback can only fail,
+/// and with words of its own ("Error creating textual authentication agent:
+/// … /dev/tty …") instead of "No authentication agent found". Gaming Mode on
+/// SteamOS would then read as a refused password. pkexec has taken the option
+/// since PolicyKit 0.98, and parses it before the program (pkexec.c): it is
+/// not part of the `command_line` polkit hands to its rules, which is what the
+/// SteamOS rule matches (helper/install.rs, `polkit_rule`).
+pub const PKEXEC_NO_TEXT_AGENT: &str = "--disable-internal-agent";
+
+/// The arguments of every pkexec the app starts: [`PKEXEC_NO_TEXT_AGENT`],
+/// then the program and its own arguments.
+pub fn pkexec_args<I, S>(program: &std::path::Path, args: I) -> Vec<std::ffi::OsString>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<std::ffi::OsString>,
+{
+    let mut argv = vec![std::ffi::OsString::from(PKEXEC_NO_TEXT_AGENT), program.as_os_str().to_os_string()];
+    argv.extend(args.into_iter().map(Into::into));
+    argv
+}
+
+/// pkexec's stderr lines for "there is nobody to ask": the one it prints
+/// with [`PKEXEC_NO_TEXT_AGENT`], and the one an older start without it gave
+/// when its terminal prompt found no terminal.
+const NO_AGENT_LINES: [&str; 2] = ["No authentication agent found", "Error creating textual authentication agent"];
+
 /// What a pkexec that exited before the helper answered says about this
 /// machine: `Some` when no dialog could have succeeded.
 ///
 /// pkexec(1) exits 127 both for "not authorized" and for "could not ask at
 /// all", so the exit code alone is not enough: only its own stderr line
-/// ("No authentication agent found") tells the second case apart.
+/// ([`NO_AGENT_LINES`]) tells the second case apart.
 pub fn pkexec_unavailable(exit: Option<i32>, stderr: &str) -> Option<ElevationUnavailable> {
-    (exit == Some(127) && stderr.contains("No authentication agent")).then_some(ElevationUnavailable::NoAgent)
+    (exit == Some(127) && NO_AGENT_LINES.iter().any(|line| stderr.contains(line)))
+        .then_some(ElevationUnavailable::NoAgent)
 }
 
 impl std::fmt::Display for ElevationUnavailable {
@@ -200,6 +230,19 @@ pub fn steamos_advice_for(failure: HandshakeFailure) -> Option<SteamOsAdvice> {
     }
 }
 
+/// The typed error a failed handshake becomes where it has one: what
+/// SteamOS needs from the person there, "this machine cannot ask" for a
+/// missing agent anywhere else. `None` leaves the words to the caller (a
+/// refusal, a failed setup, the cause itself).
+pub fn handshake_error(failure: HandshakeFailure, steamos: bool) -> Option<anyhow::Error> {
+    if steamos {
+        if let Some(advice) = steamos_advice_for(failure) {
+            return Some(anyhow::Error::new(advice));
+        }
+    }
+    (failure == HandshakeFailure::NoAgent).then(|| anyhow::Error::new(ElevationUnavailable::NoAgent))
+}
+
 /// Why a pkexec child died before the helper answered its first request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandshakeFailure {
@@ -208,7 +251,8 @@ pub enum HandshakeFailure {
     /// 127 with any other line: not authorized (a wrong password three
     /// times), or pkexec could not run the program.
     NotAuthorized,
-    /// 127 with pkexec's "No authentication agent found".
+    /// 127 with pkexec's "No authentication agent found", or its failed
+    /// terminal prompt (`pkexec_unavailable`).
     NoAgent,
     /// The AppImage's setup script stopped with this exit code; its own
     /// stderr line, in the log, says why.
@@ -374,6 +418,62 @@ mod tests {
         assert_eq!(pkexec_unavailable(Some(126), no_agent), None);
         assert_eq!(pkexec_unavailable(None, no_agent), None);
         assert!(ElevationUnavailable::NoAgent.to_string().contains("polkit"));
+    }
+
+    /// pkexec's own words, from pkexec.c: the line it prints with
+    /// --disable-internal-agent, and the one its terminal prompt prints when
+    /// there is no terminal — what an app started from Gaming Mode has.
+    const NO_AGENT: &str = "Error executing command as another user: No authentication agent found.\n";
+    const NO_TTY: &str = "Error creating textual authentication agent: Error opening current controlling terminal for the process (`/dev/tty'): No such device or address\n";
+
+    #[test]
+    fn both_ways_pkexec_says_nobody_can_ask_are_no_agent() {
+        for stderr in [NO_AGENT, NO_TTY] {
+            assert_eq!(pkexec_unavailable(Some(127), stderr), Some(ElevationUnavailable::NoAgent), "{stderr}");
+            assert_eq!(handshake_failure(Some(127), stderr, false), HandshakeFailure::NoAgent, "{stderr}");
+            assert_eq!(handshake_failure(Some(127), stderr, true), HandshakeFailure::NoAgent, "{stderr}");
+        }
+        let refused = "Error executing command as another user: Not authorized\n\nThis incident has been reported.\n";
+        assert_eq!(handshake_failure(Some(127), refused, true), HandshakeFailure::NotAuthorized);
+    }
+
+    /// A missing agent is "connect once from Desktop Mode" on SteamOS and
+    /// "this machine cannot ask" anywhere else; a refusal is "set the deck
+    /// password" on SteamOS and left to the caller elsewhere.
+    #[test]
+    fn a_missing_agent_says_desktop_mode_on_steamos_and_cannot_ask_elsewhere() {
+        for stderr in [NO_AGENT, NO_TTY] {
+            let failure = handshake_failure(Some(127), stderr, true);
+            let deck = handshake_error(failure, true).expect("SteamOS");
+            assert_eq!(steamos_advice(&deck), Some(SteamOsAdvice::UseDesktopMode), "{stderr}");
+            assert!(!is_elevation_unavailable(&deck));
+
+            let other = handshake_error(failure, false).expect("elsewhere");
+            assert_eq!(steamos_advice(&other), None);
+            assert!(is_elevation_unavailable(&other), "{stderr}");
+        }
+        let dismissed = handshake_error(HandshakeFailure::Dismissed, true).expect("SteamOS");
+        assert_eq!(steamos_advice(&dismissed), Some(SteamOsAdvice::SetPassword));
+        for failure in [
+            HandshakeFailure::Dismissed,
+            HandshakeFailure::NotAuthorized,
+            HandshakeFailure::SetupFailed(65),
+            HandshakeFailure::Other,
+        ] {
+            assert!(handshake_error(failure, false).is_none(), "{failure:?}");
+        }
+        assert!(handshake_error(HandshakeFailure::SetupFailed(65), true).is_none());
+    }
+
+    /// Every pkexec the app starts asks for no terminal prompt, before the
+    /// program, which pkexec reads as the first argument that is not one of
+    /// its options.
+    #[test]
+    fn pkexec_gets_its_option_before_the_program() {
+        let argv = pkexec_args(std::path::Path::new("/usr/bin/proxysvpn-desktop"), ["--helper"]);
+        let text: Vec<String> = argv.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(text, ["--disable-internal-agent", "/usr/bin/proxysvpn-desktop", "--helper"]);
+        assert_eq!(pkexec_args(std::path::Path::new("/bin/sh"), Vec::<String>::new()).len(), 2);
     }
 
     /// A setup that failed is told apart from the person's answer by its

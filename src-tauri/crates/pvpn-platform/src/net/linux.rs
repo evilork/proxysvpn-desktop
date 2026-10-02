@@ -191,7 +191,7 @@ fn spawn_command() -> Result<Spawn> {
             },
         );
         let mut cmd = Command::new(pkexec);
-        cmd.arg(&plan.program).args(&plan.args);
+        cmd.args(privilege::pkexec_args(&plan.program, &plan.args));
         return Ok(Spawn { cmd, staged: plan.staged, setup: plan.setup });
     }
 
@@ -203,10 +203,8 @@ fn spawn_command() -> Result<Spawn> {
     let pkexec = privilege::which("pkexec")
         .ok_or_else(|| anyhow::Error::new(privilege::ElevationUnavailable::NoPkexec))?;
     let mut cmd = Command::new(pkexec);
-    cmd.arg(&exe).arg(HELPER_FLAG);
-    if dev {
-        cmd.arg(HELPER_DEV_FLAG);
-    }
+    let flags: &[&str] = if dev { &[HELPER_FLAG, HELPER_DEV_FLAG] } else { &[HELPER_FLAG] };
+    cmd.args(privilege::pkexec_args(&exe, flags.iter().copied()));
     Ok(Spawn { cmd, staged: None, setup: false })
 }
 
@@ -298,18 +296,16 @@ async fn describe_handshake_failure(link: &mut Link, cause: anyhow::Error) -> an
     let failure = privilege::handshake_failure(code, &stderr, link.setup);
     // SteamOS: the deck user has no password until one is set, and Gaming
     // Mode has no window to type it into. Say which, instead of "denied".
-    if install::running_on_steamos() {
-        if let Some(advice) = privilege::steamos_advice_for(failure) {
-            return anyhow::Error::new(advice);
-        }
+    // Elsewhere a missing agent is typed too, so the window says "this
+    // system cannot ask" instead of "press Retry and allow it".
+    if let Some(typed) = privilege::handshake_error(failure, install::running_on_steamos()) {
+        return typed;
     }
     match failure {
         // pkexec(1): 126 — the dialog was dismissed.
         HandshakeFailure::Dismissed => {
             anyhow!("запрос прав отменён — без пароля администратора туннель не поднять")
         }
-        // Typed, so the window says "this system cannot ask" instead of
-        // "press Retry and allow it in the system dialog".
         HandshakeFailure::NoAgent => anyhow::Error::new(privilege::ElevationUnavailable::NoAgent),
         HandshakeFailure::NotAuthorized => {
             anyhow!("polkit отказал в правах — запустите приложение из рабочего стола или от root")

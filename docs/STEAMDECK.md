@@ -273,8 +273,12 @@ tests on Linux):
   and without a `deck` password;
 * that polkit on SteamOS loads the rule and that Gaming Mode's session counts
   as local and active, so the helper starts there without a prompt;
-* that pkexec's "No authentication agent found" is what Gaming Mode produces
-  without the rule;
+* that Gaming Mode without the rule makes pkexec say "No authentication agent
+  found". Every pkexec the app starts carries `--disable-internal-agent`, so
+  that is the line pkexec's source prints when no agent is registered; without
+  the option it would try a password prompt on a terminal the app does not
+  have and fail with "Error creating textual authentication agent", which the
+  app reads as the same thing (`privilege::pkexec_unavailable`);
 * that `/home` on SteamOS allows executing the copy (it is where AppImages
   usually run from, so it should);
 * SteamOS's DNS backend (resolved, from public reports), and DNS after killing
