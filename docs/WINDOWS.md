@@ -192,14 +192,26 @@ What is specific to it:
 The installer itself is NSIS's x86 stub, which Windows on ARM runs emulated;
 only what it installs is arm64. On a PC that is not ARM64, where the app would
 not start, the arm64 installer says so in English and Russian, names the
-`x64` installer of the same release and stops before it copies anything or
-stops a running ProxysVPN (`PVPN_REFUSE_FOREIGN_CPU` in
-`src-tauri/nsis/installer-hooks.nsh`: x64.nsh's `${IsNativeARM64}`, compiled
-into the arm64 installer only, through the template's `ARCH`). Not run on an
-x64 PC yet; `tests/installerHooks.test.ts` pins the text. The x64 installer
-keeps working on ARM (emulated, with the slow connect). Both install into the
-same folder under the same name; going from one to the other on the same
-machine has not been tried.
+`x64` installer of the same release and quits with exit code 2 before it does
+anything else (`PvpnRefuseForeignCpu` in `src-tauri/nsis/installer-hooks.nsh`,
+x64.nsh's `${IsNativeARM64}`). "Anything else" matters here: Tauri's
+template shows the reinstall page — whose default on an upgrade runs the
+installed version's uninstaller — and installs WebView2 before
+`NSIS_HOOK_PREINSTALL` ever runs, so a check in that hook would have removed
+a working x64 ProxysVPN first. The check runs instead from MUI2's
+`.onGUIInit` (`MUI_CUSTOMFUNCTION_GUIINIT`, before the first page) and, for a
+silent `/S` install, which has no `.onGUIInit` and no pages, from a hidden
+section defined ahead of all the template's sections. It is compiled into the
+arm64 installer only: the hooks file is included before the template's
+`!define ARCH`, so it reads `ARCH` and `VERSION` out of the generated
+`installer.nsi` (`!searchparse`), and the build stops if those lines are
+missing or differ from what the template defines. `tests/installerHooks.test.ts`
+reads the template out of the installed Tauri CLI and pins where the hooks
+are included, that the template leaves `MUI_CUSTOMFUNCTION_GUIINIT` free, and
+the text. Not compiled on a Mac (no makensis) and not run on an x64 PC yet.
+The x64 installer keeps working on ARM (emulated, with the slow connect). Both
+install into the same folder under the same name; going from one to the other
+on the same machine has not been tried.
 
 Local build on an ARM64 Windows machine with the MSVC ARM64 build tools and
 LLVM installed:
