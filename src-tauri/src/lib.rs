@@ -3736,10 +3736,12 @@ fn system_files_removable() -> bool {
     }
 }
 
-/// "Remove system files" (MoreScreen, the Linux AppImage only): disconnect,
-/// stop the root helper, and remove /home/.proxysvpn and the Gaming Mode
-/// polkit rule through one password window (pvpn-platform helper/install.rs).
-/// The next connect sets them up again.
+/// "Remove system files" (MoreScreen, the Linux AppImage only): remove
+/// /home/.proxysvpn and the Gaming Mode polkit rule through one password
+/// window (pvpn-platform helper/install.rs), and only once that worked
+/// disconnect and stop the root helper, which runs from the removed folder.
+/// A cancelled window, or Gaming Mode, which has none, leaves the tunnel as
+/// it was. The next connect sets everything up again.
 #[tauri::command]
 async fn remove_system_files(core: tauri::State<'_, Arc<Core>>) -> Cmd<()> {
     #[cfg(desktop)]
@@ -3750,14 +3752,15 @@ async fn remove_system_files(core: tauri::State<'_, Arc<Core>>) -> Cmd<()> {
             return Err(AppError::new(ErrorCode::Unknown).to_payload());
         }
         let core = core.inner().clone();
-        if core.session.lock().await.phase != VpnPhase::Off {
-            core.disconnect().await;
-        }
-        match install::remove_system_files().await {
-            Ok(()) => {
-                logger::log("info", "app", "system files removed");
-                Ok(())
+        let tear_down = async {
+            logger::log("info", "app", "system files removed; disconnecting");
+            if core.session.lock().await.phase != VpnPhase::Off {
+                core.disconnect().await;
             }
+            install::stop_removed_helper().await;
+        };
+        match install::remove_then_tear_down(install::remove_system_files(), tear_down).await {
+            Ok(()) => Ok(()),
             Err(failure) => {
                 logger::log("warn", "app", &format!("system files not removed: {failure}"));
                 let code = match failure {

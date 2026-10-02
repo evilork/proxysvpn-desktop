@@ -589,7 +589,7 @@ const ru = {
   "more.sysFiles": "Удалить системные файлы",
   "more.sysFilesHint": "/home/.proxysvpn и разрешение игрового режима",
   "more.sysFilesConfirm":
-    "ProxysVPN отключится и удалит то, что положил в систему при первом подключении: свою копию помощника в /home/.proxysvpn и разрешение подключаться в игровом режиме без пароля. Система спросит пароль. Следующее подключение снова спросит его и всё настроит заново.",
+    "ProxysVPN удалит то, что положил в систему при первом подключении: свою копию помощника в /home/.proxysvpn и разрешение подключаться в игровом режиме без пароля. Система спросит пароль; когда файлы будут удалены, ProxysVPN отключится. Следующее подключение снова спросит пароль и всё настроит заново.",
   "more.sysFilesYes": "Удалить",
   "more.sysFilesDone": "Системные файлы удалены",
   "more.sysFilesCancelled": "Удаление отменено: пароль не введён",
@@ -1143,7 +1143,7 @@ const en: Partial<Record<MsgKey, string>> = {
   "more.sysFiles": "Remove system files",
   "more.sysFilesHint": "/home/.proxysvpn and the Gaming Mode permission",
   "more.sysFilesConfirm":
-    "ProxysVPN disconnects and removes what it put into the system on the first connect: its copy of the helper in /home/.proxysvpn and the permission to connect in Gaming Mode without a password. The system asks for your password. The next connect asks for it again and sets everything up anew.",
+    "ProxysVPN removes what it put into the system on the first connect: its copy of the helper in /home/.proxysvpn and the permission to connect in Gaming Mode without a password. The system asks for your password; once the files are gone, ProxysVPN disconnects. The next connect asks for the password again and sets everything up anew.",
   "more.sysFilesYes": "Remove",
   "more.sysFilesDone": "System files removed",
   "more.sysFilesCancelled": "Removal cancelled: the password was not entered",

@@ -202,18 +202,22 @@ connected says which backend is in use).
 ## Removing it
 
 1. **In the app, in Desktop Mode: More → Remove system files.** After a
-   confirmation the app disconnects, stops its root helper and, behind one
-   password window ("Authentication is needed to run `/bin/sh -c # ProxysVPN:
-   remove helper, ... and the Gaming Mode no-password rule.'"), removes
-   `/home/.proxysvpn` and `/etc/polkit-1/rules.d/49-proxysvpn.rules`. A fixed
-   script does it (`REMOVE_SCRIPT` in `helper/install.rs`): it removes those
-   two paths and nothing else, refuses any other name, removes a link in
-   their place instead of following it, never follows a link inside the
-   folder, and leaves the folder alone if it is not root's alone (the setup
-   never makes it so). In Gaming Mode there is no password window, and the
-   app says to use Desktop Mode. The row exists in the AppImage only; the
-   `.deb` is removed with `apt remove`. If you keep the AppImage, its next
-   connect sets everything up again, with the screen and the password.
+   confirmation, behind one password window ("Authentication is needed to
+   run `/bin/sh -c # ProxysVPN: remove helper, ... and the Gaming Mode
+   no-password rule.'"), the app removes `/home/.proxysvpn` and
+   `/etc/polkit-1/rules.d/49-proxysvpn.rules`, and only then disconnects and
+   stops its root helper, which ran on from the removed folder (Linux lets a
+   running program's file go). A cancelled window leaves the tunnel as it
+   was. A fixed script does the removal (`REMOVE_SCRIPT` in
+   `helper/install.rs`): it removes those two paths and nothing else, refuses
+   any other name, removes a link in their place instead of following it,
+   never follows a link inside the folder, and leaves the folder alone if it
+   is not root's alone (the setup never makes it so). In Gaming Mode there is
+   no password window: the app says to remove the files from Desktop Mode
+   and touches nothing, the tunnel included. The row exists in the AppImage
+   only; the `.deb` is removed with `apt remove`. If you keep the AppImage,
+   its next connect sets everything up again, with the screen and the
+   password.
 2. Delete the AppImage, and the shortcut in Steam (right click → Manage →
    Remove non-Steam game from your library).
 3. What the helper keeps for crash recovery is left by step 1, because

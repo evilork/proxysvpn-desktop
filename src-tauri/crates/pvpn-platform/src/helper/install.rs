@@ -1017,16 +1017,19 @@ pub fn system_files_removable() -> bool {
 #[cfg(target_os = "linux")]
 const REMOVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
-/// "Remove system files": stop the helper, then remove the install folder and
-/// the Gaming Mode rule through one pkexec of [`REMOVE_SCRIPT`]. The tunnel
-/// must already be down; the next connect sets everything up again.
+/// "Remove system files": remove the install folder and the Gaming Mode rule
+/// through one pkexec of [`REMOVE_SCRIPT`], and nothing else. The tunnel and
+/// the helper are left as they are: a cancelled password window, or Gaming
+/// Mode, where pkexec has no window to show and says so at once, must not
+/// cost a working connection. Linux lets a running program's file be
+/// removed, so the helper and its tun2socks go on running from the removed
+/// folder; once this succeeded the caller disconnects and then stops the
+/// helper ([`stop_removed_helper`]). The next connect sets everything up
+/// again.
 #[cfg(target_os = "linux")]
 pub async fn remove_system_files() -> Result<(), RemoveFailure> {
     use std::process::Stdio;
 
-    // The helper runs from the folder about to go and holds the tunnel: its
-    // stdin closes, and it takes everything down and exits.
-    crate::net::release_helper().await;
     let pkexec = crate::privilege::which("pkexec").ok_or(RemoveFailure::NoPkexec)?;
     let dest = physical_install_dir(Path::new(INSTALL_DIR));
     let mut child = tokio::process::Command::new(pkexec)
@@ -1070,6 +1073,30 @@ pub async fn remove_system_files() -> Result<(), RemoveFailure> {
 #[cfg(not(target_os = "linux"))]
 pub async fn remove_system_files() -> Result<(), RemoveFailure> {
     Err(RemoveFailure::Failed("only the Linux AppImage puts files into the system".to_string()))
+}
+
+/// After [`remove_system_files`] succeeded and the tunnel is down: stop the
+/// helper that still runs from the removed folder. Its stdin closes, and it
+/// takes down whatever is left and exits (net/linux.rs, `release_helper`), so
+/// the next connect starts the setup instead of reusing it.
+pub async fn stop_removed_helper() {
+    #[cfg(target_os = "linux")]
+    crate::net::release_helper().await;
+}
+
+/// "Remove system files" in its order: `remove` ([`remove_system_files`])
+/// first, and `tear_down` (disconnect, then [`stop_removed_helper`]) only
+/// once it succeeded. A refusal, a missing agent or a failed script returns
+/// before anything of the connection is touched. Futures do nothing until
+/// awaited, so `tear_down` is not started on the way out.
+pub async fn remove_then_tear_down<R, T>(remove: R, tear_down: T) -> Result<(), RemoveFailure>
+where
+    R: std::future::Future<Output = Result<(), RemoveFailure>>,
+    T: std::future::Future<Output = ()>,
+{
+    remove.await?;
+    tear_down.await;
+    Ok(())
 }
 
 /// Is this SteamOS? Read once per process.
@@ -1529,6 +1556,48 @@ mod tests {
         let shell = "proxysvpn-remove: line 3: rm: Read-only file system\n";
         assert!(matches!(removal_outcome(Some(127), shell, false), Err(RemoveFailure::Failed(_))));
         assert!(matches!(removal_outcome(None, "", false), Err(RemoveFailure::Failed(_))));
+    }
+
+    /// The tunnel is touched only after the files are gone: a dismissed
+    /// window, Gaming Mode's missing agent or a failed script leave it up.
+    #[tokio::test]
+    async fn the_removal_comes_before_the_disconnect_and_only_success_disconnects() {
+        use std::sync::{Arc, Mutex};
+
+        for failure in [
+            RemoveFailure::Refused,
+            RemoveFailure::UseDesktopMode,
+            RemoveFailure::NoAgent,
+            RemoveFailure::NoPkexec,
+            RemoveFailure::Failed("rm: Read-only file system".to_string()),
+        ] {
+            let steps = Arc::new(Mutex::new(Vec::new()));
+            let (removed, torn) = (Arc::clone(&steps), Arc::clone(&steps));
+            let answer = failure.clone();
+            let outcome = remove_then_tear_down(
+                async move {
+                    removed.lock().expect("steps").push("remove");
+                    Err(answer)
+                },
+                async move { torn.lock().expect("steps").push("disconnect") },
+            )
+            .await;
+            assert_eq!(outcome, Err(failure));
+            assert_eq!(*steps.lock().expect("steps"), ["remove"]);
+        }
+
+        let steps = Arc::new(Mutex::new(Vec::new()));
+        let (removed, torn) = (Arc::clone(&steps), Arc::clone(&steps));
+        let outcome = remove_then_tear_down(
+            async move {
+                removed.lock().expect("steps").push("remove");
+                Ok(())
+            },
+            async move { torn.lock().expect("steps").push("disconnect") },
+        )
+        .await;
+        assert_eq!(outcome, Ok(()));
+        assert_eq!(*steps.lock().expect("steps"), ["remove", "disconnect"]);
     }
 
     /// The option that stops pkexec's terminal prompt is pkexec's own and

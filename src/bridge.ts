@@ -50,9 +50,10 @@
 //   open_external_unelevated{ url } -> ()   Windows only: links through the
 //                                           unelevated shell (externalUrl.ts)
 //   remove_system_files -> ()   the Linux AppImage only (AppInfo.systemFiles):
-//                               one password window; PERMISSION_DENIED,
-//                               ELEVATION_UNAVAILABLE,
-//                               STEAMOS_DESKTOP_MODE_NEEDED or UNKNOWN
+//                               one password window, then a disconnect;
+//                               PERMISSION_DENIED, ELEVATION_UNAVAILABLE,
+//                               STEAMOS_DESKTOP_MODE_NEEDED or UNKNOWN leave
+//                               the tunnel as it was
 //
 // Commands answer `Result<T, String>` with `AppError::to_payload()` in the
 // error, exactly as errors.rs describes; `call()` below turns that back into
@@ -371,9 +372,9 @@ export interface CoreBridge {
 
   appInfo(): Promise<AppInfo>;
   /**
-   * Disconnect, stop the root helper and remove what the AppImage put into
-   * the system, through one password window. The next connect sets it up
-   * again.
+   * Remove what the AppImage put into the system, through one password
+   * window, and only then disconnect and stop the root helper; a failure
+   * leaves the tunnel as it was. The next connect sets it up again.
    */
   removeSystemFiles(): Promise<void>;
   openExternal(url: string): Promise<void>;
