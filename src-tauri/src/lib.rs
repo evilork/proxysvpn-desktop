@@ -5352,8 +5352,9 @@ mod tests {
     /// The Linux build merges tauri.linux.conf.json over tauri.conf.json (a
     /// JSON merge patch). The result must be a config Tauri accepts — its
     /// structs refuse unknown keys, so this is the check a Mac can make — and
-    /// the AppImage must carry the helper the build hook produces, while the
-    /// .deb, whose polkit policy names its own executable, must not.
+    /// the AppImage must carry the helper the build hook produces and the
+    /// list of its libraries' sources, while the .deb, whose polkit policy
+    /// names its own executable, must not carry the helper.
     #[cfg(desktop)]
     #[test]
     fn the_linux_config_puts_the_helper_into_the_appimage_only() {
@@ -5392,6 +5393,18 @@ mod tests {
             "the AppImage takes what the hook built"
         );
         assert!(!conf.bundle.linux.deb.files.keys().any(|path| path.ends_with("proxysvpn-helper")));
+        // Where its libraries come from, which CI writes before the build
+        // that ships (scripts/appimage-lgpl-sources.sh): the file is there
+        // for every build, a note in a local one.
+        let sources = conf
+            .bundle
+            .linux
+            .appimage
+            .files
+            .get(Path::new("/usr/share/doc/proxysvpn-desktop/LGPL-SOURCES.txt"))
+            .expect("the AppImage carries LGPL-SOURCES.txt");
+        assert_eq!(sources, Path::new("linux/LGPL-SOURCES.txt"));
+        assert!(Path::new(env!("CARGO_MANIFEST_DIR")).join(sources).is_file());
         assert!(!conf.bundle.external_bin.unwrap_or_default().iter().any(|bin| bin.contains("proxysvpn-helper")));
         match conf.bundle.targets {
             BundleTarget::List(list) => {

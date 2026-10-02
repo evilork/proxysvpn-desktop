@@ -196,9 +196,11 @@ const STATIC_COMPONENTS = [
  * GTK 3, and what they link that linuxdeploy does not leave to the system
  * (its excludelist keeps glibc, libstdc++, GL, X11, fontconfig, freetype,
  * harfbuzz, fribidi, libgpg-error and a few more out). Versions are what
- * Ubuntu 22.04 ships when CI builds the image, so none is pinned here; the
- * exact source of each is Ubuntu's source package of that version, and the
- * project's own repository is the `source` below. Licences are the projects'
+ * Ubuntu 22.04 ships when CI builds the image, so none is pinned here: CI
+ * writes the exact binary and source package of each, with version, into
+ * the image and beside it (scripts/appimage-lgpl-sources.sh,
+ * LGPL-SOURCES.txt), and the project's own repository is the `source` below.
+ * Licences are the projects'
  * SPDX expressions as Fedora's packages state them; where a project offers a
  * choice, the options whose texts are bundled are listed. Permissively
  * licensed libraries of the image (libxml2, libwebp, pixman, …) are not

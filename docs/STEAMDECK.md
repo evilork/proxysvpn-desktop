@@ -288,6 +288,15 @@ the helper's `NEEDED` and `RUNPATH` entries. Expect only the C library and
 from `/home/.proxysvpn/bin` that is `/home/.proxysvpn/lib`, inside the
 root-owned tree, which is why the helper sits one level down.
 
+Before that, the step "LGPL sources of the AppImage" writes which Ubuntu
+package, at which version, each library in the image's `usr/lib` came from
+(`scripts/appimage-lgpl-sources.sh`) into `src-tauri/linux/LGPL-SOURCES.txt`,
+builds the image a second time so that it carries the list as
+`usr/share/doc/proxysvpn-desktop/LGPL-SOURCES.txt`, fails unless the final
+image holds exactly those libraries and that list, and puts the same file
+beside it as `LGPL-SOURCES-linux-appimage.txt` for the release
+(THIRD-PARTY-NOTICES.md). A local build carries the committed note instead.
+
 ## Trying it without a Deck
 
 Any x86_64 Linux VM with a desktop runs the same code. `ID=steamos` in

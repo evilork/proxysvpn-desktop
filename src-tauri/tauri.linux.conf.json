@@ -13,7 +13,8 @@
       "appimage": {
         "bundleMediaFramework": false,
         "files": {
-          "/usr/bin/proxysvpn-helper": "target/release/proxysvpn-helper"
+          "/usr/bin/proxysvpn-helper": "target/release/proxysvpn-helper",
+          "/usr/share/doc/proxysvpn-desktop/LGPL-SOURCES.txt": "linux/LGPL-SOURCES.txt"
         }
       },
       "deb": {
