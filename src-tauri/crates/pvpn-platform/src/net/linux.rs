@@ -430,6 +430,23 @@ pub async fn down(_server_ip: Option<Ipv4Addr>) -> Result<()> {
     }
 }
 
+/// Stop the helper, if one runs, and wait a moment for it to go. Its stdin
+/// closes, and it takes the tunnel down and exits by itself, as when the app
+/// quits (helper/server.rs). For "Remove system files", which must not leave
+/// it running from a folder it is about to remove. A helper that does not go
+/// is left to that EOF: it runs as root, and this process may not signal it.
+pub async fn release_helper() {
+    ENGINE_UP.store(false, Ordering::Relaxed);
+    let Some(link) = link_slot().lock().await.take() else {
+        return;
+    };
+    let Link { mut child, stdin, .. } = link;
+    drop(stdin);
+    if tokio::time::timeout(Duration::from_secs(5), child.wait()).await.is_err() {
+        crate::log::warn("helper", "the helper did not exit within 5 s of its pipe closing");
+    }
+}
+
 pub async fn engine_alive() -> bool {
     // Never block here: the UI polls this, and a request in flight may be the
     // pkexec dialog waiting for a password (up to three minutes).

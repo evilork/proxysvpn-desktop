@@ -586,6 +586,16 @@ const ru = {
   "more.unlinkConfirm":
     "Ссылка будет удалена только с этого устройства. Аккаунт, другие устройства и доступ останутся — ссылку можно добавить снова.",
   "more.unlinkYes": "Отвязать",
+  "more.sysFiles": "Удалить системные файлы",
+  "more.sysFilesHint": "/home/.proxysvpn и разрешение игрового режима",
+  "more.sysFilesConfirm":
+    "ProxysVPN отключится и удалит то, что положил в систему при первом подключении: свою копию помощника в /home/.proxysvpn и разрешение подключаться в игровом режиме без пароля. Система спросит пароль. Следующее подключение снова спросит его и всё настроит заново.",
+  "more.sysFilesYes": "Удалить",
+  "more.sysFilesDone": "Системные файлы удалены",
+  "more.sysFilesCancelled": "Удаление отменено: пароль не введён",
+  "more.sysFilesDesktopMode": "В игровом режиме нет окна для пароля. Удалите файлы из режима рабочего стола",
+  "more.sysFilesNoDialog": "Системе негде спросить пароль. Удалите файлы вручную, как в инструкции для Steam Deck",
+  "more.sysFilesFailed": "Не удалось удалить системные файлы. Причина — в журнале",
   "more.cabinet": "Личный кабинет",
   "more.geoNote": "Списки маршрутизации уже внутри приложения — ничего не скачивается",
 
@@ -1127,6 +1137,16 @@ const en: Partial<Record<MsgKey, string>> = {
   "more.unlinkConfirm":
     "The link is removed from this device only. Your account, other devices and access stay — you can add the link again.",
   "more.unlinkYes": "Unlink",
+  "more.sysFiles": "Remove system files",
+  "more.sysFilesHint": "/home/.proxysvpn and the Gaming Mode permission",
+  "more.sysFilesConfirm":
+    "ProxysVPN disconnects and removes what it put into the system on the first connect: its copy of the helper in /home/.proxysvpn and the permission to connect in Gaming Mode without a password. The system asks for your password. The next connect asks for it again and sets everything up anew.",
+  "more.sysFilesYes": "Remove",
+  "more.sysFilesDone": "System files removed",
+  "more.sysFilesCancelled": "Removal cancelled: the password was not entered",
+  "more.sysFilesDesktopMode": "Gaming Mode has no password window. Remove them from Desktop Mode",
+  "more.sysFilesNoDialog": "The system has nowhere to ask for the password. Remove them by hand, as the Steam Deck guide says",
+  "more.sysFilesFailed": "Could not remove the system files. The log says why",
   "more.cabinet": "Your account",
   "more.geoNote": "Routing lists are already inside the app — nothing is downloaded",
 

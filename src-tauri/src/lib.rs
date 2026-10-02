@@ -324,6 +324,9 @@ struct AppInfo {
     device_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     device_linked_at: Option<u64>,
+    /// More offers "Remove system files": the Linux AppImage, which copies its
+    /// root helper into /home/.proxysvpn and, on SteamOS, leaves a polkit rule.
+    system_files: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3718,7 +3721,60 @@ async fn app_info(core: tauri::State<'_, Arc<Core>>) -> Cmd<AppInfo> {
         bot_url: support.unwrap_or_else(|| BOT_URL.to_string()),
         device_name: device_name(),
         device_linked_at: link_stored_at(),
+        system_files: system_files_removable(),
     })
+}
+
+fn system_files_removable() -> bool {
+    #[cfg(desktop)]
+    {
+        pvpn_platform::helper::install::system_files_removable()
+    }
+    #[cfg(not(desktop))]
+    {
+        false
+    }
+}
+
+/// "Remove system files" (MoreScreen, the Linux AppImage only): disconnect,
+/// stop the root helper, and remove /home/.proxysvpn and the Gaming Mode
+/// polkit rule through one password window (pvpn-platform helper/install.rs).
+/// The next connect sets them up again.
+#[tauri::command]
+async fn remove_system_files(core: tauri::State<'_, Arc<Core>>) -> Cmd<()> {
+    #[cfg(desktop)]
+    {
+        use pvpn_platform::helper::install::{self, RemoveFailure};
+
+        if !install::system_files_removable() {
+            return Err(AppError::new(ErrorCode::Unknown).to_payload());
+        }
+        let core = core.inner().clone();
+        if core.session.lock().await.phase != VpnPhase::Off {
+            core.disconnect().await;
+        }
+        match install::remove_system_files().await {
+            Ok(()) => {
+                logger::log("info", "app", "system files removed");
+                Ok(())
+            }
+            Err(failure) => {
+                logger::log("warn", "app", &format!("system files not removed: {failure}"));
+                let code = match failure {
+                    RemoveFailure::Refused => ErrorCode::PermissionDenied,
+                    RemoveFailure::NoPkexec | RemoveFailure::NoAgent => ErrorCode::ElevationUnavailable,
+                    RemoveFailure::UseDesktopMode => ErrorCode::SteamosDesktopModeNeeded,
+                    RemoveFailure::Failed(_) => ErrorCode::Unknown,
+                };
+                Err(AppError::new(code).to_payload())
+            }
+        }
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = core;
+        Err(AppError::new(ErrorCode::Unknown).to_payload())
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -5044,6 +5100,7 @@ pub fn run() {
             onboarding_state,
             onboarding_run,
             app_info,
+            remove_system_files,
             open_external_unelevated,
             motion::motion_start,
             motion::motion_stop

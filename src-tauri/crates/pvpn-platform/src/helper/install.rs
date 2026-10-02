@@ -297,6 +297,121 @@ take tun2socks "$engine_sum"
 exec "$dest/bin/proxysvpn-helper" --helper
 "#;
 
+/// `$0` of the removal script ([`REMOVE_SCRIPT`]); its own lines and the
+/// shell's start with it, as the setup's start with [`SETUP_NAME`].
+pub const REMOVE_NAME: &str = "proxysvpn-remove";
+/// The end of the password window's message for the removal (see "What the
+/// password window says" above): "/bin/sh -c # ProxysVPN: remove helper,
+/// ... and the Gaming Mode no-password rule."
+pub const REMOVE_TAIL: &str = "and the Gaming Mode no-password rule.";
+
+/// What "Remove system files" (More, the Linux AppImage only) runs as root
+/// through one pkexec: the rule first, so that from that moment nothing runs
+/// as root without a password, then the install folder with the helper, the
+/// engine, the record and the "no" in it.
+///
+/// Arguments: `$1` the physical install folder, `$2` [`POLKIT_RULE`], `$3`
+/// [`REMOVE_TAIL`], never read. It removes nothing but those two paths and
+/// refuses any other name, so it can only ever remove ProxysVPN's own: a
+/// folder named `.proxysvpn` and a file named `49-proxysvpn.rules`, both
+/// absolute and without `.` or `..` in them. Links are removed, never
+/// followed: `rm` unlinks the link itself, and `rm -rf` does not follow links
+/// inside the folder. The folder must be root's alone, as the setup left it;
+/// one that is not was not made by the setup, and is left for a person to
+/// look at. Nothing there at all is success: removing twice is fine.
+///
+/// The helper's crash-recovery notes (/run/proxysvpn, /var/lib/proxysvpn) are
+/// left alone: the second may hold the resolv.conf to put back, and the .deb
+/// shares them. docs/STEAMDECK.md lists them for removal by hand.
+pub const REMOVE_SCRIPT: &str = r#"# ProxysVPN: remove helper, the copy in /home/.proxysvpn and the Gaming Mode no-password rule /etc/polkit-1/rules.d/49-proxysvpn.rules (More > Remove system files)
+set -eu
+dest=$1 rule=$2
+me=$(id -u)
+say() { printf 'proxysvpn-remove: %s\n' "$*" >&2; }
+case $dest in /*/.proxysvpn) ;; *) say "$dest is not ProxysVPN's folder"; exit 64 ;; esac
+case $rule in /*/49-proxysvpn.rules) ;; *) say "$rule is not ProxysVPN's rule"; exit 64 ;; esac
+case "$dest/ $rule/" in *//*|*/./*|*/../*) say "$dest or $rule is not a plain path"; exit 64 ;; esac
+if [ -L "$rule" ] || [ -f "$rule" ]; then
+    rm -f -- "$rule"
+elif [ -e "$rule" ]; then
+    say "$rule is not a file"; exit 65
+fi
+if [ -L "$dest" ]; then
+    rm -f -- "$dest"
+elif [ -d "$dest" ]; then
+    [ -n "$(find "$dest" -maxdepth 0 -user "$me" ! -perm -0020 ! -perm -0002 -print)" ] || { say "$dest is not a folder only uid $me can change"; exit 73; }
+    rm -rf -- "$dest"
+elif [ -e "$dest" ]; then
+    say "$dest is not a folder"; exit 65
+fi
+"#;
+
+/// The arguments for `pkexec /bin/sh …` that run [`REMOVE_SCRIPT`].
+pub fn remove_args(install_dir: &Path, rule: &Path) -> Vec<OsString> {
+    vec![
+        OsString::from("-c"),
+        OsString::from(REMOVE_SCRIPT),
+        OsString::from(REMOVE_NAME),
+        install_dir.as_os_str().to_os_string(),
+        rule.as_os_str().to_os_string(),
+        OsString::from(REMOVE_TAIL),
+    ]
+}
+
+/// Why "Remove system files" did not remove them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoveFailure {
+    /// pkexec is not installed.
+    NoPkexec,
+    /// The password window was dismissed, or the password refused.
+    Refused,
+    /// No polkit agent, so no window could appear.
+    NoAgent,
+    /// No polkit agent on SteamOS: Gaming Mode. Desktop Mode has one.
+    UseDesktopMode,
+    /// The script stopped, or pkexec failed some other way; the text says
+    /// why, for the log.
+    Failed(String),
+}
+
+impl std::fmt::Display for RemoveFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoPkexec => f.write_str("pkexec is not installed"),
+            Self::Refused => f.write_str("the password window was dismissed or refused"),
+            Self::NoAgent => f.write_str("no polkit agent in this session"),
+            Self::UseDesktopMode => f.write_str("no polkit agent in Gaming Mode"),
+            Self::Failed(why) => f.write_str(why),
+        }
+    }
+}
+
+impl std::error::Error for RemoveFailure {}
+
+/// Read a finished removal from pkexec's exit code and stderr. The script's
+/// own lines (and the shell's, which start with [`REMOVE_NAME`] too) are
+/// checked first: 126 and 127 from the shell are not the person's answer.
+pub fn removal_outcome(exit: Option<i32>, stderr: &str, steamos: bool) -> Result<(), RemoveFailure> {
+    use crate::privilege::{handshake_failure, HandshakeFailure};
+
+    if exit == Some(0) {
+        return Ok(());
+    }
+    let own: Vec<&str> = stderr.lines().filter(|line| line.contains(REMOVE_NAME)).collect();
+    if !own.is_empty() {
+        return Err(RemoveFailure::Failed(own.join("; ")));
+    }
+    match handshake_failure(exit, stderr, false) {
+        HandshakeFailure::Dismissed | HandshakeFailure::NotAuthorized => Err(RemoveFailure::Refused),
+        HandshakeFailure::NoAgent if steamos => Err(RemoveFailure::UseDesktopMode),
+        HandshakeFailure::NoAgent => Err(RemoveFailure::NoAgent),
+        HandshakeFailure::SetupFailed(_) | HandshakeFailure::Other => Err(RemoveFailure::Failed(format!(
+            "pkexec ended with {exit:?}: {}",
+            stderr.lines().next().unwrap_or("no message")
+        ))),
+    }
+}
+
 /// Where an installed helper lives under an install folder.
 pub fn installed_helper(install_dir: &Path) -> PathBuf {
     install_dir.join(BIN_DIR).join(HELPER_BIN)
@@ -879,6 +994,80 @@ pub fn acknowledge_gaming_notice() {
     GAMING_NOTICE_SEEN.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Does More offer "Remove system files"? On the Linux AppImage only: the
+/// .deb's files belong to the package manager (`apt remove`), and macOS and
+/// Windows put nothing of this kind into the system.
+pub fn system_files_removable() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        this_launch() == Launch::AppImage
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+/// How long the password window may stay open for the removal, as for the
+/// first connect (net/linux.rs).
+#[cfg(target_os = "linux")]
+const REMOVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// "Remove system files": stop the helper, then remove the install folder and
+/// the Gaming Mode rule through one pkexec of [`REMOVE_SCRIPT`]. The tunnel
+/// must already be down; the next connect sets everything up again.
+#[cfg(target_os = "linux")]
+pub async fn remove_system_files() -> Result<(), RemoveFailure> {
+    use std::process::Stdio;
+
+    // The helper runs from the folder about to go and holds the tunnel: its
+    // stdin closes, and it takes everything down and exits.
+    crate::net::release_helper().await;
+    let pkexec = crate::privilege::which("pkexec").ok_or(RemoveFailure::NoPkexec)?;
+    let dest = physical_install_dir(Path::new(INSTALL_DIR));
+    let mut child = tokio::process::Command::new(pkexec)
+        .args(crate::privilege::pkexec_args(Path::new(SHELL), remove_args(&dest, Path::new(POLKIT_RULE))))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| RemoveFailure::Failed(format!("could not start pkexec: {e}")))?;
+    let mut stderr = String::new();
+    let mut pipe = child.stderr.take();
+    let waited = tokio::time::timeout(REMOVE_TIMEOUT, async {
+        if let Some(pipe) = pipe.as_mut() {
+            use tokio::io::AsyncReadExt;
+            // Bounded: pkexec and the script say a few lines at most.
+            let _ = pipe.take(64 * 1024).read_to_string(&mut stderr).await;
+        }
+        child.wait().await
+    })
+    .await;
+    let status = match waited {
+        Ok(Ok(status)) => status,
+        Ok(Err(e)) => return Err(RemoveFailure::Failed(format!("could not wait for pkexec: {e}"))),
+        Err(_) => return Err(RemoveFailure::Failed("the password window stayed open too long".to_string())),
+    };
+    for line in stderr.lines().filter(|line| !line.trim().is_empty()) {
+        crate::log::warn("helper", line);
+    }
+    let outcome = removal_outcome(status.code(), &stderr, running_on_steamos());
+    if outcome.is_ok() {
+        crate::log::info("helper", "AppImage: removed /home/.proxysvpn and the Gaming Mode rule");
+        // Nothing is decided on the device any more: before the next setup
+        // grants Gaming Mode again, the window says so again.
+        GAMING_NOTICE_SEEN.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+    outcome
+}
+
+/// Elsewhere there is nothing of this kind to remove.
+#[cfg(not(target_os = "linux"))]
+pub async fn remove_system_files() -> Result<(), RemoveFailure> {
+    Err(RemoveFailure::Failed("only the Linux AppImage puts files into the system".to_string()))
+}
+
 /// Is this SteamOS? Read once per process.
 #[cfg(target_os = "linux")]
 pub fn running_on_steamos() -> bool {
@@ -1295,6 +1484,34 @@ mod tests {
         }
         assert!(SETUP_HEAD_GRANT.contains("without a password") && SETUP_HEAD_GRANT.contains("Remove system files"));
         assert!(SETUP_HEAD.contains("Remove system files") && !SETUP_HEAD.contains("password"));
+    }
+
+    /// "Remove system files" says what it removes in the window too, and
+    /// reads its end like the setup's: its own lines first, then pkexec's.
+    #[test]
+    fn the_removal_is_read_like_the_setup() {
+        let argv = crate::privilege::pkexec_args(
+            Path::new(SHELL),
+            remove_args(Path::new("/var/home/.proxysvpn"), Path::new(POLKIT_RULE)),
+        );
+        assert_eq!(
+            pkexec_cmdline_short(&pkexec_command_line(&argv)),
+            "/bin/sh -c # ProxysVPN: remove helper, ... and the Gaming Mode no-password rule."
+        );
+        assert!(REMOVE_SCRIPT.is_ascii() && REMOVE_TAIL.len() == 37);
+        assert!(!REMOVE_SCRIPT.contains("$3"), "$3 is for the window");
+
+        assert_eq!(removal_outcome(Some(0), "", true), Ok(()));
+        let no_agent = "Error executing command as another user: No authentication agent found.\n";
+        assert_eq!(removal_outcome(Some(127), no_agent, true), Err(RemoveFailure::UseDesktopMode));
+        assert_eq!(removal_outcome(Some(127), no_agent, false), Err(RemoveFailure::NoAgent));
+        assert_eq!(removal_outcome(Some(126), "", true), Err(RemoveFailure::Refused));
+        assert_eq!(removal_outcome(Some(127), "Not authorized", false), Err(RemoveFailure::Refused));
+        let own = "proxysvpn-remove: /home/.proxysvpn is not a folder only uid 0 can change\n";
+        assert!(matches!(removal_outcome(Some(73), own, true), Err(RemoveFailure::Failed(why)) if why.contains("only uid 0")));
+        let shell = "proxysvpn-remove: line 3: rm: Read-only file system\n";
+        assert!(matches!(removal_outcome(Some(127), shell, false), Err(RemoveFailure::Failed(_))));
+        assert!(matches!(removal_outcome(None, "", false), Err(RemoveFailure::Failed(_))));
     }
 
     /// The option that stops pkexec's terminal prompt is pkexec's own and
@@ -1832,6 +2049,100 @@ close($out) or die "dd: $op{of}: $!\n";
             assert!(gaming_decided(&dest), "a dangling \"no\" is still a no");
             assert_eq!(gaming_for(true, &dest), Gaming::Kept);
             assert_eq!(gaming_for(false, &dest), Gaming::Off);
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        /// Run the removal as pkexec would, minus root.
+        fn run_remove(base: &Path, dest: &Path, rule: &Path) -> Run {
+            let child = Command::new(SHELL)
+                .args(remove_args(dest, rule))
+                .env("PATH", path_with_tools(base))
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("sh");
+            finish(child, "the removal")
+        }
+
+        /// A setup's whole tree and the rule go; links in the way are
+        /// removed, not followed; removing twice is fine.
+        #[test]
+        fn the_removal_takes_the_folder_and_the_rule_and_nothing_else() {
+            let base = temp("remove");
+            let (staged, hs, es) = staged_from(&base);
+            let dest = base.join(".proxysvpn");
+            let run = run_setup_as(&base, &dest, &staged, &hs, &es, true);
+            assert_eq!(run.code, Some(0), "{}", run.stderr);
+            std::fs::write(dest.join(GAMING_OFF), b"").expect("off");
+            let rules = base.join("rules.d");
+            std::fs::create_dir(&rules).expect("rules.d");
+            let rule = rules.join("49-proxysvpn.rules");
+            std::fs::write(&rule, b"polkit.addRule(function () {});").expect("rule");
+            let neighbour = rules.join("50-default.rules");
+            std::fs::write(&neighbour, b"keep").expect("neighbour");
+            // A link inside the folder to something outside it.
+            let outside = base.join("outside");
+            std::fs::write(&outside, b"keep").expect("outside");
+            std::os::unix::fs::symlink(&outside, dest.join(BIN_DIR).join("link")).expect("link");
+
+            let run = run_remove(&base, &dest, &rule);
+            assert_eq!(run.code, Some(0), "{}", run.stderr);
+            assert!(std::fs::symlink_metadata(&dest).is_err(), "the folder is gone");
+            assert!(std::fs::symlink_metadata(&rule).is_err(), "the rule is gone");
+            assert_eq!(std::fs::read(&neighbour).expect("neighbour"), b"keep");
+            assert_eq!(std::fs::read(&outside).expect("outside"), b"keep", "a link is not followed");
+            assert!(staged.exists(), "nothing but the two paths");
+
+            let again = run_remove(&base, &dest, &rule);
+            assert_eq!(again.code, Some(0), "{}", again.stderr);
+
+            // Links where the folder and the rule should be: the links go,
+            // what they point at stays.
+            let elsewhere = base.join("elsewhere");
+            std::fs::create_dir(&elsewhere).expect("dir");
+            std::fs::write(elsewhere.join("f"), b"keep").expect("f");
+            std::os::unix::fs::symlink(&elsewhere, &dest).expect("link");
+            std::os::unix::fs::symlink(&outside, &rule).expect("link");
+            let run = run_remove(&base, &dest, &rule);
+            assert_eq!(run.code, Some(0), "{}", run.stderr);
+            assert!(std::fs::symlink_metadata(&dest).is_err() && std::fs::symlink_metadata(&rule).is_err());
+            assert_eq!(std::fs::read(elsewhere.join("f")).expect("f"), b"keep");
+            assert_eq!(std::fs::read(&outside).expect("outside"), b"keep");
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        /// Only ProxysVPN's own names, as plain absolute paths, and only a
+        /// folder that is root's alone, as the setup made it.
+        #[test]
+        fn the_removal_refuses_anything_that_is_not_ours() {
+            let base = temp("remove-not-ours");
+            let rule = base.join("49-proxysvpn.rules");
+            let other = base.join("data");
+            std::fs::create_dir(&other).expect("dir");
+            std::fs::write(other.join("f"), b"keep").expect("f");
+
+            for (dest, rule_path) in [
+                (other.clone(), rule.clone()),
+                (base.join(".proxysvpn"), base.join("50-default.rules")),
+                (PathBuf::from(".proxysvpn"), rule.clone()),
+                (base.join("data/../.proxysvpn"), rule.clone()),
+                (base.join(".proxysvpn"), base.join("./49-proxysvpn.rules")),
+            ] {
+                let run = run_remove(&base, &dest, &rule_path);
+                assert_eq!(run.code, Some(64), "{} {}: {}", dest.display(), rule_path.display(), run.stderr);
+                assert!(run.stderr.contains(REMOVE_NAME), "{}", run.stderr);
+            }
+            assert_eq!(std::fs::read(other.join("f")).expect("f"), b"keep");
+
+            let open = base.join(".proxysvpn");
+            std::fs::create_dir(&open).expect("dir");
+            std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).expect("chmod");
+            std::fs::write(&rule, b"rule").expect("rule");
+            let run = run_remove(&base, &open, &rule);
+            assert_eq!(run.code, Some(73), "{}", run.stderr);
+            assert!(open.exists(), "a folder others can change is left for a person");
+            assert!(!rule.exists(), "the rule goes first");
             let _ = std::fs::remove_dir_all(&base);
         }
 

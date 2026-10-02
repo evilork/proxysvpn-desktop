@@ -200,16 +200,38 @@ connected says which backend is in use).
 
 ## Removing it
 
-1. Delete the AppImage, and the shortcut in Steam (right click → Manage →
+1. **In the app, in Desktop Mode: More → Remove system files.** After a
+   confirmation the app disconnects, stops its root helper and, behind one
+   password window ("Authentication is needed to run `/bin/sh -c # ProxysVPN:
+   remove helper, ... and the Gaming Mode no-password rule.'"), removes
+   `/home/.proxysvpn` and `/etc/polkit-1/rules.d/49-proxysvpn.rules`. A fixed
+   script does it (`REMOVE_SCRIPT` in `helper/install.rs`): it removes those
+   two paths and nothing else, refuses any other name, removes a link in
+   their place instead of following it, never follows a link inside the
+   folder, and leaves the folder alone if it is not root's alone (the setup
+   never makes it so). In Gaming Mode there is no password window, and the
+   app says to use Desktop Mode. The row exists in the AppImage only; the
+   `.deb` is removed with `apt remove`. If you keep the AppImage, its next
+   connect sets everything up again, with the screen and the password.
+2. Delete the AppImage, and the shortcut in Steam (right click → Manage →
    Remove non-Steam game from your library).
-2. In Konsole, remove what the setup and the helper left:
+3. What the helper keeps for crash recovery is left by step 1, because
+   `/var/lib/proxysvpn` may hold the `resolv.conf` to put back. Once the app
+   is gone, in Konsole:
+
+   ```bash
+   sudo rm -rf /var/lib/proxysvpn /run/proxysvpn
+   ```
+
+   Without the app (or if step 1 was not possible), remove everything by
+   hand:
 
    ```bash
    sudo rm -rf /home/.proxysvpn /var/lib/proxysvpn /run/proxysvpn
    sudo rm -f /etc/polkit-1/rules.d/49-proxysvpn.rules
    ```
 
-3. The app's own data (the pair, the settings, the log):
+4. The app's own data (the pair, the settings, the log):
 
    ```bash
    rm -rf ~/.local/share/ProxysVPN ~/.local/state/ProxysVPN
@@ -265,6 +287,9 @@ tests on Linux):
   the rule code included, **compiles** for `x86_64-unknown-linux-gnu` and is
   clean under `clippy -D warnings` (`scripts/check-platform.sh`);
 * unit tests: recognising an AppImage (and not the `.deb` started from one);
+  **the removal script under `/bin/sh`**: it removes the whole folder and the
+  rule, leaves the rule's neighbours and whatever links point at, refuses
+  other names and a folder others can change;
   deciding between "run the copy", "copy again" and "refuse" for every
   ownership, mode and checksum case; **the setup script itself, run under
   `/bin/sh`** as pkexec would run it minus root — it installs both files, hands

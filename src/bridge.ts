@@ -49,6 +49,10 @@
 //   app_info       -> AppInfo
 //   open_external_unelevated{ url } -> ()   Windows only: links through the
 //                                           unelevated shell (externalUrl.ts)
+//   remove_system_files -> ()   the Linux AppImage only (AppInfo.systemFiles):
+//                               one password window; PERMISSION_DENIED,
+//                               ELEVATION_UNAVAILABLE,
+//                               STEAMOS_DESKTOP_MODE_NEEDED or UNKNOWN
 //
 // Commands answer `Result<T, String>` with `AppError::to_payload()` in the
 // error, exactly as errors.rs describes; `call()` below turns that back into
@@ -192,6 +196,11 @@ export interface AppInfo {
   /** "MacBook" — for [10]. Never a serial number or an identifier. */
   deviceName: string;
   deviceLinkedAt?: number;
+  /**
+   * More offers "Remove system files": the Linux AppImage, which copies its
+   * root helper into /home/.proxysvpn and on SteamOS leaves a polkit rule.
+   */
+  systemFiles?: boolean;
 }
 
 /** A pairing code: 32 hex characters, alive for five minutes. */
@@ -361,6 +370,12 @@ export interface CoreBridge {
   onboardingRun(step: OnboardingStep): Promise<void>;
 
   appInfo(): Promise<AppInfo>;
+  /**
+   * Disconnect, stop the root helper and remove what the AppImage put into
+   * the system, through one password window. The next connect sets it up
+   * again.
+   */
+  removeSystemFiles(): Promise<void>;
   openExternal(url: string): Promise<void>;
   readClipboard(): Promise<string>;
   writeClipboard(text: string): Promise<void>;
@@ -548,6 +563,9 @@ class TauriBridge implements CoreBridge {
   }
   appInfo(): Promise<AppInfo> {
     return call<AppInfo>("app_info");
+  }
+  removeSystemFiles(): Promise<void> {
+    return call<void>("remove_system_files");
   }
   async openExternal(url: string): Promise<void> {
     // App Store builds open only the allowlisted pages (src/externalUrl.ts):
@@ -1323,6 +1341,10 @@ class MockBridge implements CoreBridge {
       deviceName: "MacBook",
       deviceLinkedAt: Date.now() - 18 * 86_400_000,
     };
+  }
+
+  async removeSystemFiles(): Promise<void> {
+    await this.pause(900);
   }
 
   async openExternal(url: string): Promise<void> {
