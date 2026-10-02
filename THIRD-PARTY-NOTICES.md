@@ -61,13 +61,23 @@ They are **shared libraries, linked dynamically**: the app loads them from
 replaced with another build of the same interface: extract the image
 (`./ProxysVPN_<version>_amd64.AppImage --appimage-extract`), put your build of
 the library under the same file name into `squashfs-root/usr/lib` (or delete
-ours, and the system's is used), and run `squashfs-root/AppRun`. The files in
-the image are Ubuntu 22.04's builds of the version current when CI made it,
-unmodified; their complete corresponding source is Ubuntu's source package of
-that version (`apt-get source <package>=<version>`, or the Launchpad page
-below), and the CI step "AppImage carries the helper" prints the libraries the
-image holds. The licence texts ship inside the app and the libraries are
-listed on its "Open-source licences" screen for Linux, marked "AppImage only".
+ours, and the system's is used), and run `squashfs-root/AppRun`.
+
+The files in the image are Ubuntu 22.04's binary packages of the version
+current when CI made it, as Ubuntu built them, except that linuxdeploy rewrites
+their RUNPATH (and may strip them) when it copies them in; nothing else is
+changed. Their complete corresponding source is Ubuntu's source package of
+exactly that version, unmodified. Which binary and source package, at which
+version, each library came from is written by the CI run that builds the image
+(`scripts/appimage-lgpl-sources.sh`, from dpkg on that machine), and travels
+with it twice: inside the image as
+`usr/share/doc/proxysvpn-desktop/LGPL-SOURCES.txt`, and beside it on the
+release page as `LGPL-SOURCES-linux-appimage.txt`. Each line there gives what
+`apt-get source <source package>=<version>` fetches, and the Launchpad page
+below lists every version. An AppImage built anywhere but CI carries a note
+instead of the list. The licence texts ship inside the app and the libraries
+are listed on its "Open-source licences" screen for Linux, marked "AppImage
+only".
 
 | Library | Files | Licence | Upstream | Ubuntu 22.04 source |
 |---|---|---|---|---|

@@ -656,7 +656,7 @@ const ru = {
   "lic.kind.font": "Шрифт",
   "lic.kind.library": "Библиотека, только в AppImage",
   "lic.library.note":
-    "Входит только в AppImage для Linux: это общая библиотека из Ubuntu 22.04 в папке usr/lib образа, приложение подключает её при запуске, а не встраивает в себя. Её можно заменить своей сборкой: распакуйте образ (./ProxysVPN_….AppImage --appimage-extract), положите свою библиотеку под тем же именем в squashfs-root/usr/lib (или удалите нашу, чтобы взялась системная) и запускайте squashfs-root/AppRun. Исходный код ровно той версии, что в образе, — пакет Ubuntu 22.04 с тем же именем (apt-get source); ниже — проект, из которого он собран.",
+    "Входит только в AppImage для Linux: это общая библиотека из Ubuntu 22.04 в папке usr/lib образа, приложение подключает её при запуске, а не встраивает в себя. Её можно заменить своей сборкой: распакуйте образ (./ProxysVPN_….AppImage --appimage-extract), положите свою библиотеку под тем же именем в squashfs-root/usr/lib (или удалите нашу, чтобы взялась системная) и запускайте squashfs-root/AppRun. Файлы — сборки Ubuntu 22.04 без изменений, кроме того, что linuxdeploy переписывает в них RUNPATH и может удалить отладочные символы. Какой пакет Ubuntu и какой версии стоит за каждой библиотекой, сказано в файле usr/share/doc/proxysvpn-desktop/LGPL-SOURCES.txt внутри образа и в LGPL-SOURCES-linux-appimage.txt на странице выпуска; исходный код — исходный пакет Ubuntu той же версии (apt-get source). Ниже — проект, из которого он собран.",
   "lic.license": "Лицензия",
   "lic.source": "Исходный код",
   "lic.changes": "Наши изменения в нём",
@@ -1198,7 +1198,7 @@ const en: Partial<Record<MsgKey, string>> = {
   "lic.kind.font": "Font",
   "lic.kind.library": "Library, AppImage only",
   "lic.library.note":
-    "Only in the Linux AppImage: a shared library from Ubuntu 22.04 in the image's usr/lib folder, which the app loads when it starts instead of building it in. You can replace it with your own build: extract the image (./ProxysVPN_….AppImage --appimage-extract), put your library under the same name into squashfs-root/usr/lib (or delete ours to use the system's) and run squashfs-root/AppRun. The exact source of the version in the image is Ubuntu 22.04's package of the same name (apt-get source); below is the project it is built from.",
+    "Only in the Linux AppImage: a shared library from Ubuntu 22.04 in the image's usr/lib folder, which the app loads when it starts instead of building it in. You can replace it with your own build: extract the image (./ProxysVPN_….AppImage --appimage-extract), put your library under the same name into squashfs-root/usr/lib (or delete ours to use the system's) and run squashfs-root/AppRun. The files are Ubuntu 22.04's builds, unchanged except that linuxdeploy rewrites their RUNPATH and may strip their debug symbols. Which Ubuntu package, at which version, each library came from is in usr/share/doc/proxysvpn-desktop/LGPL-SOURCES.txt inside the image and in LGPL-SOURCES-linux-appimage.txt on the release page; its source is Ubuntu's source package of that version (apt-get source). Below is the project it is built from.",
   "lic.license": "Licence",
   "lic.source": "Source code",
   "lic.changes": "Our changes to it",
