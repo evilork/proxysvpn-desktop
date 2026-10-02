@@ -190,11 +190,16 @@ What is specific to it:
   (`windows_aarch64_msvc`, and the `windows-sys` that `ring` uses there).
 
 The installer itself is NSIS's x86 stub, which Windows on ARM runs emulated;
-only what it installs is arm64. It does not refuse an x64 PC, where the app
-would simply not start, so people on x64 need the `x64` installer, and the x64
-installer keeps working on ARM (emulated, with the slow connect). Both install
-into the same folder under the same name; going from one to the other on the
-same machine has not been tried.
+only what it installs is arm64. On a PC that is not ARM64, where the app would
+not start, the arm64 installer says so in English and Russian, names the
+`x64` installer of the same release and stops before it copies anything or
+stops a running ProxysVPN (`PVPN_REFUSE_FOREIGN_CPU` in
+`src-tauri/nsis/installer-hooks.nsh`: x64.nsh's `${IsNativeARM64}`, compiled
+into the arm64 installer only, through the template's `ARCH`). Not run on an
+x64 PC yet; `tests/installerHooks.test.ts` pins the text. The x64 installer
+keeps working on ARM (emulated, with the slow connect). Both install into the
+same folder under the same name; going from one to the other on the same
+machine has not been tried.
 
 Local build on an ARM64 Windows machine with the MSVC ARM64 build tools and
 LLVM installed:

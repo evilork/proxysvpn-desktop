@@ -1,7 +1,8 @@
 ; src-tauri/nsis/installer-hooks.nsh
 ;
 ; Stops a running ProxysVPN before the installer copies files and before the
-; uninstaller removes them. Wired in by bundle.windows.nsis.installerHooks
+; uninstaller removes them, and stops the arm64 installer on a PC that is not
+; ARM64 (PVPN_REFUSE_FOREIGN_CPU, below). Wired in by bundle.windows.nsis.installerHooks
 ; (tauri.windows.conf.json); Tauri's installer.nsi runs each hook right BEFORE
 ; its own CheckIfAppIsRunning, in Section Install and Section Uninstall.
 ;
@@ -56,7 +57,36 @@
   Pop $0
 !macroend
 
+; The arm64 installer on a PC that is not ARM64. It is a 32-bit x86 program,
+; like every NSIS installer, so it starts on an x64 PC as well, and would
+; install arm64 binaries that cannot run there. Said and stopped here instead,
+; before anything is copied and before a running ProxysVPN is stopped.
+;
+; Which installer this is, is known when makensis compiles it: Tauri's
+; installer.nsi does `!define ARCH "{{arch}}"` ("x64", "arm64" or "x86").
+; This file is !included above that line, so the test sits inside the macro,
+; whose `!if` is evaluated where the macro is inserted, in Section Install;
+; in the x64 installer the macro is empty. ${IsNativeARM64} is x64.nsh's
+; (NSIS 3.11, which Tauri downloads; the template includes x64.nsh before
+; this file): the OS's own CPU via IsWow64Process2, not the installer's.
+; makensis runs with -INPUTCHARSET UTF8 (tauri-bundler nsis/mod.rs), so the
+; Russian line reads as written. /SD IDOK keeps a silent install from waiting
+; on the box; it still aborts. SetOutPath has already made $INSTDIR: it is
+; left again and removed only if empty (RMDir without /r), so an x64
+; installation already there is not touched.
+!macro PVPN_REFUSE_FOREIGN_CPU
+  !if "${ARCH}" == "arm64"
+    ${IfNot} ${IsNativeARM64}
+      MessageBox MB_ICONSTOP|MB_OK "This is the ProxysVPN installer for Windows on ARM (arm64), and this PC has a different processor. Download the installer for x64 from the same release: ProxysVPN_${VERSION}_x64-setup.exe.$\r$\n$\r$\nЭто установщик ProxysVPN для Windows на ARM (arm64), а у этого компьютера другой процессор. Скачайте из того же выпуска установщик для x64: ProxysVPN_${VERSION}_x64-setup.exe." /SD IDOK
+      SetOutPath "$TEMP"
+      RMDir "$INSTDIR"
+      Abort
+    ${EndIf}
+  !endif
+!macroend
+
 !macro NSIS_HOOK_PREINSTALL
+  !insertmacro PVPN_REFUSE_FOREIGN_CPU
   !insertmacro PVPN_STOP_RUNNING_APP
 !macroend
 
