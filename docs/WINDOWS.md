@@ -1,12 +1,13 @@
 # ProxysVPN Desktop on Windows
 
-Status: built and packaged by CI (`windows-latest`). Run live only on a
-Windows 11 ARM VM (x64 emulation): 0.3.1 connected on 01.10.2026; 0.3.2 failed
-to configure the adapter ("Element not found"), and the build that became 0.3.3
-connected and reconnected (VLESS, Germany) on 02.10.2026. On that VM a connect
-takes 30 s to 2 min because Wintun under emulation cannot remove the previous
-run's adapter; a native arm64 build would avoid it. Not yet run on real x64
-hardware; everything below marked "unverified" still is.
+Status: built and packaged by CI (`windows-latest`, and natively for arm64 on
+`windows-11-arm`). Run live only on a Windows 11 ARM VM (x64 emulation): 0.3.1
+connected on 01.10.2026; 0.3.2 failed to configure the adapter ("Element not
+found"), and the build that became 0.3.3 connected and reconnected (VLESS,
+Germany) on 02.10.2026. On that VM a connect takes 30 s to 2 min because
+Wintun under emulation cannot remove the previous run's adapter; the arm64
+build ([Windows on ARM](#windows-on-arm)) is meant to avoid it. Not yet run on
+real x64 hardware; everything below marked "unverified" still is.
 
 ## How the tunnel works
 
@@ -160,6 +161,66 @@ anyway), with the WebView2 evergreen bootstrapper for Windows 10 machines that
 lack the runtime. **There is no code signing**, so SmartScreen will warn on
 first run until an EV certificate is in place — that is an owner decision.
 
+## Windows on ARM
+
+Since 02.10.2026 CI also builds `ProxysVPN_<version>_arm64-setup.exe`
+(artifact `proxysvpn-windows-arm64`) on GitHub's `windows-11-arm` runner,
+where clippy, the tests and the bundle run on arm64 itself.
+
+Why: on Windows 11 ARM the x64 build runs emulated, and there Wintun cannot
+remove the previous run's adapter — the rundll32 helper it needs for that,
+`setupapihost.dll`, is missing — so every connect on the ARM VM took 30 s to
+2 min. The arm64 installer carries arm64 xray, tun2socks and hysteria and the
+arm64 `wintun.dll`, so nothing of the tunnel runs emulated. That this removes
+the wait is what the first run on the VM has to show; it has not been run yet.
+
+What is specific to it:
+
+* The triple is passed explicitly (`--target aarch64-pc-windows-msvc` to
+  `fetch-binaries.sh`, clippy, the tests and `tauri build`). Git Bash on that
+  image is the x86_64 MSYS2 runtime under emulation, so `uname -m` says
+  x86_64 and an unguided fetch would bundle the x64 engines. The installer
+  therefore lands in `src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/`.
+* `ring` compiles its C for this target with clang only; CI puts the image's
+  LLVM on `PATH`.
+* `fetch-binaries.sh` reads the PE header of every Windows engine and of
+  `wintun.dll` and refuses one built for another CPU than the target, so an
+  x64 file cannot end up in the arm64 installer (or the other way round).
+* The licences screen lists the crates only this build links
+  (`windows_aarch64_msvc`, and the `windows-sys` that `ring` uses there).
+
+The installer itself is NSIS's x86 stub, which Windows on ARM runs emulated;
+only what it installs is arm64. On a PC that is not ARM64, where the app would
+not start, the arm64 installer says so in English and Russian, names the
+`x64` installer of the same release and quits with exit code 2 before it does
+anything else (`PvpnRefuseForeignCpu` in `src-tauri/nsis/installer-hooks.nsh`,
+x64.nsh's `${IsNativeARM64}`). "Anything else" matters here: Tauri's
+template shows the reinstall page — whose default on an upgrade runs the
+installed version's uninstaller — and installs WebView2 before
+`NSIS_HOOK_PREINSTALL` ever runs, so a check in that hook would have removed
+a working x64 ProxysVPN first. The check runs instead from MUI2's
+`.onGUIInit` (`MUI_CUSTOMFUNCTION_GUIINIT`, before the first page) and, for a
+silent `/S` install, which has no `.onGUIInit` and no pages, from a hidden
+section defined ahead of all the template's sections. It is compiled into the
+arm64 installer only: the hooks file is included before the template's
+`!define ARCH`, so it reads `ARCH` and `VERSION` out of the generated
+`installer.nsi` (`!searchparse`), and the build stops if those lines are
+missing or differ from what the template defines. `tests/installerHooks.test.ts`
+reads the template out of the installed Tauri CLI and pins where the hooks
+are included, that the template leaves `MUI_CUSTOMFUNCTION_GUIINIT` free, and
+the text. Not compiled on a Mac (no makensis) and not run on an x64 PC yet.
+The x64 installer keeps working on ARM (emulated, with the slow connect). Both
+install into the same folder under the same name; going from one to the other
+on the same machine has not been tried.
+
+Local build on an ARM64 Windows machine with the MSVC ARM64 build tools and
+LLVM installed:
+
+```sh
+scripts/fetch-binaries.sh --target aarch64-pc-windows-msvc
+npm run tauri build -- --target aarch64-pc-windows-msvc
+```
+
 ## What can be checked without a Windows machine
 
 ```sh
@@ -168,9 +229,10 @@ scripts/check-platform.sh
 
 It builds and tests everything on the host and then runs
 `cargo clippy -p pvpn-platform --all-targets --target x86_64-pc-windows-msvc
--- -D warnings`, which type-checks *and* lints the whole Windows platform layer
-including its `windows`-crate FFI. Clippy rather than `cargo check` on purpose:
-the lints are where the FFI mistakes show up, and this target gets no other
+-- -D warnings` (and the same for `aarch64-pc-windows-msvc`), which
+type-checks *and* lints the whole Windows platform layer including its
+`windows`-crate FFI. Clippy rather than `cargo check` on purpose:
+the lints are where the FFI mistakes show up, and these targets get no other
 review on this machine. CI runs the same script, so the two cannot drift.
 
 `cargo check` for the **whole app** with that target cannot work here: `reqwest`

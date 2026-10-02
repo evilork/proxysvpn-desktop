@@ -17,6 +17,12 @@
 #               archive on 2026-10-01 and pinned here; that is what makes the
 #               pin meaningful, but it is trust-on-first-use, not a signature.
 #
+# The windows-arm64 rows went into use with the native arm64 installer and
+# were checked against those sources on 2026-10-02: xray against its .dgst,
+# hysteria against hashes.txt, and the tun2socks archive, downloaded again,
+# still hashes to the value pinned on 2026-10-01 (so still trust-on-first-use).
+# fetch-binaries.sh also refuses any Windows file built for another CPU.
+#
 # Versions are the ones already shipping on macOS (xray 26.3.27, tun2socks
 # 2.6.0, hysteria 2.9.3), so pinning does not change the macOS build. Bumping
 # any of them is a separate, deliberate change.

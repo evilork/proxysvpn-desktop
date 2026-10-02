@@ -1,0 +1,11 @@
+# ProxysVPN AppImage: where the shared libraries in its usr/lib come from.
+#
+# Not recorded for this build. The AppImage a release publishes is built by
+# CI (.github/workflows/desktop-build.yml, "LGPL sources of the AppImage"),
+# which writes here, before it builds the image that ships, the exact binary
+# and source package, with version, of every library the image carries
+# (scripts/appimage-lgpl-sources.sh), and attaches the same list to the
+# release as LGPL-SOURCES-linux-appimage.txt. A local build carries this note
+# instead; run that script on the machine that built the image to get the
+# list for it. THIRD-PARTY-NOTICES.md names the LGPL libraries and how to
+# replace one.

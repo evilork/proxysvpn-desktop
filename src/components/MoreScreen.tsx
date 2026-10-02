@@ -39,14 +39,34 @@
 // App Store builds lose the footer's cabinet button (the cabinet sells top-ups
 // and the app ships without in-app purchases, guideline 3.1.1); the version
 // stays as plain text.
+//
+// "Удалить системные файлы" exists on the Linux AppImage only
+// (`AppInfo.systemFiles`): its first connect copies the root helper into
+// /home/.proxysvpn and, on SteamOS, leaves a polkit rule that lets Gaming Mode
+// connect without a password. The onboarding screen before that setup
+// promises this row; the .deb's files belong to the package manager.
 
 import { useCallback, useEffect, useState } from "react";
 
-import { bridge, type AppInfo, type RoutingState, type SubState } from "../bridge";
+import { bridge, toAppError, type AppInfo, type RoutingState, type SubState } from "../bridge";
 import { IS_APPSTORE } from "../dist";
-import { LANGS, LANG_NAME, formatTime, type Lang } from "../i18n";
+import { LANGS, LANG_NAME, formatTime, type Lang, type MsgKey } from "../i18n";
 import { ACCOUNT_DELETE_URL, privacyUrl, termsUrl } from "../legal";
 import { IconChevron, NavRow, Screen, Sheet, Spinner, useUi, type ThemePref } from "./ui";
+
+/** What the toast says when "Remove system files" did not remove them. */
+function removalFailureKey(code: string): MsgKey {
+  switch (code) {
+    case "PERMISSION_DENIED":
+      return "more.sysFilesCancelled";
+    case "STEAMOS_DESKTOP_MODE_NEEDED":
+      return "more.sysFilesDesktopMode";
+    case "ELEVATION_UNAVAILABLE":
+      return "more.sysFilesNoDialog";
+    default:
+      return "more.sysFilesFailed";
+  }
+}
 
 const THEME_OPTIONS: [ThemePref, "more.theme.system" | "more.theme.light" | "more.theme.dark"][] = [
   ["system", "more.theme.system"],
@@ -109,6 +129,8 @@ export default function MoreScreen({
   const [updatedAt, setUpdatedAt] = useState<number | undefined>(sub?.lastUpdatedAt);
   const [confirmUnlink, setConfirmUnlink] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmSystemFiles, setConfirmSystemFiles] = useState(false);
+  const [removingSystemFiles, setRemovingSystemFiles] = useState(false);
   const [notifyEnabled, setNotifyEnabled] = useState<boolean | null>(null);
   // See the header comment: iOS has no code path that ever reads this
   // preference, so the row (and the read that feeds it) does not exist there.
@@ -167,6 +189,19 @@ export default function MoreScreen({
       toast(t("more.refreshFailed"));
     }
   }, [onUnlinked, t, toast]);
+
+  const removeSystemFiles = useCallback(async () => {
+    setRemovingSystemFiles(true);
+    try {
+      await bridge.removeSystemFiles();
+      setConfirmSystemFiles(false);
+      toast(t("more.sysFilesDone"));
+    } catch (err) {
+      toast(t(removalFailureKey(toAppError(err).code)));
+    } finally {
+      setRemovingSystemFiles(false);
+    }
+  }, [t, toast]);
 
   const whereValue = routing
     ? routing.inRussia
@@ -355,6 +390,20 @@ export default function MoreScreen({
         </div>
       </div>
 
+      {info?.systemFiles ? (
+        <div className="list">
+          <button type="button" className="row" onClick={() => setConfirmSystemFiles(true)}>
+            <span className="row-main">
+              <span className="row-title danger">{t("more.sysFiles")}</span>
+              <span className="row-sub">{t("more.sysFilesHint")}</span>
+            </span>
+            <span className="row-side">
+              <IconChevron />
+            </span>
+          </button>
+        </div>
+      ) : null}
+
       <div className="section">
         {confirmUnlink ? (
           <>
@@ -379,6 +428,38 @@ export default function MoreScreen({
           </button>
         )}
       </div>
+
+      {confirmSystemFiles ? (
+        <Sheet
+          title={t("more.sysFiles")}
+          onClose={() => {
+            if (!removingSystemFiles) setConfirmSystemFiles(false);
+          }}
+        >
+          <div className="sheet-body">
+            <h2 className="h2">{t("more.sysFiles")}</h2>
+            <p className="body dim">{t("more.sysFilesConfirm")}</p>
+            <div className="btn-row" style={{ marginTop: 12 }}>
+              <button
+                type="button"
+                className="btn btn-outline"
+                onClick={() => setConfirmSystemFiles(false)}
+                disabled={removingSystemFiles}
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => void removeSystemFiles()}
+                disabled={removingSystemFiles}
+              >
+                {removingSystemFiles ? <Spinner /> : t("more.sysFilesYes")}
+              </button>
+            </div>
+          </div>
+        </Sheet>
+      ) : null}
 
       {confirmDelete ? (
         <Sheet title={t("about.delete")} onClose={() => setConfirmDelete(false)}>

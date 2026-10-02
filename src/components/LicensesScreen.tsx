@@ -13,6 +13,11 @@
 // The list and the texts load when the screen opens, as separate chunks: a
 // few hundred rows and ~50 KB of licence text have no business in the bundle
 // every launch parses.
+//
+// A row of kind "library" is a shared LGPL library of the Linux AppImage
+// (scripts/gen-notices.mjs, APPIMAGE_LIBRARIES). The LGPL asks that people
+// can put their own version of it in its place, so its page says that it is
+// linked at run time and how to swap it, and where the exact source is.
 
 import { Fragment, useCallback, useEffect, useState } from "react";
 
@@ -124,7 +129,9 @@ export default function LicensesScreen({
                             ? t("lic.kind.engine")
                             : component.kind === "font"
                               ? t("lic.kind.font")
-                              : undefined
+                              : component.kind === "library"
+                                ? t("lic.kind.library")
+                                : undefined
                         }
                         onClick={() => setSelected(component)}
                       />
@@ -190,6 +197,13 @@ function ComponentDetail({
           </p>
         ) : null}
       </div>
+
+      {component.kind === "library" ? (
+        <div className="section">
+          <span className="caps">{t("lic.kind.library")}</span>
+          <p className="body dim">{t("lic.library.note")}</p>
+        </div>
+      ) : null}
 
       <div className="section">
         <span className="caps">{t("lic.source")}</span>

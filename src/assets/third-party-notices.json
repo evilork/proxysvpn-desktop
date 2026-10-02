@@ -10,9 +10,13 @@
     "CDLA-Permissive-2.0",
     "GPL-3.0-or-later",
     "ISC",
+    "LGPL-2.0-or-later",
+    "LGPL-2.1-only",
+    "LGPL-2.1-or-later",
     "LLVM-exception",
     "MIT",
     "MIT-0",
+    "MPL-1.1",
     "MPL-2.0",
     "OFL-1.1",
     "Unicode-3.0",
@@ -111,6 +115,309 @@
         "linux"
       ],
       "copyright": "Copyright 2015 The Rubik Project Authors (https://github.com/googlefonts/rubik)"
+    },
+    {
+      "kind": "library",
+      "name": "AT-SPI (libatspi, libatk-bridge-2.0)",
+      "version": null,
+      "license": "LGPL-2.1-or-later",
+      "licenseIds": [
+        "LGPL-2.1-or-later"
+      ],
+      "source": "https://gitlab.gnome.org/GNOME/at-spi2-core",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "ATK (libatk-1.0)",
+      "version": null,
+      "license": "LGPL-2.0-or-later",
+      "licenseIds": [
+        "LGPL-2.0-or-later"
+      ],
+      "source": "https://gitlab.gnome.org/GNOME/atk",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "cairo (libcairo, libcairo-gobject)",
+      "version": null,
+      "license": "LGPL-2.1-only OR MPL-1.1",
+      "licenseIds": [
+        "LGPL-2.1-only",
+        "MPL-1.1"
+      ],
+      "source": "https://gitlab.freedesktop.org/cairo/cairo",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "Enchant (libenchant-2)",
+      "version": null,
+      "license": "LGPL-2.0-or-later",
+      "licenseIds": [
+        "LGPL-2.0-or-later"
+      ],
+      "source": "https://github.com/rrthomas/enchant",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "GDK-Pixbuf (libgdk_pixbuf-2.0 and its loaders)",
+      "version": null,
+      "license": "LGPL-2.1-or-later",
+      "licenseIds": [
+        "LGPL-2.1-or-later"
+      ],
+      "source": "https://gitlab.gnome.org/GNOME/gdk-pixbuf",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "GLib (libglib-2.0, libgobject-2.0, libgio-2.0, libgmodule-2.0)",
+      "version": null,
+      "license": "LGPL-2.1-or-later",
+      "licenseIds": [
+        "LGPL-2.1-or-later"
+      ],
+      "source": "https://gitlab.gnome.org/GNOME/glib",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "GStreamer (libgstreamer-1.0, the gst-plugins-base and gst-plugins-bad libraries)",
+      "version": null,
+      "license": "LGPL-2.1-or-later",
+      "licenseIds": [
+        "LGPL-2.1-or-later"
+      ],
+      "source": "https://gitlab.freedesktop.org/gstreamer/gstreamer",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "GTK 3 (libgtk-3, libgdk-3)",
+      "version": null,
+      "license": "LGPL-2.0-or-later",
+      "licenseIds": [
+        "LGPL-2.0-or-later"
+      ],
+      "source": "https://gitlab.gnome.org/GNOME/gtk",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "Hyphen (libhyphen)",
+      "version": null,
+      "license": "LGPL-2.1-or-later OR MPL-1.1",
+      "licenseIds": [
+        "LGPL-2.1-or-later",
+        "MPL-1.1"
+      ],
+      "source": "https://github.com/hunspell/hyphen",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "libdatrie",
+      "version": null,
+      "license": "LGPL-2.1-or-later",
+      "licenseIds": [
+        "LGPL-2.1-or-later"
+      ],
+      "source": "https://github.com/tlwg/libdatrie",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "Libgcrypt (libgcrypt)",
+      "version": null,
+      "license": "LGPL-2.1-or-later",
+      "licenseIds": [
+        "LGPL-2.1-or-later"
+      ],
+      "source": "https://gnupg.org/software/libgcrypt/",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "libgudev (libgudev-1.0)",
+      "version": null,
+      "license": "LGPL-2.1-or-later",
+      "licenseIds": [
+        "LGPL-2.1-or-later"
+      ],
+      "source": "https://gitlab.gnome.org/GNOME/libgudev",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "libmanette (libmanette-0.2)",
+      "version": null,
+      "license": "LGPL-2.1-or-later",
+      "licenseIds": [
+        "LGPL-2.1-or-later"
+      ],
+      "source": "https://gitlab.gnome.org/GNOME/libmanette",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "librsvg (librsvg-2)",
+      "version": null,
+      "license": "LGPL-2.1-or-later",
+      "licenseIds": [
+        "LGPL-2.1-or-later"
+      ],
+      "source": "https://gitlab.gnome.org/GNOME/librsvg",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "libseccomp",
+      "version": null,
+      "license": "LGPL-2.1-only",
+      "licenseIds": [
+        "LGPL-2.1-only"
+      ],
+      "source": "https://github.com/seccomp/libseccomp",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "libsecret (libsecret-1)",
+      "version": null,
+      "license": "LGPL-2.1-or-later",
+      "licenseIds": [
+        "LGPL-2.1-or-later"
+      ],
+      "source": "https://gitlab.gnome.org/GNOME/libsecret",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "libsoup (libsoup-3.0)",
+      "version": null,
+      "license": "LGPL-2.0-or-later AND LGPL-2.1-or-later",
+      "licenseIds": [
+        "LGPL-2.0-or-later",
+        "LGPL-2.1-or-later"
+      ],
+      "source": "https://gitlab.gnome.org/GNOME/libsoup",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "libsystemd",
+      "version": null,
+      "license": "LGPL-2.1-or-later",
+      "licenseIds": [
+        "LGPL-2.1-or-later"
+      ],
+      "source": "https://github.com/systemd/systemd",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "libtasn1",
+      "version": null,
+      "license": "LGPL-2.1-or-later",
+      "licenseIds": [
+        "LGPL-2.1-or-later"
+      ],
+      "source": "https://gitlab.com/gnutls/libtasn1",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "libthai",
+      "version": null,
+      "license": "LGPL-2.1-or-later",
+      "licenseIds": [
+        "LGPL-2.1-or-later"
+      ],
+      "source": "https://github.com/tlwg/libthai",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "Pango (libpango-1.0, libpangocairo-1.0, libpangoft2-1.0)",
+      "version": null,
+      "license": "LGPL-2.0-or-later",
+      "licenseIds": [
+        "LGPL-2.0-or-later"
+      ],
+      "source": "https://gitlab.gnome.org/GNOME/pango",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "util-linux (libmount, libblkid)",
+      "version": null,
+      "license": "LGPL-2.1-or-later",
+      "licenseIds": [
+        "LGPL-2.1-or-later"
+      ],
+      "source": "https://github.com/util-linux/util-linux",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "kind": "library",
+      "name": "WebKitGTK (libwebkit2gtk-4.1, libjavascriptcoregtk-4.1)",
+      "version": null,
+      "license": "BSD-2-Clause AND LGPL-2.1-only",
+      "licenseIds": [
+        "BSD-2-Clause",
+        "LGPL-2.1-only"
+      ],
+      "source": "https://webkitgtk.org/releases/",
+      "platforms": [
+        "linux"
+      ]
     },
     {
       "kind": "cargo",
@@ -7578,6 +7885,37 @@
     },
     {
       "kind": "cargo",
+      "name": "windows_aarch64_msvc",
+      "version": "0.52.6",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/microsoft/windows-rs",
+      "platforms": [
+        "windows"
+      ],
+      "authors": [
+        "Microsoft"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "windows_aarch64_msvc",
+      "version": "0.53.1",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/microsoft/windows-rs",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "kind": "cargo",
       "name": "windows_x86_64_msvc",
       "version": "0.53.1",
       "license": "Apache-2.0 OR MIT",
@@ -7829,6 +8167,23 @@
     {
       "kind": "cargo",
       "name": "windows-sys",
+      "version": "0.52.0",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/microsoft/windows-rs",
+      "platforms": [
+        "windows"
+      ],
+      "authors": [
+        "Microsoft"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "windows-sys",
       "version": "0.60.2",
       "license": "Apache-2.0 OR MIT",
       "licenseIds": [
@@ -7855,6 +8210,23 @@
       "source": "https://github.com/microsoft/windows-rs",
       "platforms": [
         "windows"
+      ]
+    },
+    {
+      "kind": "cargo",
+      "name": "windows-targets",
+      "version": "0.52.6",
+      "license": "Apache-2.0 OR MIT",
+      "licenseIds": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "source": "https://github.com/microsoft/windows-rs",
+      "platforms": [
+        "windows"
+      ],
+      "authors": [
+        "Microsoft"
       ]
     },
     {

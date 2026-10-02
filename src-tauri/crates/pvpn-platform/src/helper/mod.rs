@@ -15,7 +15,12 @@
 //! The GUI crate has one job here: call `is_helper_invocation()` first thing in
 //! `main`, and if it is true call `run_helper()` instead of starting Tauri. See
 //! docs/LINUX.md.
+//!
+//! An AppImage cannot do that — root may not enter its mount — so it ships the
+//! same helper as a binary of its own (src/bin/proxysvpn-helper.rs) and runs a
+//! root-owned copy of it: `install`, and docs/STEAMDECK.md.
 
+pub mod install;
 pub mod proto;
 
 /// Argument that turns this executable into the privileged helper.

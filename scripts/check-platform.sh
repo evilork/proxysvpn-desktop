@@ -15,14 +15,25 @@
 # What this does NOT prove: that the full app links, that `netsh` and `ip`
 # accept every argument spelling, that tun2socks really names its adapter the
 # way we expect, or that pkexec behaves in a live desktop session. Only CI on
-# windows-latest / ubuntu-22.04 and a run on real hardware can.
+# windows-latest / windows-11-arm / ubuntu-22.04 and a run on real hardware
+# can.
 #
 # Usage: scripts/check-platform.sh
+#
+# A cross target that rustup has not installed is skipped with a warning that
+# names the `rustup target add` to run, so a Mac without one of them still
+# gets every other check. In CI (CI=true, which GitHub Actions sets) a missing
+# target is an error instead: the cross-check job installs all of them, and a
+# skipped one there would be a check that silently stopped running.
 
 set -euo pipefail
 cd "$(dirname "$0")/../src-tauri"
 
-TARGETS=(x86_64-pc-windows-msvc x86_64-unknown-linux-gnu)
+# aarch64-pc-windows-msvc since the arm64 installer (02.10.2026). It is the
+# same code, but the windows crate picks some definitions per CPU, so the x64
+# check does not vouch for it; here it takes seconds, on the Arm runner a full
+# build.
+TARGETS=(x86_64-pc-windows-msvc aarch64-pc-windows-msvc x86_64-unknown-linux-gnu)
 
 echo "== host build (macOS) =============================================="
 cargo clippy --workspace --all-targets -- -D warnings
@@ -37,16 +48,31 @@ else
   echo "skipping proxysvpn-desktop tests: ../dist is missing (run npm run build)"
 fi
 
-missing=0
+# rustup's answer once; no rustup at all reads as "none installed".
+installed="$(rustup target list --installed 2>/dev/null || true)"
+case "${CI:-}" in
+  true | 1) strict=1 ;;
+  *) strict=0 ;;
+esac
+
+# Space-separated rather than an array: macOS's bash 3.2 calls an empty array
+# unbound under `set -u`.
+skipped=""
 for target in "${TARGETS[@]}"; do
-  if ! rustup target list --installed | grep -qx "$target"; then
-    echo "target $target is not installed; run: rustup target add $target"
-    missing=1
+  if ! printf '%s\n' "$installed" | grep -qx "$target"; then
+    if [ "$strict" -eq 1 ]; then
+      echo "error: target $target is not installed; the CI job must add it: rustup target add $target" >&2
+      exit 1
+    fi
+    echo "warning: target $target is not installed, so its cross-check is skipped; to run it: rustup target add $target" >&2
+    skipped="$skipped $target"
   fi
 done
-[ "$missing" -eq 0 ] || exit 1
 
 for target in "${TARGETS[@]}"; do
+  case " $skipped " in
+    *" $target "*) continue ;;
+  esac
   echo
   echo "== platform layer, cross-checked for $target =="
   # Clippy and not just check: the lints are where the FFI mistakes show up,
@@ -55,4 +81,9 @@ for target in "${TARGETS[@]}"; do
 done
 
 echo
-echo "All checks that are possible without a Windows or Linux machine passed."
+if [ -n "$skipped" ]; then
+  echo "All other checks passed; NOT cross-checked (target not installed):$skipped." >&2
+  echo "To check them too: rustup target add$skipped" >&2
+else
+  echo "All checks that are possible without a Windows or Linux machine passed."
+fi

@@ -16,13 +16,18 @@
 #                             (plain `tauri build` produces an .app without the
 #                             root launcher, which loops the password window)
 #   windows-latest  x86_64 -> NSIS installer
-#   ubuntu-22.04    x86_64 -> .deb. Pinned to 22.04 on purpose: a bundle
-#                             built on 24.04 needs glibc 2.39 and will not
-#                             start on 22.04 machines. If GitHub retires this
-#                             image, switch to ubuntu-24.04; the bundle then
-#                             requires glibc 2.39+. No AppImage: root cannot
-#                             execute from its FUSE mount, so the pkexec helper
-#                             never starts there (docs/LINUX.md).
+#   windows-11-arm  arm64  -> NSIS installer for Windows on ARM, built and
+#                             tested natively (see its matrix entry)
+#   ubuntu-22.04    x86_64 -> .deb, and in its own job the AppImage (the
+#                             Steam Deck build, docs/STEAMDECK.md). Pinned to
+#                             22.04 on purpose: a bundle built on 24.04 needs
+#                             glibc 2.39 and will not start on 22.04 machines.
+#                             If GitHub retires this image, switch to
+#                             ubuntu-24.04; the bundles then require glibc
+#                             2.39+. The AppImage's root helper cannot run
+#                             from its FUSE mount, so the app copies it into a
+#                             root-owned folder on the first connect
+#                             (pvpn-platform helper/install.rs).
 name: desktop-build
 
 on:
@@ -90,27 +95,76 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # bundle_dir is the one folder under target/release/bundle that holds
-          # this job's installer and its SHA256SUMS file. Both upload patterns
-          # name it, so the artifact root stays that folder and the zip is
-          # flat — see "Upload installers".
+          # bundle_root is where Tauri writes the bundles: target/release/bundle
+          # for a build for the runner's own triple, target/<triple>/release/
+          # bundle when rust_target names one. bundle_dir is the one folder
+          # under it that holds this job's installer and its SHA256SUMS file.
+          # Both upload patterns name it, so the artifact root stays that
+          # folder and the zip is flat — see "Upload installers".
           - label: macOS aarch64 (dmg)
             runner: macos-latest
             artifact: proxysvpn-macos-aarch64
+            bundle_root: src-tauri/target/release/bundle
             bundle_dir: dmg
             artifact_path: src-tauri/target/release/bundle/dmg/*.dmg
           - label: Windows x86_64 (nsis)
             runner: windows-latest
             artifact: proxysvpn-windows-x86_64
             bundles: nsis
+            bundle_root: src-tauri/target/release/bundle
             bundle_dir: nsis
             artifact_path: src-tauri/target/release/bundle/nsis/*.exe
+          # Windows on ARM, natively. On a Windows 11 ARM VM the x64 build
+          # runs emulated, and there Wintun cannot remove the previous run's
+          # adapter (the rundll32 helper it needs, setupapihost.dll, is
+          # missing), so a connect took 30 s to 2 min (02.10.2026). This one
+          # ships arm64 engines and the arm64 wintun.dll. GitHub's Arm runner
+          # is free for public repositories and runs the tests and the bundle
+          # on the CPU they are for.
+          #
+          # rust_target names the triple although it is the runner's own CPU:
+          # - Git Bash there is the x86_64 MSYS2 runtime under emulation, so
+          #   `uname -m` says x86_64 and fetch-binaries.sh, left to guess,
+          #   would fetch the x64 engines and wintun.dll;
+          # - it pins clippy, the tests and the bundle to arm64 whichever host
+          #   rustup on the image was installed for. Tauri names the installer
+          #   from the triple it builds (aarch64 -> "_arm64-setup.exe", in
+          #   tauri-bundler's NSIS step), so a build that silently fell back to
+          #   x64 is caught by the artifact_path below on every run.
+          # The bundle therefore lands under target/<triple>/release.
+          - label: Windows aarch64 (nsis)
+            runner: windows-11-arm
+            artifact: proxysvpn-windows-arm64
+            rust_target: aarch64-pc-windows-msvc
+            bundles: nsis
+            bundle_root: src-tauri/target/aarch64-pc-windows-msvc/release/bundle
+            bundle_dir: nsis
+            artifact_path: src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*_arm64-setup.exe
           - label: Linux x86_64 (deb)
             runner: ubuntu-22.04
             artifact: proxysvpn-linux-x86_64
             bundles: deb
+            bundle_root: src-tauri/target/release/bundle
             bundle_dir: deb
             artifact_path: src-tauri/target/release/bundle/deb/*.deb
+          # The AppImage: the Steam Deck build (SteamOS cannot take a .deb, its
+          # /usr is a read-only image) and any other x86_64 Linux. Same runner
+          # and glibc floor as the .deb. tauri.linux.conf.json builds the
+          # standalone root helper before the bundle and puts it in usr/bin;
+          # the "AppImage carries the helper" step below checks that it did.
+          - label: Linux x86_64 (AppImage)
+            runner: ubuntu-22.04
+            artifact: proxysvpn-linux-appimage
+            bundles: appimage
+            bundle_root: src-tauri/target/release/bundle
+            bundle_dir: appimage
+            artifact_path: src-tauri/target/release/bundle/appimage/*.AppImage
+
+    env:
+      # "--target <triple>" for an entry that names one, empty for the others,
+      # whose commands stay exactly what they were. Left unquoted where it is
+      # used, so an empty value adds no argument.
+      TARGET_ARGS: ${{ matrix.rust_target && format('--target {0}', matrix.rust_target) || '' }}
 
     defaults:
       run:
@@ -143,12 +197,36 @@ jobs:
           node-version: "22"
           cache: npm
 
-      - name: Rust toolchain (host target)
+      - name: Rust toolchain
+        # The host's own target, plus rust_target where an entry names one.
+        # `rustc -vV` prints the host triple, which on the Arm runner says
+        # whether rustup itself runs natively or emulated.
         run: |
           rustup update stable --no-self-update
           rustup default stable
-          rustc --version
+          if [ -n "${{ matrix.rust_target }}" ]; then
+            rustup target add "${{ matrix.rust_target }}"
+          fi
+          rustc -vV
           cargo --version
+
+      - name: Clang for ring (Windows ARM64 only)
+        # ring compiles its C and assembly for aarch64-pc-windows-msvc with
+        # clang only: its build script swaps MSVC's cl for `clang` there, and
+        # the whole build fails if that is not on PATH. The Arm image carries
+        # LLVM; this finds it, and says so plainly if the image ever drops it.
+        if: matrix.rust_target == 'aarch64-pc-windows-msvc'
+        run: |
+          llvm="/c/Program Files/LLVM/bin"
+          if command -v clang >/dev/null 2>&1; then
+            clang --version
+          elif [ -x "$llvm/clang.exe" ]; then
+            cygpath -w "$llvm" >> "$GITHUB_PATH"
+            "$llvm/clang.exe" --version
+          else
+            echo "::error::clang is not on this image; ring cannot be built for aarch64-pc-windows-msvc"
+            exit 1
+          fi
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
@@ -157,7 +235,7 @@ jobs:
           key: ${{ matrix.artifact }}
 
       - name: Fetch sidecars (xray, tun2socks, hysteria, geo data)
-        run: bash scripts/fetch-binaries.sh
+        run: bash scripts/fetch-binaries.sh $TARGET_ARGS
 
       - name: Install npm dependencies
         run: npm ci
@@ -181,11 +259,11 @@ jobs:
         run: node scripts/gen-notices.mjs --check
 
       - name: Rust lints
-        run: cargo clippy --workspace --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings
+        run: cargo clippy --workspace --all-targets --manifest-path src-tauri/Cargo.toml $TARGET_ARGS -- -D warnings
 
       - name: Rust tests
         # --workspace, or the platform crate's tests (the bulk of them) are skipped.
-        run: cargo test --locked --workspace --manifest-path src-tauri/Cargo.toml
+        run: cargo test --locked --workspace --manifest-path src-tauri/Cargo.toml $TARGET_ARGS
 
       - name: Bundle (macOS)
         if: runner.os == 'macOS'
@@ -193,7 +271,61 @@ jobs:
 
       - name: Bundle (Windows, Linux)
         if: runner.os != 'macOS'
-        run: npx tauri build --bundles ${{ matrix.bundles }}
+        run: npx tauri build --bundles ${{ matrix.bundles }} $TARGET_ARGS
+
+      - name: LGPL sources of the AppImage (AppImage only)
+        # Which Ubuntu package, at which version, each library in the image's
+        # usr/lib was copied from: the exact source the LGPL asks us to point
+        # at (THIRD-PARTY-NOTICES.md). Only known once linuxdeploy has picked
+        # them, so the list is written from the first build into
+        # src-tauri/linux/LGPL-SOURCES.txt, which tauri.linux.conf.json puts
+        # into the image, and the image is built a second time to carry it.
+        # --check then fails unless that final image holds exactly those
+        # libraries and that very list. The same file goes beside the image
+        # as LGPL-SOURCES-linux-appimage.txt, for the upload and the release.
+        if: matrix.bundles == 'appimage'
+        env:
+          ARTIFACT_PATH: ${{ matrix.artifact_path }}
+          BUNDLE_ROOT: ${{ matrix.bundle_root }}
+        run: |
+          # Unquoted on purpose: the pattern has to expand to the one file.
+          # shellcheck disable=SC2086
+          image="$(ls $ARTIFACT_PATH)"
+          bash scripts/appimage-lgpl-sources.sh "$image" src-tauri/linux/LGPL-SOURCES.txt
+          npx tauri build --bundles appimage $TARGET_ARGS
+          # shellcheck disable=SC2086
+          image="$(ls $ARTIFACT_PATH)"
+          bash scripts/appimage-lgpl-sources.sh --check "$image" src-tauri/linux/LGPL-SOURCES.txt
+          cat src-tauri/linux/LGPL-SOURCES.txt
+          cp src-tauri/linux/LGPL-SOURCES.txt "$BUNDLE_ROOT/appimage/LGPL-SOURCES-linux-appimage.txt"
+
+      - name: AppImage carries the helper (AppImage only)
+        # The first connect from the AppImage copies usr/bin/proxysvpn-helper
+        # and usr/bin/tun2socks out of it (helper/install.rs); without them
+        # every connect fails, and nothing before this step would notice.
+        # The runtime extracts without FUSE. readelf prints what linuxdeploy
+        # left in the helper — its libraries and RUNPATH — which the
+        # root-owned copy keeps; docs/STEAMDECK.md says what to look for.
+        if: matrix.bundles == 'appimage'
+        env:
+          ARTIFACT_PATH: ${{ matrix.artifact_path }}
+        run: |
+          # Unquoted on purpose: the pattern has to expand to the one file.
+          # shellcheck disable=SC2086
+          image="$(ls $ARTIFACT_PATH)"
+          work="$(mktemp -d)"
+          ( cd "$work" && "$GITHUB_WORKSPACE/$image" --appimage-extract >/dev/null )
+          ls -l "$work/squashfs-root/usr/bin"
+          for f in proxysvpn-desktop proxysvpn-helper tun2socks xray hysteria; do
+            if [ ! -f "$work/squashfs-root/usr/bin/$f" ]; then
+              echo "::error::usr/bin/$f is missing from the AppImage"
+              exit 1
+            fi
+          done
+          readelf -d "$work/squashfs-root/usr/bin/proxysvpn-helper" | grep -E 'NEEDED|RUNPATH|RPATH' || true
+          # The libraries and the Ubuntu packages they came from are in the
+          # list the step above wrote and checked (LGPL-SOURCES.txt).
+          rm -rf "$work"
 
       - name: List bundle output with checksums
         # The checksums go into the log on purpose: nothing here is signed, so a
@@ -201,8 +333,14 @@ jobs:
         # for whoever downloads the artifact to tell they got that build.
         # SmartScreen cannot help them and neither can we, until there is a
         # code-signing certificate.
+        env:
+          BUNDLE_ROOT: ${{ matrix.bundle_root }}
         run: |
-          find src-tauri/target/release/bundle -maxdepth 2 -type f -print
+          # The upload takes exactly this pattern. Matching it on every run
+          # means a path or a name that drifted (target/<triple>/release, x64
+          # where arm64 was meant) fails the pull request, not the release run.
+          ls -l ${{ matrix.artifact_path }}
+          find "$BUNDLE_ROOT" -maxdepth 2 -type f -print
           echo "--- sha256 ---"
           # macOS ships shasum, Git Bash on the Windows runner ships only
           # sha256sum, Ubuntu has both. Pick whichever is actually there.
@@ -211,33 +349,37 @@ jobs:
           else
             sha256() { shasum -a 256 "$@"; }
           fi
-          find src-tauri/target/release/bundle -maxdepth 2 -type f \
-            \( -name '*.dmg' -o -name '*.exe' -o -name '*.deb' \) \
+          find "$BUNDLE_ROOT" -maxdepth 2 -type f \
+            \( -name '*.dmg' -o -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' \) \
             -print0 | while IFS= read -r -d '' f; do sha256 "$f"; done
           # The same sums as a file that travels in the artifact, so they do
           # not expire with the log. Bare file names, so `sha256sum -c` works
           # in the folder the installers are downloaded to.
-          for dir in src-tauri/target/release/bundle/dmg src-tauri/target/release/bundle/nsis src-tauri/target/release/bundle/deb; do
+          for dir in "$BUNDLE_ROOT/dmg" "$BUNDLE_ROOT/nsis" "$BUNDLE_ROOT/deb" "$BUNDLE_ROOT/appimage"; do
             [ -d "$dir" ] || continue
-            ( cd "$dir" && for f in *.dmg *.exe *.deb; do if [ -f "$f" ]; then sha256 "$f"; fi; done ) >> "$dir/SHA256SUMS-${{ matrix.artifact }}.txt"
+            ( cd "$dir" && for f in *.dmg *.exe *.deb *.AppImage; do if [ -f "$f" ]; then sha256 "$f"; fi; done ) >> "$dir/SHA256SUMS-${{ matrix.artifact }}.txt"
           done
 
       - name: Upload installers
         # Only on a manual run that asked for it: see the header.
         #
         # upload-artifact roots the zip at the least common ancestor of its
-        # patterns' search paths. Both patterns below live in the same
-        # bundle/<bundle_dir> folder, so that folder is the root and the zip
-        # holds the installer and SHA256SUMS-<artifact>.txt side by side at
-        # its top level. A `bundle/*/` wildcard here made the root `bundle/`
-        # and put both one `dmg/`, `nsis/` or `deb/` folder down.
+        # patterns' search paths. All patterns below live in the same
+        # <bundle_root>/<bundle_dir> folder, so that folder is the root and
+        # the zip holds the installer and SHA256SUMS-<artifact>.txt side by
+        # side at its top level. A `bundle/*/` wildcard here made the root
+        # `bundle/` and put both one `dmg/`, `nsis/` or `deb/` folder down.
+        # LGPL-SOURCES-*.txt is the AppImage's list of library sources (see
+        # "LGPL sources of the AppImage"); the other jobs have none, and a
+        # pattern that matches nothing is skipped.
         if: github.event_name == 'workflow_dispatch' && inputs.upload_installers
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: |
             ${{ matrix.artifact_path }}
-            src-tauri/target/release/bundle/${{ matrix.bundle_dir }}/SHA256SUMS-${{ matrix.artifact }}.txt
+            ${{ matrix.bundle_root }}/${{ matrix.bundle_dir }}/SHA256SUMS-${{ matrix.artifact }}.txt
+            ${{ matrix.bundle_root }}/${{ matrix.bundle_dir }}/LGPL-SOURCES-*.txt
           if-no-files-found: error
           retention-days: 14
 
@@ -258,7 +400,7 @@ jobs:
         run: |
           rustup update stable --no-self-update
           rustup default stable
-          rustup target add x86_64-pc-windows-msvc x86_64-unknown-linux-gnu
+          rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc x86_64-unknown-linux-gnu
           rustc --version
 
       - name: Cargo cache

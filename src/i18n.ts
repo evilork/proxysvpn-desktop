@@ -144,6 +144,14 @@ const ru = {
   // URL scheme (guideline 2.5.1).
   "ob.ios.where":
     "Разрешение можно дать и позже: Настройки → Основные → VPN и управление устройством.",
+  "ob.gaming.title": "Игровой режим без пароля?",
+  "ob.gaming.body":
+    "В игровом режиме системе негде спросить пароль. Если разрешить, при первом подключении система один раз спросит пароль пользователя deck, ProxysVPN скопирует свой помощник в /home/.proxysvpn и дальше сможет подключаться в игровом режиме без пароля. Это разрешение останется на устройстве, пока его не убрать в «Ещё» → «Удалить системные файлы».",
+  "ob.gaming.declineBody":
+    "«Только с паролем»: пароль будут спрашивать при подключении после каждого запуска приложения, а в игровом режиме подключиться не получится.",
+  "ob.gaming.allow": "Разрешить игровой режим без пароля",
+  "ob.gaming.decline": "Только с паролем",
+  "ob.gaming.failed": "Ответ не сохранился. Выберите ещё раз",
   "ob.waiting": "Ждём ответа системы…",
   "ob.denied": "Разрешение не получено. Без него включить не получится",
   "ob.showWhere": "Показать, где нажать",
@@ -378,13 +386,22 @@ const ru = {
     "Без него приложение не может направить интернет через защищённое соединение. Нажмите «Повторить» и разрешите в системном окне.",
   "err.ELEVATION_UNAVAILABLE.title": "Системе нечем выдать права",
   "err.ELEVATION_UNAVAILABLE.body":
-    "Туннелю нужны права администратора, а запросить их здесь нечем: нет pkexec (polkit), в сеансе не запущен агент авторизации polkit (так бывает в i3, sway, Openbox) или приложение запущено из AppImage. Установите приложение пакетом .deb и запустите агент polkit (например, polkit-gnome или lxpolkit) или войдите в полноценный рабочий стол.",
+    "Туннелю нужны права администратора, а запросить их здесь нечем: нет pkexec (polkit), в сеансе не запущен агент авторизации polkit (так бывает в i3, sway, Openbox) или файл приложения лежит там, откуда root его не запустит. Установите pkexec, запустите агент polkit (например, polkit-gnome или lxpolkit) или войдите в полноценный рабочий стол.",
+  // SteamOS (AppImage, docs/STEAMDECK.md). The deck user has no password
+  // until one is set, and polkit cannot accept "nothing".
+  "err.STEAMOS_PASSWORD_NEEDED.title": "Нужен пароль пользователя deck",
+  "err.STEAMOS_PASSWORD_NEEDED.body":
+    "Права администратора SteamOS выдаёт по паролю пользователя deck, а пароля у него нет, пока его не задать. В режиме рабочего стола откройте Konsole, введите passwd и дважды наберите новый пароль. Затем нажмите «Повторить» и введите его в системном окне. Если пароль уже есть — просто нажмите «Повторить».",
+  // Gaming Mode runs no polkit agent: no window can ask for the password.
+  "err.STEAMOS_DESKTOP_MODE_NEEDED.title": "Первое подключение — из режима рабочего стола",
+  "err.STEAMOS_DESKTOP_MODE_NEEDED.body":
+    "В игровом режиме системе негде спросить пароль. Один раз — после установки или обновления приложения — переключитесь в режим рабочего стола (кнопка Steam → «Питание» → «Переключиться на рабочий стол»), откройте ProxysVPN и подключитесь. Приложение спросит пароль пользователя deck и настроится; после этого в игровом режиме оно подключается без пароля.",
   "err.ENGINE_START_FAILED.title": "Соединение не запустилось",
   "err.ENGINE_START_FAILED.body":
     "Внутренняя часть приложения не поднялась. Обычно помогает повторное нажатие.",
   "err.ENGINE_STAGE_FAILED.title": "Приложение не подготовило свои файлы",
   "err.ENGINE_STAGE_FAILED.body":
-    "При запуске приложение не смогло скопировать свои компоненты в защищённую системную папку, поэтому соединение не запустится. Освободите место на диске, закройте ProxysVPN и откройте снова. Если повторится — напишите в поддержку: в отчёте будет причина.",
+    "Приложение не смогло скопировать свои компоненты в защищённую системную папку, поэтому соединение не запустится. Освободите место на диске, закройте ProxysVPN и откройте снова. Если повторится — напишите в поддержку: в отчёте будет причина.",
   "err.ENGINE_DIED.title": "Соединение оборвалось",
   "err.ENGINE_DIED.body": "Мы уже поднимаем его заново — делать ничего не нужно.",
   "err.PORT_BUSY.title": "Предыдущий запуск ещё не закрылся",
@@ -573,6 +590,16 @@ const ru = {
   "more.unlinkConfirm":
     "Ссылка будет удалена только с этого устройства. Аккаунт, другие устройства и доступ останутся — ссылку можно добавить снова.",
   "more.unlinkYes": "Отвязать",
+  "more.sysFiles": "Удалить системные файлы",
+  "more.sysFilesHint": "/home/.proxysvpn и разрешение игрового режима",
+  "more.sysFilesConfirm":
+    "ProxysVPN удалит то, что положил в систему при первом подключении: свою копию помощника в /home/.proxysvpn и разрешение подключаться в игровом режиме без пароля. Система спросит пароль; когда файлы будут удалены, ProxysVPN отключится. Следующее подключение снова спросит пароль и всё настроит заново.",
+  "more.sysFilesYes": "Удалить",
+  "more.sysFilesDone": "Системные файлы удалены",
+  "more.sysFilesCancelled": "Удаление отменено: пароль не введён",
+  "more.sysFilesDesktopMode": "В игровом режиме нет окна для пароля. Удалите файлы из режима рабочего стола",
+  "more.sysFilesNoDialog": "Системе негде спросить пароль. Удалите файлы вручную, как в инструкции для Steam Deck",
+  "more.sysFilesFailed": "Не удалось удалить системные файлы. Причина — в журнале",
   "more.cabinet": "Личный кабинет",
   "more.geoNote": "Списки маршрутизации уже внутри приложения — ничего не скачивается",
 
@@ -627,6 +654,9 @@ const ru = {
   "lic.count": "{n} компонент|{n} компонента|{n} компонентов",
   "lic.kind.engine": "Движок туннеля",
   "lic.kind.font": "Шрифт",
+  "lic.kind.library": "Библиотека, только в AppImage",
+  "lic.library.note":
+    "Входит только в AppImage для Linux: это общая библиотека из Ubuntu 22.04 в папке usr/lib образа, приложение подключает её при запуске, а не встраивает в себя. Её можно заменить своей сборкой: распакуйте образ (./ProxysVPN_….AppImage --appimage-extract), положите свою библиотеку под тем же именем в squashfs-root/usr/lib (или удалите нашу, чтобы взялась системная) и запускайте squashfs-root/AppRun. Файлы — сборки Ubuntu 22.04 без изменений, кроме того, что linuxdeploy переписывает в них RUNPATH и может удалить отладочные символы. Какой пакет Ubuntu и какой версии стоит за каждой библиотекой, сказано в файле usr/share/doc/proxysvpn-desktop/LGPL-SOURCES.txt внутри образа и в LGPL-SOURCES-linux-appimage.txt на странице выпуска; исходный код — исходный пакет Ubuntu той же версии (apt-get source). Ниже — проект, из которого он собран.",
   "lic.license": "Лицензия",
   "lic.source": "Исходный код",
   "lic.changes": "Наши изменения в нём",
@@ -728,6 +758,14 @@ const en: Partial<Record<MsgKey, string>> = {
     "The system will ask once and request Face ID, Touch ID or your passcode. It will not ask again.",
   "ob.ios.action": "Allow",
   "ob.ios.where": "You can also allow it later: Settings → General → VPN & Device Management.",
+  "ob.gaming.title": "Gaming Mode without a password?",
+  "ob.gaming.body":
+    "Gaming Mode has nowhere to ask for a password. If you allow it, the system asks for the deck user's password once on the first connect, ProxysVPN copies its helper into /home/.proxysvpn, and from then on it can connect in Gaming Mode without a password. That permission stays on this device until you remove it in More → Remove system files.",
+  "ob.gaming.declineBody":
+    "“Only with a password”: the password is asked when you connect after every start of the app, and Gaming Mode cannot connect.",
+  "ob.gaming.allow": "Allow Gaming Mode without a password",
+  "ob.gaming.decline": "Only with a password",
+  "ob.gaming.failed": "The answer was not kept. Choose again",
   "ob.waiting": "Waiting for the system…",
   "ob.denied": "Permission was not granted. Without it we cannot turn protection on",
   "ob.showWhere": "Show me where to tap",
@@ -935,13 +973,19 @@ const en: Partial<Record<MsgKey, string>> = {
     "Without it we cannot route the internet through a secure connection. Tap Retry and allow it in the system dialog.",
   "err.ELEVATION_UNAVAILABLE.title": "This system cannot grant the rights",
   "err.ELEVATION_UNAVAILABLE.body":
-    "The tunnel needs administrator rights, and there is no way to ask for them here: pkexec (polkit) is missing, no polkit authentication agent runs in this session (common in i3, sway, Openbox), or the app runs from an AppImage. Install the app from the .deb package and start a polkit agent (for example polkit-gnome or lxpolkit), or log in to a full desktop session.",
+    "The tunnel needs administrator rights, and there is no way to ask for them here: pkexec (polkit) is missing, no polkit authentication agent runs in this session (common in i3, sway, Openbox), or the app's file sits where root cannot run it. Install pkexec, start a polkit agent (for example polkit-gnome or lxpolkit), or log in to a full desktop session.",
+  "err.STEAMOS_PASSWORD_NEEDED.title": "The deck user needs a password",
+  "err.STEAMOS_PASSWORD_NEEDED.body":
+    "SteamOS grants administrator rights by the deck user's password, and that user has none until you set one. In Desktop Mode open Konsole, type passwd and enter a new password twice. Then press Retry and type it in the system dialog. If you already have a password, just press Retry.",
+  "err.STEAMOS_DESKTOP_MODE_NEEDED.title": "Connect once from Desktop Mode",
+  "err.STEAMOS_DESKTOP_MODE_NEEDED.body":
+    "Gaming Mode has nowhere to ask for a password. Once, after installing or updating the app, switch to Desktop Mode (Steam button → Power → Switch to Desktop), open ProxysVPN and connect. It asks for the deck user's password and sets itself up; after that it connects in Gaming Mode without a password.",
   "err.ENGINE_START_FAILED.title": "The connection did not start",
   "err.ENGINE_START_FAILED.body":
     "The internal part did not come up. Tapping again usually helps.",
   "err.ENGINE_STAGE_FAILED.title": "The app could not prepare its files",
   "err.ENGINE_STAGE_FAILED.body":
-    "At launch the app could not copy its components into the protected system folder, so the connection cannot start. Free some disk space, quit ProxysVPN and open it again. If it happens again, contact support — the report shows the reason.",
+    "The app could not copy its components into the protected system folder, so the connection cannot start. Free some disk space, quit ProxysVPN and open it again. If it happens again, contact support — the report shows the reason.",
   "err.ENGINE_DIED.title": "The connection dropped",
   "err.ENGINE_DIED.body": "We are already bringing it back — there is nothing to do.",
   "err.PORT_BUSY.title": "The previous run has not closed yet",
@@ -1104,6 +1148,16 @@ const en: Partial<Record<MsgKey, string>> = {
   "more.unlinkConfirm":
     "The link is removed from this device only. Your account, other devices and access stay — you can add the link again.",
   "more.unlinkYes": "Unlink",
+  "more.sysFiles": "Remove system files",
+  "more.sysFilesHint": "/home/.proxysvpn and the Gaming Mode permission",
+  "more.sysFilesConfirm":
+    "ProxysVPN removes what it put into the system on the first connect: its copy of the helper in /home/.proxysvpn and the permission to connect in Gaming Mode without a password. The system asks for your password; once the files are gone, ProxysVPN disconnects. The next connect asks for the password again and sets everything up anew.",
+  "more.sysFilesYes": "Remove",
+  "more.sysFilesDone": "System files removed",
+  "more.sysFilesCancelled": "Removal cancelled: the password was not entered",
+  "more.sysFilesDesktopMode": "Gaming Mode has no password window. Remove them from Desktop Mode",
+  "more.sysFilesNoDialog": "The system has nowhere to ask for the password. Remove them by hand, as the Steam Deck guide says",
+  "more.sysFilesFailed": "Could not remove the system files. The log says why",
   "more.cabinet": "Your account",
   "more.geoNote": "Routing lists are already inside the app — nothing is downloaded",
 
@@ -1142,6 +1196,9 @@ const en: Partial<Record<MsgKey, string>> = {
   "lic.count": "{n} component|{n} components",
   "lic.kind.engine": "Tunnel engine",
   "lic.kind.font": "Font",
+  "lic.kind.library": "Library, AppImage only",
+  "lic.library.note":
+    "Only in the Linux AppImage: a shared library from Ubuntu 22.04 in the image's usr/lib folder, which the app loads when it starts instead of building it in. You can replace it with your own build: extract the image (./ProxysVPN_….AppImage --appimage-extract), put your library under the same name into squashfs-root/usr/lib (or delete ours to use the system's) and run squashfs-root/AppRun. The files are Ubuntu 22.04's builds, unchanged except that linuxdeploy rewrites their RUNPATH and may strip their debug symbols. Which Ubuntu package, at which version, each library came from is in usr/share/doc/proxysvpn-desktop/LGPL-SOURCES.txt inside the image and in LGPL-SOURCES-linux-appimage.txt on the release page; its source is Ubuntu's source package of that version (apt-get source). Below is the project it is built from.",
   "lic.license": "Licence",
   "lic.source": "Source code",
   "lic.changes": "Our changes to it",

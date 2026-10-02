@@ -119,6 +119,32 @@ test("Windows and Linux list their own crates, not the iOS engine", () => {
   assert.ok(!linux.includes("webview2-com"));
 });
 
+// The AppImage carries WebKitGTK, GTK and the rest of what they link in its
+// usr/lib; the LGPL asks that they be named with their licence and source.
+test("the Linux screen names the LGPL libraries the AppImage carries, and only Linux", () => {
+  const all = committed();
+  const libraries = all.filter((c) => c.kind === "library");
+  const names = libraries.map((c) => c.name);
+  for (const expected of ["WebKitGTK", "GTK 3", "GLib", "GDK-Pixbuf", "Pango", "cairo", "libsoup", "GStreamer", "librsvg"]) {
+    assert.ok(names.some((n) => n.startsWith(expected)), `${expected} in ${names.join(", ")}`);
+  }
+  for (const library of libraries) {
+    assert.deepEqual(library.platforms, ["linux"], library.name);
+    assert.ok(library.licenseIds.some((id) => id.startsWith("LGPL-")), `${library.name}: ${library.license}`);
+    assert.match(library.source, /^https:\/\//, library.name);
+  }
+  const webkit = libraries.find((c) => c.name.startsWith("WebKitGTK"));
+  assert.equal(webkit?.license, "BSD-2-Clause AND LGPL-2.1-only");
+  assert.equal(libraries.find((c) => c.name.startsWith("cairo"))?.license, "LGPL-2.1-only OR MPL-1.1");
+  // No other build's screen lists them.
+  for (const platform of ["ios", "macos", "windows"]) {
+    const listed = groupByLicense(all, platform).flatMap((g) => g.components);
+    assert.ok(!listed.some((c) => c.kind === "library"), platform);
+  }
+  assert.ok(groupByLicense(all, "linux").some((g) => g.components.some((c) => c.kind === "library")));
+  assert.deepEqual(parseNotices({ components: [sample({ kind: "library" })] })[0]?.kind, "library");
+});
+
 test("an iOS screen leaves out what only the desktop apps carry", () => {
   const groups = groupByLicense(committed(), "ios");
   const names = groups.flatMap((g) => g.components.map((c) => c.name));

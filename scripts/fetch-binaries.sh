@@ -99,6 +99,48 @@ verify() { # <file> <expected sha256> <label>
   echo "  sha256 ok"
 }
 
+# The hashes prove a file is the one the lock names, not that the lock names
+# the right CPU. A row or an archive layout that points at the x64 build would
+# put an x64 engine or wintun.dll into the arm64 installer, and nothing would
+# fail before someone tried to connect: an arm64 tun2socks cannot load an x64
+# wintun.dll at all, and an x64 engine runs emulated, which is the slow
+# connect the arm64 build exists to avoid (Windows 11 ARM VM, 02.10.2026). So
+# every Windows executable and DLL is checked against the target before it is
+# installed. The CPU is the Machine field of the PE header: e_lfanew at 0x3C
+# points at "PE\0\0" and Machine follows it. Read byte by byte, so neither the
+# host's endianness nor od's word grouping matters.
+pe_bytes() { # <file> <offset> <count> -> lower-case hex, no spaces
+  od -An -v -tx1 -j "$2" -N "$3" "$1" | tr -d ' \n'
+}
+
+verify_pe_machine() { # <file> <label>
+  local want got raw lfanew
+  # IMAGE_FILE_MACHINE_AMD64 (0x8664) and _ARM64 (0xAA64), as stored on disk.
+  case "$PLATFORM" in
+    windows-amd64) want="6486" ;;
+    windows-arm64) want="64aa" ;;
+    *) return 0 ;;
+  esac
+  if [ "$(pe_bytes "$1" 0 2)" != "4d5a" ]; then
+    echo "$2 is not a Windows executable (no MZ header)" >&2
+    exit 1
+  fi
+  raw="$(pe_bytes "$1" 60 4)"
+  lfanew=$(( 16#${raw:6:2}${raw:4:2}${raw:2:2}${raw:0:2} ))
+  if [ "$(pe_bytes "$1" "$lfanew" 4)" != "50450000" ]; then
+    echo "$2 is not a Windows executable (no PE signature)" >&2
+    exit 1
+  fi
+  got="$(pe_bytes "$1" $((lfanew + 4)) 2)"
+  if [ "$got" != "$want" ]; then
+    echo "$2 is built for another CPU than $PLATFORM" >&2
+    echo "  PE machine: 0x${got:2:2}${got:0:2}, expected 0x${want:2:2}${want:0:2}" >&2
+    echo "Refusing to install. Check its row in scripts/sidecars.lock." >&2
+    exit 1
+  fi
+  echo "  PE machine ok (0x${got:2:2}${got:0:2})"
+}
+
 # unzip is missing from Git for Windows; bsdtar ships with Windows 10+ and
 # macOS and reads zip archives. GNU tar does not, hence the ordering.
 extract_zip() { # <absolute archive path> <dest dir>
@@ -135,6 +177,7 @@ fetch_xray() {
 
   mkdir -p "$TMP/xray"
   extract_zip "$TMP/xray.zip" "$TMP/xray"
+  verify_pe_machine "$TMP/xray/xray${EXE}" "xray${EXE}"
   mv "$TMP/xray/xray${EXE}" "$BIN_DIR/xray-${TARGET}${EXE}"
   # geoip/geosite ship inside the same archive and go to resources, not bin.
   mv "$TMP/xray/geoip.dat" "$BIN_DIR/geoip.dat"
@@ -162,6 +205,7 @@ fetch_tun2socks() {
     ls -la "$TMP/t2s" >&2
     exit 1
   fi
+  verify_pe_machine "$TMP/t2s/$inner" "$inner"
   mv "$TMP/t2s/$inner" "$BIN_DIR/tun2socks-${TARGET}${EXE}"
 }
 
@@ -178,6 +222,7 @@ fetch_hysteria() {
     "https://github.com/apernet/hysteria/releases/download/$(urlencode_tag "$tag")/${asset}" \
     "$TMP/hysteria"
   verify "$TMP/hysteria" "$sha" "$asset"
+  verify_pe_machine "$TMP/hysteria" "$asset"
   mv "$TMP/hysteria" "$BIN_DIR/hysteria-${TARGET}${EXE}"
 }
 
@@ -205,6 +250,7 @@ fetch_wintun() {
 
   mkdir -p "$TMP/wintun"
   extract_zip "$TMP/wintun.zip" "$TMP/wintun"
+  verify_pe_machine "$TMP/wintun/wintun/bin/${arch}/wintun.dll" "wintun.dll (${arch})"
   mv "$TMP/wintun/wintun/bin/${arch}/wintun.dll" "$BIN_DIR/wintun.dll"
   mv "$TMP/wintun/wintun/LICENSE.txt" "$BIN_DIR/wintun-LICENSE.txt"
 }

@@ -324,6 +324,9 @@ struct AppInfo {
     device_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     device_linked_at: Option<u64>,
+    /// More offers "Remove system files": the Linux AppImage, which copies its
+    /// root helper into /home/.proxysvpn and, on SteamOS, leaves a polkit rule.
+    system_files: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3653,9 +3656,11 @@ async fn onboarding_state() -> Cmd<OnboardingState> {
     })
 }
 
+/// `choice` answers the `gamingMode` step ("allow" or "decline") and is
+/// ignored by every other step.
 #[tauri::command]
-async fn onboarding_run(step: String) -> Cmd<()> {
-    run_onboarding(&step).await.map_err(|e| e.to_payload())
+async fn onboarding_run(step: String, choice: Option<String>) -> Cmd<()> {
+    run_onboarding(&step, choice.as_deref()).await.map_err(|e| e.to_payload())
 }
 
 /// Windows: open a link through the person's own, unelevated shell
@@ -3718,7 +3723,63 @@ async fn app_info(core: tauri::State<'_, Arc<Core>>) -> Cmd<AppInfo> {
         bot_url: support.unwrap_or_else(|| BOT_URL.to_string()),
         device_name: device_name(),
         device_linked_at: link_stored_at(),
+        system_files: system_files_removable(),
     })
+}
+
+fn system_files_removable() -> bool {
+    #[cfg(desktop)]
+    {
+        pvpn_platform::helper::install::system_files_removable()
+    }
+    #[cfg(not(desktop))]
+    {
+        false
+    }
+}
+
+/// "Remove system files" (MoreScreen, the Linux AppImage only): remove
+/// /home/.proxysvpn and the Gaming Mode polkit rule through one password
+/// window (pvpn-platform helper/install.rs), and only once that worked
+/// disconnect and stop the root helper, which runs from the removed folder.
+/// A cancelled window, or Gaming Mode, which has none, leaves the tunnel as
+/// it was. The next connect sets everything up again.
+#[tauri::command]
+async fn remove_system_files(core: tauri::State<'_, Arc<Core>>) -> Cmd<()> {
+    #[cfg(desktop)]
+    {
+        use pvpn_platform::helper::install::{self, RemoveFailure};
+
+        if !install::system_files_removable() {
+            return Err(AppError::new(ErrorCode::Unknown).to_payload());
+        }
+        let core = core.inner().clone();
+        let tear_down = async {
+            logger::log("info", "app", "system files removed; disconnecting");
+            if core.session.lock().await.phase != VpnPhase::Off {
+                core.disconnect().await;
+            }
+            install::stop_removed_helper().await;
+        };
+        match install::remove_then_tear_down(install::remove_system_files(), tear_down).await {
+            Ok(()) => Ok(()),
+            Err(failure) => {
+                logger::log("warn", "app", &format!("system files not removed: {failure}"));
+                let code = match failure {
+                    RemoveFailure::Refused => ErrorCode::PermissionDenied,
+                    RemoveFailure::NoPkexec | RemoveFailure::NoAgent => ErrorCode::ElevationUnavailable,
+                    RemoveFailure::UseDesktopMode => ErrorCode::SteamosDesktopModeNeeded,
+                    RemoveFailure::Failed(_) => ErrorCode::Unknown,
+                };
+                Err(AppError::new(code).to_payload())
+            }
+        }
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = core;
+        Err(AppError::new(ErrorCode::Unknown).to_payload())
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -4156,6 +4217,17 @@ fn onboarding_steps(consent_paths: &[std::path::PathBuf]) -> Vec<&'static str> {
     if consent::is_pending(consent_paths) {
         steps.push("dataNotice");
     }
+    // The SteamOS AppImage while neither the device nor this run holds an
+    // answer: the person decides here whether the setup lets this user start
+    // the root helper without a password from then on (Gaming Mode cannot
+    // ask), before the system's password window asks; no answer, no grant
+    // (pvpn-platform helper/install.rs). The window asks for the steps again
+    // before every connect of the AppImage, so the question comes back in the
+    // same run after "Remove system files". Nowhere else.
+    #[cfg(desktop)]
+    if pvpn_platform::helper::install::gaming_question_pending() {
+        steps.push("gamingMode");
+    }
     #[cfg(target_os = "macos")]
     {
         if !running_from_applications() {
@@ -4198,9 +4270,25 @@ fn bundle_path() -> Option<std::path::PathBuf> {
         .then(|| bundle.to_path_buf())
 }
 
-async fn run_onboarding(step: &str) -> Result<(), AppError> {
+async fn run_onboarding(step: &str, choice: Option<&str>) -> Result<(), AppError> {
+    #[cfg(not(desktop))]
+    let _ = choice;
     match step {
         "dataNotice" => record_data_notice(),
+        // Kept for this run; the next setup writes it on the device, which
+        // is where it is kept from then on.
+        #[cfg(desktop)]
+        "gamingMode" => {
+            use pvpn_platform::helper::install::{choose_gaming_mode, GamingChoice};
+            let (choice, said) = match choice {
+                Some("allow") => (GamingChoice::Allow, "Gaming Mode: allowed without a password"),
+                Some("decline") => (GamingChoice::Decline, "Gaming Mode: only with a password"),
+                _ => return Err(AppError::new(ErrorCode::Unknown)),
+            };
+            choose_gaming_mode(choice);
+            logger::log("info", "app", said);
+            Ok(())
+        }
         #[cfg(target_os = "macos")]
         "moveToApplications" => move_to_applications().await,
         #[cfg(target_os = "macos")]
@@ -4808,6 +4896,27 @@ fn fit_main_window_to_screen(app: &tauri::AppHandle) {
     );
 }
 
+/// Should WebKitGTK's DMA-BUF renderer be switched off before the webview
+/// exists? Only under gamescope — Gaming Mode on a Steam Deck — and only
+/// when the person has not set the variable themselves.
+///
+/// Other WebKitGTK apps report a blank window there with the DMA-BUF
+/// renderer on (Tauri's own Linux graphics notes name the same variable for
+/// blank windows); not seen on a Deck here, there was none to try. The cost
+/// is the slower shared-memory path, for this one screen, which draws a VPN
+/// switch and not a game. Desktop Mode and every other Linux keep the
+/// default: Tauri's notes advise against switching it off for everyone.
+#[cfg(desktop)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn gamescope_wants_shm_renderer(current_desktop: Option<&str>, gamescope_display: Option<&str>, already_set: bool) -> bool {
+    if already_set {
+        return false;
+    }
+    let desktop = current_desktop
+        .is_some_and(|names| names.split(':').any(|name| name.trim().eq_ignore_ascii_case("gamescope")));
+    desktop || gamescope_display.is_some_and(|display| !display.trim().is_empty())
+}
+
 /// The red X with a tray icon present: hide, the VPN keeps running.
 ///
 /// Linux asks first whether the icon can be seen at all (pvpn-platform
@@ -4838,11 +4947,31 @@ pub fn run() {
         pvpn_platform::helper::run_helper();
     }
 
+    // Gaming Mode on a Steam Deck: before any thread exists, since the
+    // environment is process-wide, and before WebKitGTK reads it.
+    #[cfg(target_os = "linux")]
+    let shm_renderer = {
+        const VAR: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
+        let wanted = gamescope_wants_shm_renderer(
+            std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
+            std::env::var("GAMESCOPE_WAYLAND_DISPLAY").ok().as_deref(),
+            std::env::var_os(VAR).is_some(),
+        );
+        if wanted {
+            std::env::set_var(VAR, "1");
+        }
+        wanted
+    };
+
     logger::init();
     // Route the platform layer's messages into the same ring buffer and file
     // the support UI reads; without this they would only reach stdout.
     #[cfg(desktop)]
     pvpn_platform::log::set_sink(logger::log);
+    #[cfg(target_os = "linux")]
+    if shm_renderer {
+        logger::log("info", "app", "gamescope session: WebKitGTK's DMA-BUF renderer switched off");
+    }
 
     // macOS: LaunchServices never starts a second copy, so the leftovers of a
     // crashed run are cleaned here, before anything else. Windows and Linux
@@ -4987,6 +5116,7 @@ pub fn run() {
             onboarding_state,
             onboarding_run,
             app_info,
+            remove_system_files,
             open_external_unelevated,
             motion::motion_start,
             motion::motion_stop
@@ -5206,6 +5336,95 @@ mod tests {
         assert_eq!(fitted_inner_height(1008, 1127, 1080, 780), Some(961));
         // Never below the minimum, even on an absurd screen.
         assert_eq!(fitted_inner_height(400, 751, 720, 520), Some(520));
+    }
+
+    /// Steam Deck: 1280x800, and in Desktop Mode about 756 px of it above
+    /// the panel. The 720 px window just fits under a 31 px caption; under a
+    /// taller one it is fitted, still well above the 520 px minimum.
+    #[test]
+    fn the_window_fits_a_steam_deck_in_desktop_mode() {
+        assert_eq!(fitted_inner_height(756, 751, 720, 520), None);
+        assert_eq!(fitted_inner_height(756, 760, 720, 520), Some(716));
+        // Gaming Mode: no panel and no caption, gamescope scales the window.
+        assert_eq!(fitted_inner_height(800, 720, 720, 520), None);
+    }
+
+    /// The Linux build merges tauri.linux.conf.json over tauri.conf.json (a
+    /// JSON merge patch). The result must be a config Tauri accepts — its
+    /// structs refuse unknown keys, so this is the check a Mac can make — and
+    /// the AppImage must carry the helper the build hook produces and the
+    /// list of its libraries' sources, while the .deb, whose polkit policy
+    /// names its own executable, must not carry the helper.
+    #[cfg(desktop)]
+    #[test]
+    fn the_linux_config_puts_the_helper_into_the_appimage_only() {
+        use std::path::Path;
+        use tauri::utils::config::{BundleTarget, BundleType, Config, HookCommand};
+
+        fn merge(base: &mut serde_json::Value, patch: &serde_json::Value) {
+            match (base, patch) {
+                (serde_json::Value::Object(base), serde_json::Value::Object(patch)) => {
+                    for (key, value) in patch {
+                        if value.is_null() {
+                            base.remove(key);
+                        } else {
+                            merge(base.entry(key.clone()).or_insert(serde_json::Value::Null), value);
+                        }
+                    }
+                }
+                (base, patch) => *base = patch.clone(),
+            }
+        }
+        let mut conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        let linux: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.linux.conf.json")).expect("tauri.linux.conf.json");
+        merge(&mut conf, &linux);
+        let conf: Config = serde_json::from_value(conf).expect("a config Tauri accepts");
+
+        let hook = match conf.build.before_bundle_command {
+            Some(HookCommand::Script(script)) => script,
+            other => panic!("no build hook for the helper: {other:?}"),
+        };
+        assert!(hook.contains("--release") && hook.contains("-p pvpn-platform --bin proxysvpn-helper"), "{hook}");
+        assert_eq!(
+            conf.bundle.linux.appimage.files.get(Path::new("/usr/bin/proxysvpn-helper")).map(|p| p.as_path()),
+            Some(Path::new("target/release/proxysvpn-helper")),
+            "the AppImage takes what the hook built"
+        );
+        assert!(!conf.bundle.linux.deb.files.keys().any(|path| path.ends_with("proxysvpn-helper")));
+        // Where its libraries come from, which CI writes before the build
+        // that ships (scripts/appimage-lgpl-sources.sh): the file is there
+        // for every build, a note in a local one.
+        let sources = conf
+            .bundle
+            .linux
+            .appimage
+            .files
+            .get(Path::new("/usr/share/doc/proxysvpn-desktop/LGPL-SOURCES.txt"))
+            .expect("the AppImage carries LGPL-SOURCES.txt");
+        assert_eq!(sources, Path::new("linux/LGPL-SOURCES.txt"));
+        assert!(Path::new(env!("CARGO_MANIFEST_DIR")).join(sources).is_file());
+        assert!(!conf.bundle.external_bin.unwrap_or_default().iter().any(|bin| bin.contains("proxysvpn-helper")));
+        match conf.bundle.targets {
+            BundleTarget::List(list) => {
+                assert!(list.contains(&BundleType::Deb) && list.contains(&BundleType::AppImage), "{list:?}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Only a gamescope session switches the renderer, and never over the
+    /// person's own setting.
+    #[test]
+    fn only_gamescope_switches_webkit_to_shared_memory() {
+        assert!(gamescope_wants_shm_renderer(Some("gamescope"), None, false));
+        assert!(gamescope_wants_shm_renderer(Some("KDE:gamescope"), None, false));
+        assert!(gamescope_wants_shm_renderer(None, Some("gamescope-0"), false));
+        assert!(!gamescope_wants_shm_renderer(Some("gamescope"), Some("gamescope-0"), true));
+        assert!(!gamescope_wants_shm_renderer(Some("KDE"), None, false));
+        assert!(!gamescope_wants_shm_renderer(Some("GNOME"), Some(""), false));
+        assert!(!gamescope_wants_shm_renderer(None, None, false));
     }
 
     /// The window must be resizable and allowed below 720 px: with the old

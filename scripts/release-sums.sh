@@ -30,6 +30,17 @@ release_find_asset() {
     printf '%s\n' "$found"
 }
 
+# release_find_optional_asset DIR NAME
+#   As release_find_asset, except that none is not an error: it prints
+#   nothing and succeeds. More than one still fails.
+release_find_optional_asset() {
+    local dir="$1" name="$2"
+    if [[ -z "$(find "$dir" -type f -name "$name" -print)" ]]; then
+        return 0
+    fi
+    release_find_asset "$dir" "$name"
+}
+
 # release_find_ci_sums DIR
 #   Print every SHA256SUMS-*.txt under DIR, at any depth, one per line, in a
 #   stable order. Prints nothing when there is none. Our own SHA256SUMS.txt
@@ -89,4 +100,72 @@ release_check_against_ci() {
             return 1
         fi
     done < "$ours"
+}
+
+# release_ci_names NAME [SUMS_FILE...]
+#   Succeeds when a line of the CI files names NAME, in either line form.
+#   With no file it fails: nothing was vouched for.
+release_ci_names() {
+    local name="$1"
+    shift
+    [[ $# -gt 0 ]] || return 1
+    awk -v want="$name" '
+        { sub(/\r$/, "") }
+        NF == 2 {
+            file = $2
+            sub(/^\*/, "", file)
+            if (file == want) found = 1
+        }
+        END { exit found ? 0 : 1 }
+    ' "$@"
+}
+
+# release_collect_assets DIR VERSION [SUMS_FILE...]
+#   Print the path of every installer of release VERSION under DIR, one per
+#   line, in a fixed order: the three every release has, then the optional
+#   ones that are there.
+#
+#   Required: the macOS dmg, the x64 Windows installer, the deb. Optional:
+#   the arm64 Windows installer and the AppImage (the Steam Deck build;
+#   CI builds both since 02.10.2026); each is summed and attached when
+#   it is there, and the release goes out without it when it is not, which
+#   is said on stderr. An optional installer that the CI sums files list
+#   but the folder lacks is an error, though: that run built it, so the
+#   folder is an incomplete download, not a release without it.
+#
+#   Fails as release_find_asset does for a required installer that is
+#   missing and for any installer found twice.
+release_collect_assets() {
+    local dir="$1" version="$2"
+    shift 2
+    local name path
+    local required="ProxysVPN_${version}_aarch64.dmg ProxysVPN_${version}_x64-setup.exe ProxysVPN_${version}_amd64.deb"
+    local optional="ProxysVPN_${version}_arm64-setup.exe ProxysVPN_${version}_amd64.AppImage"
+    # The names hold no blanks (the product name and a semver), so plain word
+    # splitting is enough and keeps this bash 3.2 without arrays.
+    for name in $required; do
+        path="$(release_find_asset "$dir" "$name")" || return 1
+        printf '%s\n' "$path"
+    done
+    for name in $optional; do
+        path="$(release_find_optional_asset "$dir" "$name")" || return 1
+        if [[ -n "$path" ]]; then
+            printf '%s\n' "$path"
+        elif release_ci_names "$name" "$@"; then
+            printf 'ERROR: the CI run built %s, but it is not under %s; download all its artifacts\n' "$name" "$dir" >&2
+            return 1
+        else
+            printf 'note: no %s under %s; released without it\n' "$name" "$dir" >&2
+        fi
+    done
+}
+
+# release_find_lgpl_sources DIR
+#   Print the path of LGPL-SOURCES-linux-appimage.txt under DIR, at any
+#   depth: the AppImage's list of the exact Ubuntu packages its libraries came
+#   from (scripts/appimage-lgpl-sources.sh), which CI uploads beside the
+#   image. Prints nothing and succeeds when there is none; more than one
+#   fails, as release_find_asset does.
+release_find_lgpl_sources() {
+    release_find_optional_asset "$1" "LGPL-SOURCES-linux-appimage.txt"
 }

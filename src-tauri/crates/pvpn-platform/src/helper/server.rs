@@ -17,6 +17,7 @@ use super::proto::{
     self, invoking_uid_from_env, read_bounded_line, sidecar_is_trusted, validate_up, FileFacts,
     Frame, Line, Request,
 };
+use super::install::{self, RuleSync};
 use super::{HELPER_DEV_FLAG, HELPER_FLAG};
 use crate::net::linux_logic;
 use crate::net::linux_priv::{self as net, Tunnel};
@@ -299,6 +300,26 @@ fn watch_signals() {
     }
 }
 
+/// AppImage on SteamOS: keep the Gaming Mode polkit rule in step with the
+/// record the setup wrote (helper/install.rs). A no-op for every helper that
+/// is not the installed copy, the .deb's included.
+fn sync_gaming_rule() {
+    match install::sync_gaming_rule() {
+        RuleSync::NotOurs | RuleSync::Unchanged => {}
+        RuleSync::Written(user) => emit_log(
+            "info",
+            "helper",
+            &format!("Gaming Mode: {user} may now start this helper without a password ({})", install::POLKIT_RULE),
+        ),
+        RuleSync::Removed => emit_log(
+            "info",
+            "helper",
+            &format!("Gaming Mode rule removed: {} has no record", install::INSTALL_DIR),
+        ),
+        RuleSync::Failed(reason) => emit_log("warn", "helper", &format!("Gaming Mode rule: {reason}")),
+    }
+}
+
 /// Run as the privileged helper. Never returns.
 pub fn run_helper() -> ! {
     if !crate::privilege::is_elevated() {
@@ -309,6 +330,7 @@ pub fn run_helper() -> ! {
     HELPER_STARTED.store(true, Ordering::Relaxed);
     watch_signals();
     net::purge_stale_sync();
+    sync_gaming_rule();
     emit_log("info", "helper", "privileged helper ready");
 
     let stdin = std::io::stdin();

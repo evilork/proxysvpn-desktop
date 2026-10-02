@@ -127,6 +127,10 @@ pub use sys::{
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub use sys::{device_counters, has_usable_link};
 
+/// Linux: stop the root helper (net/linux.rs), for "Remove system files".
+#[cfg(target_os = "linux")]
+pub use sys::release_helper;
+
 /// Cumulative byte counters of one interface, as the OS reports them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct IfCounters {

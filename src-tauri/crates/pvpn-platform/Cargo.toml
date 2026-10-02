@@ -6,6 +6,13 @@ description = "Platform layer for ProxysVPN Desktop: elevation, paths, TUN devic
 authors = ["ProxysVPN"]
 publish = false
 
+# The root helper on its own, for the AppImage (src/bin/proxysvpn-helper.rs).
+# The GUI depends on the library only, so building the app does not build it;
+# tauri.linux.conf.json does, before the bundle.
+[[bin]]
+name = "proxysvpn-helper"
+path = "src/bin/proxysvpn-helper.rs"
+
 # Deliberately free of tauri/reqwest/rustls so that
 #   cargo check -p pvpn-platform --target x86_64-pc-windows-msvc
 # works on a machine without the MSVC toolchain (nothing here needs a C
@@ -22,6 +29,10 @@ tokio = { version = "1", features = ["process", "time", "rt", "sync", "io-util"]
 # Already in the tree through tokio, pure Rust over libc / windows-sys; "all"
 # only unlocks the interface-binding calls.
 socket2 = { version = "0.6", features = ["all"] }
+# SHA-256 of the AppImage's helper and tun2socks, checked again by root after
+# it copies them (helper/install.rs). Already in the app through the GUI
+# crate's network memory; pure Rust, so the cross-check still needs no C.
+sha2 = "0.10"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

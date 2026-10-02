@@ -11,7 +11,11 @@
 
 export type NoticePlatform = "ios" | "macos" | "windows" | "linux";
 
-export type NoticeKind = "engine" | "font" | "cargo" | "go" | "npm";
+/**
+ * "library": a shared system library the Linux AppImage carries in usr/lib
+ * (WebKitGTK, GTK and what they link), loaded at run time and replaceable.
+ */
+export type NoticeKind = "engine" | "font" | "library" | "cargo" | "go" | "npm";
 
 export interface NoticeComponent {
   kind: NoticeKind;
@@ -42,7 +46,7 @@ export interface NoticeGroup {
   components: NoticeComponent[];
 }
 
-const KINDS: ReadonlySet<string> = new Set<NoticeKind>(["engine", "font", "cargo", "go", "npm"]);
+const KINDS: ReadonlySet<string> = new Set<NoticeKind>(["engine", "font", "library", "cargo", "go", "npm"]);
 const PLATFORMS: ReadonlySet<string> = new Set<NoticePlatform>(["ios", "macos", "windows", "linux"]);
 
 function isKind(value: unknown): value is NoticeKind {

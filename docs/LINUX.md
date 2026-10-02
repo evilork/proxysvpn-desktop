@@ -53,12 +53,34 @@ if it is missing anyway, the window says so with its own error
 library is a dependency too: with neither of the two present, `libappindicator`
 panics while the tray is built.
 
-**No AppImage.** An AppImage runs from a FUSE mount that only the user who
+**AppImage.** CI builds one too, for the Steam Deck above all
+(docs/STEAMDECK.md). An AppImage runs from a FUSE mount that only the user who
 mounted it may access — root included, since it is mounted without
-`allow_other`. pkexec would ask for the password and then fail to execute the
-helper from that mount (exit 127), so the tunnel could never come up. The app
-recognises that case (statfs reports FUSE for its own executable) and shows
-`ELEVATION_UNAVAILABLE` before any password dialog; CI builds only the `.deb`.
+`allow_other` — so pkexec cannot run the helper from it, and 0.3.3 refused to
+connect from one. Now the first connect copies a standalone helper binary
+(`src/bin/proxysvpn-helper.rs`, the same `run_helper` without Tauri) and
+tun2socks into `/home/.proxysvpn/bin`, root-owned, through one pkexec running a
+fixed setup script that checks the copies' SHA-256 before anything runs, and
+later connects run that copy (`helper/install.rs`). On SteamOS, when the
+person answered "allow" on the app's Gaming Mode screen, the setup also lets
+them start that one helper without a password, so that Gaming Mode, which has
+no polkit agent, can connect; "only with a password" records the "no", and
+without an answer nothing is granted. More → Remove system files takes all of
+it away again, and the screen asks again before the next setup
+(docs/STEAMDECK.md). Everything about the
+`.deb` below is unchanged — the same executable, helper arguments and polkit
+action — except that a pkexec the app starts without a terminal, the
+`.deb`'s included, carries pkexec's own `--disable-internal-agent`: without a
+polkit agent it says "No authentication agent found" instead of trying a
+password prompt on a terminal the app does not have. An app started from a
+terminal, in the foreground, leaves the option out, so in a session without
+an agent (i3, sway) pkexec still asks for the password on that terminal; the
+app reads both of pkexec's "nobody can ask" lines the same way
+(`privilege::pkexec_wants_text_prompt`, `privilege::pkexec_unavailable`).
+pkexec reads the option before the program, so the command polkit matches is
+the same either way (`privilege::PKEXEC_NO_TEXT_AGENT`).
+The FUSE check is still there for a FUSE mount that is not a recognised
+AppImage (`ELEVATION_UNAVAILABLE`).
 
 ## How the tunnel is put together
 
@@ -220,6 +242,9 @@ src-tauri/crates/pvpn-platform/src/      (no tauri, no reqwest -> cross-compiles
   privilege.rs                  is_elevated, pkexec checks, `which`
   helper/proto.rs               the JSON protocol + validation (compiled everywhere)
   helper/server.rs              the root helper's main loop            (linux)
+  helper/install.rs             the AppImage's root-owned helper copy, the
+                                setup script, the Gaming Mode rule (compiled everywhere)
+  bin/proxysvpn-helper.rs       the helper as its own binary, for the AppImage
   net/mod.rs                    THE contract: preflight/up/ensure/down/...
   net/plan.rs                   pure argv for all three platforms (compiled everywhere)
   net/linux_logic.rs            parsers and resolv.conf logic  (compiled everywhere)
@@ -280,7 +305,9 @@ Verified here:
 
 * ~~that the crate links and the `.deb`/AppImage build~~ — done on the first green
   CI run of the 0.1.0 app: `ProxysVPN_0.1.0_amd64.deb` (41 MB) and
-  `ProxysVPN_0.1.0_amd64.AppImage` (114 MB). Neither has been **launched**, which is the next line;
+  `ProxysVPN_0.1.0_amd64.AppImage` (114 MB). The AppImage was then dropped and
+  is built again since 02.10.2026, now with the standalone helper in it; that
+  build has not run in CI yet;
 * that the app actually starts, shows a window and raises a tunnel. Nothing below
   this point has run on a Linux machine even once;
 * that `tun2socks -device tun://proxysvpn0` creates the device under the name we
@@ -299,5 +326,8 @@ Verified here:
   running window (single-instance plugin) instead of starting a second core;
 * aarch64 Linux end to end; the matrix builds x86_64 only, since ARM runners are
   not reliably available;
-* the AppImage refusal (`ELEVATION_UNAVAILABLE` from statfs on a FUSE mount) —
-  reasoned from the kernel's FUSE access rule, never seen on a machine.
+* the AppImage path — the copy into `/home/.proxysvpn`, the generic polkit
+  dialog for `/bin/sh`, the Gaming Mode rule on SteamOS. Its decisions and the
+  setup script itself are unit-tested (the script runs under `/bin/sh` in the
+  tests, on the Mac and on the Linux CI runner); docs/STEAMDECK.md lists what
+  only a machine can show.
