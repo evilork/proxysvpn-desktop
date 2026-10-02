@@ -159,3 +159,13 @@ release_collect_assets() {
         fi
     done
 }
+
+# release_find_lgpl_sources DIR
+#   Print the path of LGPL-SOURCES-linux-appimage.txt under DIR, at any
+#   depth: the AppImage's list of the exact Ubuntu packages its libraries came
+#   from (scripts/appimage-lgpl-sources.sh), which CI uploads beside the
+#   image. Prints nothing and succeeds when there is none; more than one
+#   fails, as release_find_asset does.
+release_find_lgpl_sources() {
+    release_find_optional_asset "$1" "LGPL-SOURCES-linux-appimage.txt"
+}

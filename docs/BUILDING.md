@@ -34,16 +34,17 @@ Windows x86_64, Windows ARM64 (на раннере `windows-11-arm`, без эм
 | `proxysvpn-windows-x86_64` | `ProxysVPN_<версия>_x64-setup.exe` (установщик NSIS), `SHA256SUMS-proxysvpn-windows-x86_64.txt` |
 | `proxysvpn-windows-arm64` | `ProxysVPN_<версия>_arm64-setup.exe` (установщик NSIS для Windows on ARM), `SHA256SUMS-proxysvpn-windows-arm64.txt` |
 | `proxysvpn-linux-x86_64` | `ProxysVPN_<версия>_amd64.deb`, `SHA256SUMS-proxysvpn-linux-x86_64.txt` |
-| `proxysvpn-linux-appimage` | `ProxysVPN_<версия>_amd64.AppImage` (Steam Deck и любой Linux x86_64), `SHA256SUMS-proxysvpn-linux-appimage.txt` |
+| `proxysvpn-linux-appimage` | `ProxysVPN_<версия>_amd64.AppImage` (Steam Deck и любой Linux x86_64), `SHA256SUMS-proxysvpn-linux-appimage.txt`, `LGPL-SOURCES-linux-appimage.txt` (из каких пакетов Ubuntu и каких версий взяты библиотеки образа; THIRD-PARTY-NOTICES.md) |
 
 GitHub отдаёт артефакт одним zip-архивом — распаковать перед установкой. Оба файла лежат
 в корне архива, без подпапок. `scripts/publish-release.sh` ищет установщики и файлы
 `SHA256SUMS-*.txt` и во вложенных папках (старые артефакты клали их в `dmg/`, `nsis/`,
 `deb/`) и останавливается, если какой-то установщик в этих файлах не указан или его
 сумма не совпадает. `.dmg`, `x64-setup.exe` и `.deb` обязательны; `arm64-setup.exe` и `.AppImage`
-прикладываются к релизу, если лежат в папке. Если прогон такой
-файл собрал (он указан в его `SHA256SUMS-*.txt`), а в папке файла нет, скрипт останавливается:
-значит, скачаны не все артефакты.
+прикладываются к релизу, если лежат в папке, как и `LGPL-SOURCES-linux-appimage.txt`
+(в `SHA256SUMS.txt` он не входит: это не установщик, и та же копия лежит внутри образа).
+Если прогон такой установщик собрал (он указан в его `SHA256SUMS-*.txt`), а в папке файла
+нет, скрипт останавливается: значит, скачаны не все артефакты.
 
 Подписи кода у сборок нет, поэтому единственная проверка «это тот самый файл» —
 sha256. Прогон печатает его сам: в логе задания есть шаг **List bundle output

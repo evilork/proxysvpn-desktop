@@ -24,6 +24,8 @@
 # The dmg, the x64 Windows installer and the deb are required. The arm64
 # Windows installer and an AppImage are attached when the folder has them;
 # which installers count is release_collect_assets in scripts/release-sums.sh.
+# So is LGPL-SOURCES-linux-appimage.txt, the AppImage's list of where its
+# libraries come from (scripts/appimage-lgpl-sources.sh), when CI made one.
 #
 # Requirements: gh (authenticated), git, node, shasum or sha256sum.
 #
@@ -99,6 +101,17 @@ for path in "${ASSETS[@]}"; do
     NAMES="$NAMES$(basename "$path"), "
 done
 
+# The AppImage's library sources, attached as CI wrote them. Not an installer:
+# not in SHA256SUMS.txt and not cross-checked; the image carries the same file
+# inside (usr/share/doc/proxysvpn-desktop/LGPL-SOURCES.txt).
+LGPL_SOURCES="$(release_find_lgpl_sources "$ASSETS_DIR")" \
+    || die "LGPL-SOURCES-linux-appimage.txt is under $ASSETS_DIR more than once"
+if [[ -n "$LGPL_SOURCES" ]]; then
+    NAMES="$NAMES$(basename "$LGPL_SOURCES"), "
+elif [[ "$NAMES" == *.AppImage,* ]]; then
+    echo "note: no LGPL-SOURCES-linux-appimage.txt under $ASSETS_DIR; the AppImage carries its own copy"
+fi
+
 # Bare file names, whatever subfolder each installer came in, so
 # `sha256sum -c SHA256SUMS.txt` works next to the downloaded release assets.
 SUMS="$ASSETS_DIR/SHA256SUMS.txt"
@@ -150,7 +163,7 @@ gh release create "$TAG" \
     --title "ProxysVPN Desktop $TAG" \
     --notes-file "$NOTES" \
     "$KIND" \
-    "${ASSETS[@]}" "$SUMS"
+    "${ASSETS[@]}" ${LGPL_SOURCES:+"$LGPL_SOURCES"} "$SUMS"
 
 echo ""
 echo "Draft created. Read it, then publish it on GitHub:"

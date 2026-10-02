@@ -13,7 +13,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
@@ -313,4 +313,33 @@ test("four installers with four CI sums files pass the cross-check", { skip: SKI
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// The AppImage's list of library sources (scripts/appimage-lgpl-sources.sh)
+// travels in the AppImage's artifact and is attached when it is there.
+test("the AppImage's LGPL sources list is found at any depth, and its absence is no error", { skip: SKIP }, () => {
+  const dir = scratch();
+  try {
+    const none = bash(`release_find_lgpl_sources "$1"`, [dir]);
+    assert.equal(none.status, 0, none.stderr);
+    assert.equal(none.stdout, "");
+
+    const path = put(dir, "proxysvpn-linux-appimage/LGPL-SOURCES-linux-appimage.txt", "[packages]\n");
+    const one = bash(`release_find_lgpl_sources "$1"`, [dir]);
+    assert.equal(one.status, 0, one.stderr);
+    assert.equal(one.stdout.trim(), path);
+
+    put(dir, "again/LGPL-SOURCES-linux-appimage.txt", "[packages]\n");
+    const two = bash(`release_find_lgpl_sources "$1"`, [dir]);
+    assert.notEqual(two.status, 0);
+    assert.match(two.stderr, /there twice/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("publish-release.sh attaches the LGPL sources list when there is one", { skip: SKIP }, () => {
+  const script = readFileSync(resolve(dirname(LIB), "publish-release.sh"), "utf8");
+  assert.match(script, /LGPL_SOURCES="\$\(release_find_lgpl_sources "\$ASSETS_DIR"\)"/);
+  assert.match(script, /"\$\{ASSETS\[@\]\}" \$\{LGPL_SOURCES:\+"\$LGPL_SOURCES"\} "\$SUMS"/);
 });
