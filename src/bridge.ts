@@ -45,7 +45,7 @@
 //   timeline_list{ limit } -> TimelineEntry[]
 //   logs_page{ offset, limit } -> LogLine[]
 //   onboarding_state -> OnboardingState
-//   onboarding_run{ step } -> ()
+//   onboarding_run{ step, choice? } -> ()   choice: the gamingMode answer
 //   app_info       -> AppInfo
 //   open_external_unelevated{ url } -> ()   Windows only: links through the
 //                                           unelevated shell (externalUrl.ts)
@@ -291,8 +291,10 @@ export interface RoutingState {
 /**
  * `dataNotice` is the declaration of the data the app uses (guideline 5.4);
  * the core puts it first on every platform until it has been seen.
- * `gamingMode`: the SteamOS AppImage before its first setup, which lets the
- * Deck's user start the tunnel helper without a password from then on.
+ * `gamingMode`: the SteamOS AppImage while nothing is decided on the device:
+ * may its setup let the Deck's user start the tunnel helper without a
+ * password from then on? Answered with a `GamingModeChoice`; without one the
+ * setup grants nothing.
  */
 export type OnboardingStep =
   | "dataNotice"
@@ -300,6 +302,9 @@ export type OnboardingStep =
   | "password"
   | "iosPermission"
   | "gamingMode";
+
+/** The answer to `gamingMode`: without a password, or only with one. */
+export type GamingModeChoice = "allow" | "decline";
 
 export interface OnboardingState {
   steps: OnboardingStep[];
@@ -368,7 +373,8 @@ export interface CoreBridge {
   logs(offset: number, limit: number): Promise<LogLine[]>;
 
   onboarding(): Promise<OnboardingState>;
-  onboardingRun(step: OnboardingStep): Promise<void>;
+  /** `choice` answers `gamingMode`; the other steps take none. */
+  onboardingRun(step: OnboardingStep, choice?: GamingModeChoice): Promise<void>;
 
   appInfo(): Promise<AppInfo>;
   /**
@@ -559,8 +565,8 @@ class TauriBridge implements CoreBridge {
   onboarding(): Promise<OnboardingState> {
     return call<OnboardingState>("onboarding_state");
   }
-  onboardingRun(step: OnboardingStep): Promise<void> {
-    return call<void>("onboarding_run", { step });
+  onboardingRun(step: OnboardingStep, choice?: GamingModeChoice): Promise<void> {
+    return call<void>("onboarding_run", choice === undefined ? { step } : { step, choice });
   }
   appInfo(): Promise<AppInfo> {
     return call<AppInfo>("app_info");
@@ -646,6 +652,9 @@ export const MOCK_SCENARIOS = [
   "announce",
   "service-check",
   "pair-expired",
+  // The SteamOS AppImage: the Gaming Mode question until it is answered,
+  // and again after "Remove system files" (More).
+  "steamdeck",
 ] as const;
 
 export type MockScenario = (typeof MOCK_SCENARIOS)[number] | ErrorCode;
@@ -707,6 +716,7 @@ class MockBridge implements CoreBridge {
   private readonly scenario: MockScenario;
   /** The core's consent record, for as long as this page lives. */
   private dataNoticeSeen = false;
+  private gamingAnswer: GamingModeChoice | null = null;
   private readonly handlers = new Set<BridgeHandlers>();
   private readonly timers = new Set<number>();
 
@@ -1321,31 +1331,42 @@ class MockBridge implements CoreBridge {
     const steps: OnboardingStep[] = [];
     if (firstRun && !this.dataNoticeSeen) steps.push("dataNotice");
     if (this.scenario === "onboarding") steps.push("moveToApplications", "password");
+    if (this.scenario === "steamdeck" && this.gamingAnswer === null) steps.push("gamingMode");
     return { steps };
   }
 
-  async onboardingRun(step: OnboardingStep): Promise<void> {
+  async onboardingRun(step: OnboardingStep, choice?: GamingModeChoice): Promise<void> {
     if (step === "dataNotice") {
       await this.pause(150);
       this.dataNoticeSeen = true;
+      return;
+    }
+    if (step === "gamingMode") {
+      await this.pause(150);
+      if (choice === undefined) throw new CoreError({ code: "UNKNOWN", detail: "no answer" });
+      this.gamingAnswer = choice;
       return;
     }
     await this.pause(900);
   }
 
   async appInfo(): Promise<AppInfo> {
+    const deck = this.scenario === "steamdeck";
     return {
       version: "0.2.0",
-      platform: "macos",
+      platform: deck ? "linux" : "macos",
       cabinetUrl: "https://proxysvpn.com",
       botUrl: "https://t.me/proxysvpn_bot",
-      deviceName: "MacBook",
+      deviceName: deck ? "steamdeck" : "MacBook",
       deviceLinkedAt: Date.now() - 18 * 86_400_000,
+      systemFiles: deck,
     };
   }
 
   async removeSystemFiles(): Promise<void> {
     await this.pause(900);
+    // As the core: the files and the answer go together.
+    this.gamingAnswer = null;
   }
 
   async openExternal(url: string): Promise<void> {

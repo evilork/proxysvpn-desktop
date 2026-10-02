@@ -20,10 +20,17 @@
 // iOS gets no link: the only address that opens the VPN page of Settings is a
 // private URL scheme, which guideline 2.5.1 rejects. The macOS Login Items
 // link stays in the direct build and is never rendered in an App Store build.
+//
+// Gaming Mode on SteamOS is a question, not a barrier: two answers of equal
+// standing, and the core grants the passwordless start only for "allow"
+// (pvpn-platform helper/install.rs). It is said before the system's password
+// window, which can only quote a shortened command line. App.tsx asks the
+// core for the steps again before every connect of the AppImage, so after
+// "Remove system files" the question comes back before the next setup.
 
 import { useCallback, useState } from "react";
 
-import { bridge, type AppInfo, type OnboardingStep } from "../bridge";
+import { bridge, type AppInfo, type GamingModeChoice, type OnboardingStep } from "../bridge";
 import { IS_APPSTORE } from "../dist";
 import type { MsgKey } from "../i18n";
 import DataNoticeScreen from "./DataNoticeScreen";
@@ -33,7 +40,7 @@ import { Screen, Spinner, useUi } from "./ui";
 const MACOS_SETTINGS_URL =
   "x-apple.systempreferences:com.apple.LoginItems-Settings.extension";
 
-type BarrierStep = Exclude<OnboardingStep, "dataNotice">;
+type BarrierStep = Exclude<OnboardingStep, "dataNotice" | "gamingMode">;
 
 const COPY: Record<BarrierStep, { title: MsgKey; body: MsgKey; action: MsgKey }> = {
   moveToApplications: {
@@ -43,9 +50,6 @@ const COPY: Record<BarrierStep, { title: MsgKey; body: MsgKey; action: MsgKey }>
   },
   password: { title: "ob.pass.title", body: "ob.pass.body", action: "ob.pass.action" },
   iosPermission: { title: "ob.ios.title", body: "ob.ios.body", action: "ob.ios.action" },
-  // SteamOS: said before the system's password window, which can only quote
-  // a shortened command line (pvpn-platform helper/install.rs).
-  gamingMode: { title: "ob.gaming.title", body: "ob.gaming.body", action: "ob.gaming.action" },
 };
 
 export default function OnboardingScreen({
@@ -62,6 +66,7 @@ export default function OnboardingScreen({
   const [index, setIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [answering, setAnswering] = useState<GamingModeChoice | null>(null);
 
   const step = steps[index];
 
@@ -86,6 +91,23 @@ export default function OnboardingScreen({
       setBusy(false);
     }
   }, [advance, step]);
+
+  // Gaming Mode: the answer is the step. Nothing moves on without one.
+  const answerGamingMode = useCallback(
+    async (choice: GamingModeChoice) => {
+      setAnswering(choice);
+      setFailed(false);
+      try {
+        await bridge.onboardingRun("gamingMode", choice);
+        advance();
+      } catch {
+        setFailed(true);
+      } finally {
+        setAnswering(null);
+      }
+    },
+    [advance],
+  );
 
   // "Продолжить" on the notice moves on even when the core could not store
   // the answer: the person has read it, which is what 5.4 asks for, and an
@@ -119,12 +141,47 @@ export default function OnboardingScreen({
     );
   }
 
+  if (step === "gamingMode") {
+    return (
+      <Screen
+        title={t("app.name")}
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void answerGamingMode("allow")}
+              disabled={answering !== null}
+            >
+              {answering === "allow" ? <Spinner /> : t("ob.gaming.allow")}
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={() => void answerGamingMode("decline")}
+              disabled={answering !== null}
+            >
+              {answering === "decline" ? <Spinner /> : t("ob.gaming.decline")}
+            </button>
+          </>
+        }
+      >
+        <div className="section">
+          <span className="caps">{stepLabel}</span>
+          <h1 className="h1">{t("ob.gaming.title")}</h1>
+          <p className="body dim">{t("ob.gaming.body")}</p>
+          <p className="body dim">{t("ob.gaming.declineBody")}</p>
+          {failed ? <p className="body danger">{t("ob.gaming.failed")}</p> : null}
+        </div>
+      </Screen>
+    );
+  }
+
   const copy = COPY[step];
   const failureKey: MsgKey = step === "moveToApplications" ? "ob.move.failed" : "ob.denied";
   // The Login Items link: direct macOS builds only, never on iOS (no public
-  // address for that page), never in an App Store build, and never for the
-  // SteamOS notice, whose button only says it was read.
-  const settingsLink = failed && !IS_APPSTORE && step !== "iosPermission" && step !== "gamingMode";
+  // address for that page) and never in an App Store build.
+  const settingsLink = failed && !IS_APPSTORE && step !== "iosPermission";
 
   return (
     <Screen

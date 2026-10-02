@@ -3656,9 +3656,11 @@ async fn onboarding_state() -> Cmd<OnboardingState> {
     })
 }
 
+/// `choice` answers the `gamingMode` step ("allow" or "decline") and is
+/// ignored by every other step.
 #[tauri::command]
-async fn onboarding_run(step: String) -> Cmd<()> {
-    run_onboarding(&step).await.map_err(|e| e.to_payload())
+async fn onboarding_run(step: String, choice: Option<String>) -> Cmd<()> {
+    run_onboarding(&step, choice.as_deref()).await.map_err(|e| e.to_payload())
 }
 
 /// Windows: open a link through the person's own, unelevated shell
@@ -4215,12 +4217,15 @@ fn onboarding_steps(consent_paths: &[std::path::PathBuf]) -> Vec<&'static str> {
     if consent::is_pending(consent_paths) {
         steps.push("dataNotice");
     }
-    // The SteamOS AppImage before its first setup: that setup lets this user
-    // start the root helper without a password from then on (Gaming Mode
-    // cannot ask), and the person reads it here before the system's password
-    // window asks (pvpn-platform helper/install.rs). Nowhere else.
+    // The SteamOS AppImage while neither the device nor this run holds an
+    // answer: the person decides here whether the setup lets this user start
+    // the root helper without a password from then on (Gaming Mode cannot
+    // ask), before the system's password window asks; no answer, no grant
+    // (pvpn-platform helper/install.rs). The window asks for the steps again
+    // before every connect of the AppImage, so the question comes back in the
+    // same run after "Remove system files". Nowhere else.
     #[cfg(desktop)]
-    if pvpn_platform::helper::install::gaming_notice_pending() {
+    if pvpn_platform::helper::install::gaming_question_pending() {
         steps.push("gamingMode");
     }
     #[cfg(target_os = "macos")]
@@ -4265,15 +4270,23 @@ fn bundle_path() -> Option<std::path::PathBuf> {
         .then(|| bundle.to_path_buf())
 }
 
-async fn run_onboarding(step: &str) -> Result<(), AppError> {
+async fn run_onboarding(step: &str, choice: Option<&str>) -> Result<(), AppError> {
+    #[cfg(not(desktop))]
+    let _ = choice;
     match step {
         "dataNotice" => record_data_notice(),
-        // Read in this run; the device itself records the choice once the
-        // setup has run, so nothing is written here.
+        // Kept for this run; the next setup writes it on the device, which
+        // is where it is kept from then on.
         #[cfg(desktop)]
         "gamingMode" => {
-            pvpn_platform::helper::install::acknowledge_gaming_notice();
-            logger::log("info", "app", "Gaming Mode notice read");
+            use pvpn_platform::helper::install::{choose_gaming_mode, GamingChoice};
+            let (choice, said) = match choice {
+                Some("allow") => (GamingChoice::Allow, "Gaming Mode: allowed without a password"),
+                Some("decline") => (GamingChoice::Decline, "Gaming Mode: only with a password"),
+                _ => return Err(AppError::new(ErrorCode::Unknown)),
+            };
+            choose_gaming_mode(choice);
+            logger::log("info", "app", said);
             Ok(())
         }
         #[cfg(target_os = "macos")]

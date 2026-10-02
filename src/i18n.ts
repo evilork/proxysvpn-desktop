@@ -144,10 +144,14 @@ const ru = {
   // URL scheme (guideline 2.5.1).
   "ob.ios.where":
     "Разрешение можно дать и позже: Настройки → Основные → VPN и управление устройством.",
-  "ob.gaming.title": "Игровой режим без пароля",
+  "ob.gaming.title": "Игровой режим без пароля?",
   "ob.gaming.body":
-    "При первом подключении система один раз спросит пароль пользователя deck, и ProxysVPN скопирует свой помощник в /home/.proxysvpn. После этого ProxysVPN сможет подключаться в игровом режиме без пароля: это разрешение останется на устройстве. Убрать его можно в «Ещё» → «Удалить системные файлы».",
-  "ob.gaming.action": "Понятно, продолжить",
+    "В игровом режиме системе негде спросить пароль. Если разрешить, при первом подключении система один раз спросит пароль пользователя deck, ProxysVPN скопирует свой помощник в /home/.proxysvpn и дальше сможет подключаться в игровом режиме без пароля. Это разрешение останется на устройстве, пока его не убрать в «Ещё» → «Удалить системные файлы».",
+  "ob.gaming.declineBody":
+    "«Только с паролем»: пароль будут спрашивать при подключении после каждого запуска приложения, а в игровом режиме подключиться не получится.",
+  "ob.gaming.allow": "Разрешить игровой режим без пароля",
+  "ob.gaming.decline": "Только с паролем",
+  "ob.gaming.failed": "Ответ не сохранился. Выберите ещё раз",
   "ob.waiting": "Ждём ответа системы…",
   "ob.denied": "Разрешение не получено. Без него включить не получится",
   "ob.showWhere": "Показать, где нажать",
@@ -754,10 +758,14 @@ const en: Partial<Record<MsgKey, string>> = {
     "The system will ask once and request Face ID, Touch ID or your passcode. It will not ask again.",
   "ob.ios.action": "Allow",
   "ob.ios.where": "You can also allow it later: Settings → General → VPN & Device Management.",
-  "ob.gaming.title": "Gaming Mode without a password",
+  "ob.gaming.title": "Gaming Mode without a password?",
   "ob.gaming.body":
-    "On the first connect the system asks for the deck user's password once, and ProxysVPN copies its helper into /home/.proxysvpn. After that ProxysVPN can connect in Gaming Mode without a password: that permission stays on this device. You can remove it in More → Remove system files.",
-  "ob.gaming.action": "Got it, continue",
+    "Gaming Mode has nowhere to ask for a password. If you allow it, the system asks for the deck user's password once on the first connect, ProxysVPN copies its helper into /home/.proxysvpn, and from then on it can connect in Gaming Mode without a password. That permission stays on this device until you remove it in More → Remove system files.",
+  "ob.gaming.declineBody":
+    "“Only with a password”: the password is asked when you connect after every start of the app, and Gaming Mode cannot connect.",
+  "ob.gaming.allow": "Allow Gaming Mode without a password",
+  "ob.gaming.decline": "Only with a password",
+  "ob.gaming.failed": "The answer was not kept. Choose again",
   "ob.waiting": "Waiting for the system…",
   "ob.denied": "Permission was not granted. Without it we cannot turn protection on",
   "ob.showWhere": "Show me where to tap",

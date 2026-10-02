@@ -295,7 +295,28 @@ export default function App() {
     setState({ phase: "failed", error: toAppError(err) });
   }, []);
 
+  // A connect that waited for the onboarding steps it found, to run once
+  // they are done.
+  const connectAfterOnboarding = useRef(false);
+
   const connect = useCallback(async () => {
+    // The Linux AppImage: the core may have a question again that it did
+    // not have at start. "Remove system files" forgets the Gaming Mode
+    // answer, and the next connect's setup grants nothing without one, so
+    // the screen comes before that setup rather than after a restart.
+    if (info?.systemFiles) {
+      try {
+        const fresh = await bridge.onboarding();
+        if (fresh.steps.length > 0) {
+          connectAfterOnboarding.current = true;
+          setOnboarding(fresh.steps);
+          return;
+        }
+      } catch {
+        // Not knowing is no reason to stay off: without an answer the core
+        // grants nothing (pvpn-platform helper/install.rs).
+      }
+    }
     setBusy(true);
     try {
       await bridge.connect();
@@ -306,7 +327,7 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  }, [settleAfterRejection]);
+  }, [info?.systemFiles, settleAfterRejection]);
 
   const disconnect = useCallback(async () => {
     setBusy(true);
@@ -450,6 +471,10 @@ export default function App() {
           onDone={() => {
             setOnboarding([]);
             void refreshSubState();
+            if (connectAfterOnboarding.current) {
+              connectAfterOnboarding.current = false;
+              void connect();
+            }
           }}
         />
       );

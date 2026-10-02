@@ -80,15 +80,19 @@
 //! (Steam starts the app without a terminal, so the app starts pkexec with
 //! `--disable-internal-agent` and it does not try a terminal prompt first:
 //! `privilege::PKEXEC_NO_TEXT_AGENT`).
-//! On SteamOS only (`ID=steamos` in /etc/os-release), the setup — made in
-//! Desktop Mode, behind the password — also writes
+//! On SteamOS only (`ID=steamos` in /etc/os-release), the app first asks on a
+//! screen of its own (`gamingMode` in onboarding) whether Gaming Mode may
+//! connect without a password, and the setup — made in Desktop Mode, behind
+//! the password — writes that answer down: for "allow"
 //!
 //! ```text
 //! /home/.proxysvpn/gaming-mode-user          root:root 0644, one user name
 //! ```
 //!
-//! naming the user who authorized it, and every start of the installed helper
-//! keeps one polkit rule in step with that record ([`sync_rule`]):
+//! naming the user who typed the password, for "only with a password" the
+//! "no", [`GAMING_OFF`], and with no answer in this run of the app nothing at
+//! all ([`Gaming`]). Every start of the installed helper keeps one polkit rule
+//! in step with the record ([`sync_rule`]):
 //!
 //! ```text
 //! /etc/polkit-1/rules.d/49-proxysvpn.rules   root:root 0644
@@ -128,12 +132,14 @@
 //! it) is repaired by the next start in Desktop Mode instead of leaving Gaming
 //! Mode broken with nothing to say why.
 //!
-//! The choice is kept in a file of its own, never read from the folder's age:
-//! the setup writes the record only when it finds neither the record nor
-//! [`GAMING_OFF`], the explicit "no". So a first setup cut short after it made
-//! the folder still records the user when it is run again, and switching the
+//! The choice is kept in a file of its own, never read from the folder's age,
+//! and only ever written from the person's answer on that screen: the setup
+//! writes the record or the "no" only when it finds neither
+//! ([`gaming_decided`]). So a first setup cut short after it made the
+//! folder still writes the answer when it is run again, and switching the
 //! grant off (writing [`GAMING_OFF`], docs/STEAMDECK.md) holds through app
-//! updates, until /home/.proxysvpn is removed.
+//! updates, until /home/.proxysvpn is removed — which "Remove system files"
+//! does, and then the screen asks again before the next setup.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 // Reason for the allow: only the Linux GUI and helper call into this, but the
 // rules and the setup script are tested on the developer's Mac as well — the
@@ -157,9 +163,10 @@ pub const GAMING_RECORD: &str = "gaming-mode-user";
 /// "no" that keeps a later setup from writing [`GAMING_RECORD`] again. Its
 /// presence is all it says.
 pub const GAMING_OFF: &str = "gaming-mode-off";
-/// The setup's fifth argument on SteamOS: write the record if nothing was
-/// decided yet.
-pub const GAMING_FLAG: &str = "gaming-mode";
+/// The setup's fifth argument on SteamOS when it writes no answer: one is on
+/// the device already, or the person has not given one in this run. For an
+/// answer it is the file to write, [`GAMING_RECORD`] or [`GAMING_OFF`].
+pub const GAMING_KEEP: &str = "keep";
 /// The polkit rule the installed helper keeps in step with the record. 49, so
 /// it is read before the distribution's 50-default.rules.
 pub const POLKIT_RULE: &str = "/etc/polkit-1/rules.d/49-proxysvpn.rules";
@@ -192,18 +199,71 @@ pub const EXIT_COPY: i32 = 74;
 /// Debian, Fedora, Arch; the tests run it as written (macOS gets a stand-in).
 pub const STAGED_OPEN: &str = r#"dd if="$src" of="$tmp" bs=1048576 count=256 iflag=nofollow,nonblock status=none"#;
 
-/// What the setup does about Gaming Mode, as the GUI found the device. Only
-/// the words the password window shows depend on it ([`setup_script`],
-/// [`setup_args`]); the script itself decides from the device.
+/// What the setup does about Gaming Mode: the device as the GUI found it,
+/// and the person's answer on the app's screen in this run ([`gaming_for`]).
+/// The script writes an answer only where the device holds none yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Gaming {
     /// Not SteamOS: no record, no rule.
     Off,
     /// SteamOS, and the record or the "no" is already there: kept as it is.
     Kept,
-    /// SteamOS, and nothing was decided yet: this setup writes the record, so
-    /// from then on this user starts the helper without a password.
+    /// SteamOS, nothing decided on the device, and no answer in this run (the
+    /// screen was not shown, or the connect did not come from the window):
+    /// nothing is written, so nothing is granted. The screen asks again.
+    Unasked,
+    /// SteamOS, nothing decided yet, and the person allowed it: this setup
+    /// writes the record, so from then on this user starts the helper
+    /// without a password.
     Granted,
+    /// SteamOS, nothing decided yet, and the person chose the password every
+    /// time: this setup writes the "no".
+    Declined,
+}
+
+/// The person's answer on the app's Gaming Mode screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GamingChoice {
+    /// "Allow Gaming Mode without a password".
+    Allow,
+    /// "Only with a password".
+    Decline,
+}
+
+/// The answer given in this run of the app, until "Remove system files"
+/// clears it. Not kept on disk by the GUI: the device keeps it, in
+/// [`GAMING_RECORD`] or [`GAMING_OFF`], once a setup has written it.
+#[derive(Debug, Default)]
+pub struct GamingChoiceCell(std::sync::atomic::AtomicU8);
+
+impl GamingChoiceCell {
+    const NONE: u8 = 0;
+    const ALLOW: u8 = 1;
+    const DECLINE: u8 = 2;
+
+    pub const fn new() -> Self {
+        Self(std::sync::atomic::AtomicU8::new(Self::NONE))
+    }
+
+    pub fn get(&self) -> Option<GamingChoice> {
+        match self.0.load(std::sync::atomic::Ordering::Relaxed) {
+            Self::ALLOW => Some(GamingChoice::Allow),
+            Self::DECLINE => Some(GamingChoice::Decline),
+            _ => None,
+        }
+    }
+
+    pub fn set(&self, choice: GamingChoice) {
+        let value = match choice {
+            GamingChoice::Allow => Self::ALLOW,
+            GamingChoice::Decline => Self::DECLINE,
+        };
+        self.0.store(value, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn clear(&self) {
+        self.0.store(Self::NONE, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 // ── What the password window says ─────────────────────────────────────────
@@ -241,7 +301,9 @@ pub const DIALOG_TAIL_GRANT: &str = "so Gaming Mode then needs no password";
 /// resolved to the physical folder, so `/var/home/.proxysvpn` where `/home`
 /// is a link), `$2` the staging
 /// folder, `$3` and `$4` the SHA-256 of the helper and of tun2socks as the GUI
-/// read them in its mount, `$5` [`GAMING_FLAG`] on SteamOS and `-` elsewhere,
+/// read them in its mount, `$5` on SteamOS the answer to write
+/// ([`GAMING_RECORD`] or [`GAMING_OFF`]) or [`GAMING_KEEP`], and `-`
+/// elsewhere, which removes a record ([`Gaming`]),
 /// `$6` the end of what the password window shows ([`DIALOG_TAIL`]), never
 /// read. The user the record names is pkexec's `PKEXEC_UID`, the person who
 /// typed the password, never an argument. Nothing in it reads stdin and
@@ -274,14 +336,23 @@ for dir in "$dest" "$dest/bin"; do
     owned "$dir" "$me" || { say "$dir is not a folder only uid $me can change"; exit 73; }
 done
 decided() { [ -e "$dest/$1" ] || [ -L "$dest/$1" ]; }
-if [ "$gaming" != gaming-mode ]; then
-    rm -f -- "$dest/gaming-mode-user"
-elif ! decided gaming-mode-user && ! decided gaming-mode-off; then
-    user=$(id -nu "$uid")
-    printf '%s\n' "$user" > "$dest/.gaming-mode-user.new"
-    chmod 0644 "$dest/.gaming-mode-user.new"
-    mv -f -- "$dest/.gaming-mode-user.new" "$dest/gaming-mode-user"
-fi
+case $gaming in
+gaming-mode-user|gaming-mode-off)
+    if ! decided gaming-mode-user && ! decided gaming-mode-off; then
+        new=$dest/.$gaming.new
+        if [ "$gaming" = gaming-mode-user ]; then
+            user=$(id -nu "$uid")
+            printf '%s\n' "$user" > "$new"
+        else
+            : > "$new"
+        fi
+        chmod 0644 "$new"
+        mv -f -- "$new" "$dest/$gaming"
+    fi
+    ;;
+keep) ;;
+*) rm -f -- "$dest/gaming-mode-user" ;;
+esac
 take() {
     src=$staged/$1 tmp=$dest/bin/.$1.new
     rm -f -- "$tmp"
@@ -466,7 +537,12 @@ pub fn setup_args(
         staged.as_os_str().to_os_string(),
         OsString::from(helper_sum),
         OsString::from(engine_sum),
-        OsString::from(if gaming == Gaming::Off { "-" } else { GAMING_FLAG }),
+        OsString::from(match gaming {
+            Gaming::Off => "-",
+            Gaming::Kept | Gaming::Unasked => GAMING_KEEP,
+            Gaming::Granted => GAMING_RECORD,
+            Gaming::Declined => GAMING_OFF,
+        }),
         OsString::from(if gaming == Gaming::Granted { DIALOG_TAIL_GRANT } else { DIALOG_TAIL }),
     ]
 }
@@ -686,15 +762,37 @@ pub fn gaming_decided(install_dir: &Path) -> bool {
         .any(|name| node_facts(&install_dir.join(name)).is_some())
 }
 
-/// What the setup does about Gaming Mode on this device ([`Gaming`]).
+/// What the setup does about Gaming Mode on this device, given the person's
+/// answer in this run ([`Gaming`]). Nothing is granted without
+/// [`GamingChoice::Allow`].
 #[cfg(unix)]
-pub fn gaming_for(steamos: bool, install_dir: &Path) -> Gaming {
+pub fn gaming_for(steamos: bool, install_dir: &Path, choice: Option<GamingChoice>) -> Gaming {
     if !steamos {
         Gaming::Off
     } else if gaming_decided(install_dir) {
         Gaming::Kept
     } else {
-        Gaming::Granted
+        match choice {
+            Some(GamingChoice::Allow) => Gaming::Granted,
+            Some(GamingChoice::Decline) => Gaming::Declined,
+            None => Gaming::Unasked,
+        }
+    }
+}
+
+/// Must the window ask about Gaming Mode before the next setup? On the
+/// SteamOS AppImage, while nothing is decided on the device and the person
+/// has not answered in this run. Never anywhere else.
+pub fn gaming_question_due(steamos: bool, launch: Launch, decided: bool, choice: Option<GamingChoice>) -> bool {
+    steamos && launch == Launch::AppImage && !decided && choice.is_none()
+}
+
+/// After "Remove system files": once the files are gone nothing is decided
+/// any more, so the answer of this run is forgotten too, and the screen asks
+/// again before the next setup. A removal that failed changes nothing.
+pub fn settle_removal(outcome: &Result<(), RemoveFailure>, choice: &GamingChoiceCell) {
+    if outcome.is_ok() {
+        choice.clear();
     }
 }
 
@@ -970,22 +1068,24 @@ pub fn physical_install_dir(install_dir: &Path) -> PathBuf {
         .join(name)
 }
 
-/// The person read the app's screen about Gaming Mode in this run of the
-/// app (`gamingMode` in onboarding). Not kept on disk: the screen comes back
-/// at the next start for as long as nothing was decided on the device.
-static GAMING_NOTICE_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The person's answer on the app's Gaming Mode screen (`gamingMode` in
+/// onboarding) in this run of the app. The screen comes back at the next
+/// start for as long as nothing is decided on the device.
+static GAMING_CHOICE: GamingChoiceCell = GamingChoiceCell::new();
 
-/// Must the window explain, before the first setup, that it will let this
-/// user start the helper without a password? On the SteamOS AppImage, while
-/// nothing was decided on the device ([`gaming_decided`]) and the screen was
-/// not read in this run. Never anywhere else.
-pub fn gaming_notice_pending() -> bool {
+/// Must the window ask about Gaming Mode before the next setup
+/// ([`gaming_question_due`] for this process and this device)? The window
+/// asks the core again before every connect of the AppImage, so an answer
+/// that "Remove system files" cleared is asked for again in the same run.
+pub fn gaming_question_pending() -> bool {
     #[cfg(target_os = "linux")]
     {
-        !GAMING_NOTICE_SEEN.load(std::sync::atomic::Ordering::Relaxed)
-            && running_on_steamos()
-            && this_launch() == Launch::AppImage
-            && !gaming_decided(&physical_install_dir(Path::new(INSTALL_DIR)))
+        gaming_question_due(
+            running_on_steamos(),
+            this_launch(),
+            gaming_decided(&physical_install_dir(Path::new(INSTALL_DIR))),
+            GAMING_CHOICE.get(),
+        )
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -993,9 +1093,9 @@ pub fn gaming_notice_pending() -> bool {
     }
 }
 
-/// "Continue" on that screen.
-pub fn acknowledge_gaming_notice() {
-    GAMING_NOTICE_SEEN.store(true, std::sync::atomic::Ordering::Relaxed);
+/// The answer on that screen, for the next setup to write down.
+pub fn choose_gaming_mode(choice: GamingChoice) {
+    GAMING_CHOICE.set(choice);
 }
 
 /// Does More offer "Remove system files"? On the Linux AppImage only: the
@@ -1062,10 +1162,10 @@ pub async fn remove_system_files() -> Result<(), RemoveFailure> {
     let outcome = removal_outcome(status.code(), &stderr, running_on_steamos());
     if outcome.is_ok() {
         crate::log::info("helper", "AppImage: removed /home/.proxysvpn and the Gaming Mode rule");
-        // Nothing is decided on the device any more: before the next setup
-        // grants Gaming Mode again, the window says so again.
-        GAMING_NOTICE_SEEN.store(false, std::sync::atomic::Ordering::Relaxed);
     }
+    // Nothing is decided on the device any more: no setup writes an answer
+    // until the window has asked again.
+    settle_removal(&outcome, &GAMING_CHOICE);
     outcome
 }
 
@@ -1174,8 +1274,10 @@ fn inspect(install_dir: &Path, wants: &[(&'static str, &str)]) -> (Installed, Pa
 /// current, else the setup script with freshly staged files.
 ///
 /// `own_exe` is the GUI executable inside the mount; the helper and tun2socks
-/// sit beside it in the AppImage's `usr/bin`. `steamos` asks the setup to
-/// write the Gaming Mode record if nothing was decided yet ([`Gaming`]).
+/// sit beside it in the AppImage's `usr/bin`. On `steamos` the setup writes
+/// the person's Gaming Mode answer of this run where the device holds none
+/// ([`gaming_for`]); a current copy is set up again for that alone, since
+/// only the setup runs as root before the helper does.
 #[cfg(target_os = "linux")]
 pub fn plan_appimage_spawn(own_exe: &Path, steamos: bool) -> Result<SpawnPlan, crate::privilege::HelperSetupFailed> {
     use crate::privilege::HelperSetupFailed as Fail;
@@ -1191,16 +1293,29 @@ pub fn plan_appimage_spawn(own_exe: &Path, steamos: bool) -> Result<SpawnPlan, c
     let engine_sum = sha256_file(&engine).map_err(|e| Fail(format!("{}: {e}", engine.display())))?;
 
     let (state, install_dir) = inspect(Path::new(INSTALL_DIR), &[(HELPER_BIN, &helper_sum), (ENGINE_BIN, &engine_sum)]);
+    let gaming = gaming_for(steamos, &install_dir, GAMING_CHOICE.get());
+    let answer_to_write = matches!(gaming, Gaming::Granted | Gaming::Declined);
     match state {
-        Installed::Current => Ok(SpawnPlan {
+        Installed::Current if !answer_to_write => Ok(SpawnPlan {
             program: installed_helper(&install_dir),
             args: vec![OsString::from(super::HELPER_FLAG)],
             staged: None,
             setup: false,
         }),
-        Installed::Missing | Installed::Stale(_) => {
-            if let Installed::Stale(reason) = &state {
-                crate::log::info("helper", &format!("the installed helper is out of date ({reason}); copying it again"));
+        Installed::Current | Installed::Missing | Installed::Stale(_) => {
+            match &state {
+                Installed::Stale(reason) => crate::log::info(
+                    "helper",
+                    &format!("the installed helper is out of date ({reason}); copying it again"),
+                ),
+                Installed::Current => crate::log::info(
+                    "helper",
+                    "the Gaming Mode answer is not on the device yet; running the setup to write it",
+                ),
+                _ => {}
+            }
+            if gaming == Gaming::Unasked {
+                crate::log::info("helper", "Gaming Mode: no answer in this run, so the setup grants nothing");
             }
             let staged = staging_dir().map_err(|e| Fail(format!("no folder to stage the helper in: {e:#}")))?;
             stage(&staged, &helper, &engine).map_err(|e| {
@@ -1209,7 +1324,7 @@ pub fn plan_appimage_spawn(own_exe: &Path, steamos: bool) -> Result<SpawnPlan, c
             })?;
             Ok(SpawnPlan {
                 program: PathBuf::from(SHELL),
-                args: setup_args(&install_dir, &staged, &helper_sum, &engine_sum, gaming_for(steamos, &install_dir)),
+                args: setup_args(&install_dir, &staged, &helper_sum, &engine_sum, gaming),
                 staged: Some(staged),
                 setup: true,
             })
@@ -1375,16 +1490,19 @@ mod tests {
         assert_eq!(text[1], setup_script(Gaming::Granted));
         assert_eq!(
             &text[2..],
-            [SETUP_NAME, INSTALL_DIR, "/run/user/1000/s", H, E, GAMING_FLAG, DIALOG_TAIL_GRANT]
+            [SETUP_NAME, INSTALL_DIR, "/run/user/1000/s", H, E, GAMING_RECORD, DIALOG_TAIL_GRANT]
         );
-        let kept = setup_args(Path::new(INSTALL_DIR), Path::new("/s"), H, E, Gaming::Kept);
-        let kept: Vec<String> = kept.iter().map(|a| a.to_string_lossy().into_owned()).collect();
-        assert_eq!(&kept[7..], [GAMING_FLAG, DIALOG_TAIL]);
-        let off = setup_args(Path::new(INSTALL_DIR), Path::new("/s"), H, E, Gaming::Off);
-        let off: Vec<String> = off.iter().map(|a| a.to_string_lossy().into_owned()).collect();
-        assert_eq!(&off[7..], ["-", DIALOG_TAIL]);
-        // One body for all three; only the comment on the first line differs.
-        for gaming in [Gaming::Off, Gaming::Kept, Gaming::Granted] {
+        let tail = |gaming| -> Vec<String> {
+            let args = setup_args(Path::new(INSTALL_DIR), Path::new("/s"), H, E, gaming);
+            args[7..].iter().map(|a| a.to_string_lossy().into_owned()).collect()
+        };
+        assert_eq!(tail(Gaming::Kept), [GAMING_KEEP, DIALOG_TAIL]);
+        // No answer in this run: nothing to write, so nothing is granted.
+        assert_eq!(tail(Gaming::Unasked), [GAMING_KEEP, DIALOG_TAIL]);
+        assert_eq!(tail(Gaming::Declined), [GAMING_OFF, DIALOG_TAIL]);
+        assert_eq!(tail(Gaming::Off), ["-", DIALOG_TAIL]);
+        // One body for all of them; only the comment on the first line differs.
+        for gaming in [Gaming::Off, Gaming::Kept, Gaming::Unasked, Gaming::Granted, Gaming::Declined] {
             let script = setup_script(gaming);
             assert!(script.starts_with("# ProxysVPN sets up its VPN helper as root"), "{gaming:?}");
             assert_eq!(script.split_once('\n').map(|(_, body)| body), Some(SETUP_BODY));
@@ -1520,8 +1638,9 @@ mod tests {
             "/bin/sh -c # ProxysVPN sets up its VPN ... so Gaming Mode then needs no password"
         );
         let plain = "/bin/sh -c # ProxysVPN sets up its VPN ... helper as root and starts the tunnel.";
-        assert_eq!(window(Gaming::Kept), plain);
-        assert_eq!(window(Gaming::Off), plain);
+        for gaming in [Gaming::Kept, Gaming::Unasked, Gaming::Declined, Gaming::Off] {
+            assert_eq!(window(gaming), plain, "{gaming:?} grants nothing");
+        }
         for text in [SETUP_HEAD, SETUP_HEAD_GRANT, DIALOG_TAIL, DIALOG_TAIL_GRANT] {
             assert!(text.is_ascii(), "pkexec cuts at bytes: {text}");
         }
@@ -1556,6 +1675,35 @@ mod tests {
         let shell = "proxysvpn-remove: line 3: rm: Read-only file system\n";
         assert!(matches!(removal_outcome(Some(127), shell, false), Err(RemoveFailure::Failed(_))));
         assert!(matches!(removal_outcome(None, "", false), Err(RemoveFailure::Failed(_))));
+    }
+
+    /// The window asks about Gaming Mode on the SteamOS AppImage only, and
+    /// only while neither the device nor this run holds an answer.
+    #[test]
+    fn the_gaming_question_is_due_only_without_an_answer() {
+        use GamingChoice::{Allow, Decline};
+        assert!(gaming_question_due(true, Launch::AppImage, false, None));
+        for choice in [Some(Allow), Some(Decline)] {
+            assert!(!gaming_question_due(true, Launch::AppImage, false, choice), "{choice:?}");
+            assert!(!gaming_question_due(true, Launch::AppImage, true, choice), "{choice:?}");
+        }
+        assert!(!gaming_question_due(true, Launch::AppImage, true, None), "decided on the device");
+        assert!(!gaming_question_due(false, Launch::AppImage, false, None), "not SteamOS");
+        assert!(!gaming_question_due(true, Launch::Package, false, None), "not the AppImage");
+
+        let cell = GamingChoiceCell::new();
+        assert_eq!(cell.get(), None);
+        cell.set(Decline);
+        assert_eq!(cell.get(), Some(Decline));
+        cell.set(Allow);
+        assert_eq!(cell.get(), Some(Allow));
+        // A failed removal keeps the answer; one that worked forgets it.
+        for failure in [RemoveFailure::Refused, RemoveFailure::UseDesktopMode, RemoveFailure::Failed("x".into())] {
+            settle_removal(&Err(failure), &cell);
+            assert_eq!(cell.get(), Some(Allow));
+        }
+        settle_removal(&Ok(()), &cell);
+        assert_eq!(cell.get(), None);
     }
 
     /// The tunnel is touched only after the files are gone: a dismissed
@@ -1748,7 +1896,7 @@ close($out) or die "dd: $op{of}: $!\n";
         /// Run the setup exactly as pkexec would, minus root: same shell,
         /// same arguments, a request already waiting on stdin.
         fn run_setup(base: &Path, dest: &Path, staged: &Path, helper_sum: &str, engine_sum: &str) -> Run {
-            run_setup_as(base, dest, staged, helper_sum, engine_sum, false)
+            run_setup_as(base, dest, staged, helper_sum, engine_sum, Gaming::Off)
         }
 
         fn run_setup_as(
@@ -1757,11 +1905,10 @@ close($out) or die "dd: $op{of}: $!\n";
             staged: &Path,
             helper_sum: &str,
             engine_sum: &str,
-            gaming: bool,
+            gaming: Gaming,
         ) -> Run {
             use std::io::Write;
 
-            let gaming = if gaming { Gaming::Kept } else { Gaming::Off };
             let mut child = Command::new(SHELL)
                 .args(setup_args(dest, staged, helper_sum, engine_sum, gaming))
                 .env("PATH", path_with_tools(base))
@@ -2052,47 +2199,141 @@ close($out) or die "dd: $op{of}: $!\n";
             let _ = std::fs::remove_dir_all(&base);
         }
 
-        /// SteamOS: the first setup records who typed the password; a later
-        /// one keeps whatever was decided — the record as it is, or the
-        /// explicit "no" — so switching it off stays a decision; elsewhere
-        /// the record is removed.
+        /// SteamOS, "allow" on the screen: the setup records who typed the
+        /// password; a later one keeps whatever was decided — the record as
+        /// it is, or the explicit "no" — so switching it off stays a
+        /// decision; elsewhere the record is removed.
         #[test]
-        fn the_first_setup_on_steamos_records_its_user_and_later_ones_keep_the_choice() {
+        fn an_allowing_setup_on_steamos_records_its_user_and_later_ones_keep_the_choice() {
             let base = temp("record");
             let (staged, hs, es) = staged_from(&base);
             let dest = base.join(".proxysvpn");
             let record = dest.join(GAMING_RECORD);
 
-            let run = run_setup_as(&base, &dest, &staged, &hs, &es, true);
+            let run = run_setup_as(&base, &dest, &staged, &hs, &es, Gaming::Granted);
             assert_eq!(run.code, Some(0), "{}", run.stderr);
             assert_eq!(std::fs::read_to_string(&record).expect("record"), format!("{}\n", my_name()));
             assert_eq!(std::fs::metadata(&record).expect("meta").mode() & 0o7777, 0o644);
             assert!(parse_gaming_record(&std::fs::read(&record).expect("read")).is_some());
+            assert!(!dest.join(GAMING_OFF).exists());
 
             // Another name in the record (written by hand): kept as it is.
             std::fs::write(&record, "deck\n").expect("record");
-            let update = run_setup_as(&base, &dest, &staged, &hs, &es, true);
+            let update = run_setup_as(&base, &dest, &staged, &hs, &es, Gaming::Kept);
             assert_eq!(update.code, Some(0), "{}", update.stderr);
             assert_eq!(std::fs::read_to_string(&record).expect("record"), "deck\n");
 
             // Switched off as docs/STEAMDECK.md says: the "no", and no record.
+            // Not even a stale "allow" of this run brings it back.
             std::fs::write(dest.join(GAMING_OFF), b"").expect("off");
             std::fs::remove_file(&record).expect("switched off");
-            let update = run_setup_as(&base, &dest, &staged, &hs, &es, true);
-            assert_eq!(update.code, Some(0), "{}", update.stderr);
-            assert!(!record.exists(), "an update does not switch it back on");
-            assert!(dest.join(GAMING_OFF).exists());
+            for gaming in [Gaming::Kept, Gaming::Granted] {
+                let update = run_setup_as(&base, &dest, &staged, &hs, &es, gaming);
+                assert_eq!(update.code, Some(0), "{}", update.stderr);
+                assert!(!record.exists(), "{gaming:?} does not switch it back on");
+                assert!(dest.join(GAMING_OFF).exists());
+            }
 
             std::fs::write(&record, "deck\n").expect("record");
-            let elsewhere = run_setup_as(&base, &dest, &staged, &hs, &es, false);
+            let elsewhere = run_setup_as(&base, &dest, &staged, &hs, &es, Gaming::Off);
             assert_eq!(elsewhere.code, Some(0), "{}", elsewhere.stderr);
             assert!(!record.exists(), "not SteamOS: no record");
             let _ = std::fs::remove_dir_all(&base);
         }
 
+        /// No answer on the screen in this run — a connect that did not come
+        /// from the window, a screen never shown — grants nothing and decides
+        /// nothing: no record, no "no", and the question stays open.
+        #[test]
+        fn without_an_answer_the_setup_grants_nothing() {
+            let base = temp("unasked");
+            let (staged, hs, es) = staged_from(&base);
+            let dest = base.join(".proxysvpn");
+            assert_eq!(gaming_for(true, &dest, None), Gaming::Unasked);
+
+            let run = run_setup_as(&base, &dest, &staged, &hs, &es, gaming_for(true, &dest, None));
+            assert_eq!(run.code, Some(0), "{}", run.stderr);
+            assert!(run.stdout.contains("helper started --helper"), "the tunnel still comes up");
+            assert!(!dest.join(GAMING_RECORD).exists(), "no grant without an answer");
+            assert!(!dest.join(GAMING_OFF).exists(), "and no decision either");
+            assert!(!gaming_decided(&dest));
+            assert!(gaming_question_due(true, Launch::AppImage, gaming_decided(&dest), None));
+
+            // The helper started from it writes no rule.
+            let rules = base.join("rules.d");
+            std::fs::create_dir(&rules).expect("rules.d");
+            let rule = rules.join("49-proxysvpn.rules");
+            assert_eq!(sync_rule(&installed_helper(&dest), &dest, &base, &rule, me()), RuleSync::Unchanged);
+            assert!(!rule.exists());
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        /// "Only with a password": the setup writes the "no", never the
+        /// record, and the helper keeps no rule — one left over is removed.
+        /// A later "allow" in the same run does not overturn it.
+        #[test]
+        fn a_declining_setup_writes_the_no_and_leaves_no_rule() {
+            let base = temp("declined");
+            let (staged, hs, es) = staged_from(&base);
+            let dest = base.join(".proxysvpn");
+            assert_eq!(gaming_for(true, &dest, Some(GamingChoice::Decline)), Gaming::Declined);
+
+            let run = run_setup_as(&base, &dest, &staged, &hs, &es, Gaming::Declined);
+            assert_eq!(run.code, Some(0), "{}", run.stderr);
+            let no = dest.join(GAMING_OFF);
+            assert_eq!(std::fs::read(&no).expect("the no"), b"", "its presence is all it says");
+            assert_eq!(std::fs::metadata(&no).expect("meta").mode() & 0o7777, 0o644);
+            assert!(!dest.join(GAMING_RECORD).exists());
+            assert!(!dest.join(".gaming-mode-off.new").exists());
+
+            let rules = base.join("rules.d");
+            std::fs::create_dir(&rules).expect("rules.d");
+            let rule = rules.join("49-proxysvpn.rules");
+            std::fs::write(&rule, "polkit.addRule(function () { return polkit.Result.YES; });").expect("old rule");
+            assert_eq!(sync_rule(&installed_helper(&dest), &dest, &base, &rule, me()), RuleSync::Removed);
+            assert!(!rule.exists(), "declined: no rule");
+
+            assert_eq!(gaming_for(true, &dest, Some(GamingChoice::Allow)), Gaming::Kept, "decided on the device");
+            let again = run_setup_as(&base, &dest, &staged, &hs, &es, Gaming::Granted);
+            assert_eq!(again.code, Some(0), "{}", again.stderr);
+            assert!(!dest.join(GAMING_RECORD).exists());
+            assert_eq!(sync_rule(&installed_helper(&dest), &dest, &base, &rule, me()), RuleSync::Unchanged);
+            assert!(!rule.exists());
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        /// "Remove system files" takes the answer with the folder: the
+        /// question is due again, and the next setup grants nothing until it
+        /// has been answered again.
+        #[test]
+        fn after_the_removal_the_question_is_asked_again() {
+            let base = temp("ask-again");
+            let (staged, hs, es) = staged_from(&base);
+            let dest = physical_install_dir(&base.join(".proxysvpn"));
+            let choice = GamingChoiceCell::new();
+            choice.set(GamingChoice::Allow);
+
+            let run = run_setup_as(&base, &dest, &staged, &hs, &es, gaming_for(true, &dest, choice.get()));
+            assert_eq!(run.code, Some(0), "{}", run.stderr);
+            assert!(dest.join(GAMING_RECORD).exists());
+            assert!(!gaming_question_due(true, Launch::AppImage, gaming_decided(&dest), choice.get()));
+
+            let run = run_remove(&base, &dest, &base.join("49-proxysvpn.rules"));
+            assert_eq!(run.code, Some(0), "{}", run.stderr);
+            settle_removal(&Ok(()), &choice);
+            assert_eq!(choice.get(), None);
+            assert!(gaming_question_due(true, Launch::AppImage, gaming_decided(&dest), choice.get()), "asked again");
+
+            // A connect before the answer sets up again, without a grant.
+            let run = run_setup_as(&base, &dest, &staged, &hs, &es, gaming_for(true, &dest, choice.get()));
+            assert_eq!(run.code, Some(0), "{}", run.stderr);
+            assert!(!dest.join(GAMING_RECORD).exists(), "the old answer is not reused");
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
         /// A first setup cut short after it made the folder — the password
         /// window's process killed, the Deck switched off — has decided
-        /// nothing yet, so the next one still records the user. The old
+        /// nothing yet, so the next one still writes the answer. The old
         /// script took "the folder exists" for "decided" and lost Gaming
         /// Mode for good here.
         #[test]
@@ -2110,32 +2351,40 @@ close($out) or die "dd: $op{of}: $!\n";
             }
             std::fs::write(dest.join(".gaming-mode-user.new"), b"half").expect("temp");
 
-            let again = run_setup_as(&base, &dest, &staged, &hs, &es, true);
+            let again = run_setup_as(&base, &dest, &staged, &hs, &es, Gaming::Granted);
             assert_eq!(again.code, Some(0), "{}", again.stderr);
             assert_eq!(std::fs::read_to_string(&record).expect("record"), format!("{}\n", my_name()));
             assert!(!dest.join(".gaming-mode-user.new").exists());
             let _ = std::fs::remove_dir_all(&base);
         }
 
-        /// What the window says, and whether the app's own screen comes
-        /// first, follows what is decided on the device: nothing yet is a
-        /// grant; the record or the "no", whatever they hold, is kept.
+        /// What the setup writes, and what the window says, follows the
+        /// device first and the person's answer second: nothing on the
+        /// device yet is the answer, or nothing at all without one; the
+        /// record or the "no", whatever they hold, is kept.
         #[test]
-        fn the_grant_is_announced_only_while_nothing_is_decided() {
+        fn the_answer_is_written_only_while_nothing_is_decided() {
+            use GamingChoice::{Allow, Decline};
             let base = temp("decided");
             let dest = base.join(".proxysvpn");
-            assert_eq!(gaming_for(true, &dest), Gaming::Granted, "no folder yet");
+            assert_eq!(gaming_for(true, &dest, Some(Allow)), Gaming::Granted, "no folder yet");
+            assert_eq!(gaming_for(true, &dest, Some(Decline)), Gaming::Declined);
+            assert_eq!(gaming_for(true, &dest, None), Gaming::Unasked);
             std::fs::create_dir_all(dest.join(BIN_DIR)).expect("bin");
-            assert_eq!(gaming_for(true, &dest), Gaming::Granted, "a folder alone decides nothing");
-            assert_eq!(gaming_for(false, &dest), Gaming::Off);
+            assert_eq!(gaming_for(true, &dest, Some(Allow)), Gaming::Granted, "a folder alone decides nothing");
+            for choice in [None, Some(Allow), Some(Decline)] {
+                assert_eq!(gaming_for(false, &dest, choice), Gaming::Off);
+            }
 
             std::fs::write(dest.join(GAMING_RECORD), "deck\n").expect("record");
-            assert_eq!(gaming_for(true, &dest), Gaming::Kept);
+            for choice in [None, Some(Allow), Some(Decline)] {
+                assert_eq!(gaming_for(true, &dest, choice), Gaming::Kept, "{choice:?}");
+            }
             std::fs::remove_file(dest.join(GAMING_RECORD)).expect("remove");
             std::os::unix::fs::symlink(base.join("nowhere"), dest.join(GAMING_OFF)).expect("link");
             assert!(gaming_decided(&dest), "a dangling \"no\" is still a no");
-            assert_eq!(gaming_for(true, &dest), Gaming::Kept);
-            assert_eq!(gaming_for(false, &dest), Gaming::Off);
+            assert_eq!(gaming_for(true, &dest, Some(Allow)), Gaming::Kept);
+            assert_eq!(gaming_for(false, &dest, Some(Allow)), Gaming::Off);
             let _ = std::fs::remove_dir_all(&base);
         }
 
@@ -2161,7 +2410,7 @@ close($out) or die "dd: $op{of}: $!\n";
             let (staged, hs, es) = staged_from(&base);
             let dest = physical_install_dir(&base.join(".proxysvpn"));
             assert_eq!(dest, base.join(".proxysvpn"));
-            let run = run_setup_as(&base, &dest, &staged, &hs, &es, true);
+            let run = run_setup_as(&base, &dest, &staged, &hs, &es, Gaming::Granted);
             assert_eq!(run.code, Some(0), "{}", run.stderr);
             std::fs::write(dest.join(GAMING_OFF), b"").expect("off");
             let rules = base.join("rules.d");

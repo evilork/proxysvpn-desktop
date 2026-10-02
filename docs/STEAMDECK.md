@@ -59,31 +59,44 @@ Switch to Desktop).
    steps (`STEAMOS_PASSWORD_NEEDED`).
 
 4. **First connect, in Desktop Mode.** Double-click the AppImage. Right after
-   the data notice the app shows a screen of its own, **"Gaming Mode without a
-   password"**: the first connect will ask for the `deck` password once, and
-   from then on ProxysVPN can connect in Gaming Mode without one; the
-   permission stays on the Deck until it is removed in **More → Remove system
-   files**. Press "Got it, continue", sign in with the pair code, press
-   Connect. The system's permission dialog appears once. It is polkit's
-   generic one — the AppImage cannot install a policy file of its own — and
-   pkexec quotes the command it runs, cut to its first 38 and last 37 bytes,
-   so it reads "Authentication is needed to run `/bin/sh -c # ProxysVPN sets
-   up its VPN ... so Gaming Mode then needs no password' as the super user"
-   (on another Linux, or once Gaming Mode was decided: "... helper as root
-   and starts the tunnel."). The command's first line says it in full.
-   Type the `deck` password. That one dialog:
+   the data notice the app asks on a screen of its own, **"Gaming Mode without
+   a password?"**, with two answers:
+
+   * **"Allow Gaming Mode without a password"**: the first connect asks for
+     the `deck` password once, and from then on ProxysVPN can connect in
+     Gaming Mode without one; the permission stays on the Deck until it is
+     removed in **More → Remove system files**;
+   * **"Only with a password"**: the password is asked when you connect after
+     every start of the app, and Gaming Mode cannot connect.
+
+   Nothing is granted without the first answer: a setup that runs before the
+   screen was answered (a connect from the tray menu, say) copies the helper
+   and records nothing, and the screen asks again before the next connect
+   from the window. Answer, sign in with the pair code, press Connect. The
+   system's permission dialog appears once. It is polkit's generic one — the
+   AppImage cannot install a policy file of its own — and pkexec quotes the
+   command it runs, cut to its first 38 and last 37 bytes, so after "allow"
+   it reads "Authentication is needed to run `/bin/sh -c # ProxysVPN sets up
+   its VPN ... so Gaming Mode then needs no password' as the super user"
+   (after "only with a password", on another Linux, or once Gaming Mode was
+   decided: "... helper as root and starts the tunnel."). The command's first
+   line says it in full. Type the `deck` password. That one dialog:
 
    * copies `proxysvpn-helper` and `tun2socks` out of the AppImage into
      `/home/.proxysvpn/bin/`, checking that the copies are byte for byte the
      files in the AppImage (SHA-256, checked by root on its own copy);
-   * records that `deck` may start that helper without a password
-     (`/home/.proxysvpn/gaming-mode-user`, SteamOS only, unless Gaming Mode
-     was already decided on this Deck);
+   * writes the answer down, SteamOS only, unless one is on this Deck
+     already: for "allow" that `deck` may start that helper without a
+     password (`/home/.proxysvpn/gaming-mode-user`), for "only with a
+     password" the "no" (`/home/.proxysvpn/gaming-mode-off`);
    * starts the helper, and the tunnel comes up.
 
-   The helper then writes `/etc/polkit-1/rules.d/49-proxysvpn.rules` from that
-   record. From then on **no password is asked again**, in Desktop Mode or in
-   Gaming Mode, until the app is updated.
+   After "allow" the helper then writes
+   `/etc/polkit-1/rules.d/49-proxysvpn.rules` from that record, and from then
+   on **no password is asked again**, in Desktop Mode or in Gaming Mode, until
+   the app is updated. If the copy is already current when the screen is
+   answered, the next connect runs the setup anyway, once, to write the
+   answer down.
 
 ## Gaming Mode
 
@@ -128,8 +141,8 @@ Mode. The Gaming Mode record is kept.
 | `/home/.proxysvpn/` | root:root 0755 | the folder; `/home` survives SteamOS updates |
 | `/home/.proxysvpn/bin/proxysvpn-helper` | root:root 0755 | the root helper, a copy from the AppImage |
 | `/home/.proxysvpn/bin/tun2socks` | root:root 0755 | the one engine root runs |
-| `/home/.proxysvpn/gaming-mode-user` | root:root 0644 | SteamOS only: the user name the rule is for |
-| `/home/.proxysvpn/gaming-mode-off` | root:root | only if you switched Gaming Mode off: the "no" that keeps the record from coming back |
+| `/home/.proxysvpn/gaming-mode-user` | root:root 0644 | SteamOS only, after "allow": the user name the rule is for |
+| `/home/.proxysvpn/gaming-mode-off` | root:root 0644 | SteamOS only, after "only with a password" or if you switched Gaming Mode off: the "no" that keeps the record from coming back |
 | `/etc/polkit-1/rules.d/49-proxysvpn.rules` | root:root 0644 | SteamOS only: the Gaming Mode rule |
 | `/run/proxysvpn/`, `/var/lib/proxysvpn/` | root, 0700 | the helper's crash-recovery notes, as with the `.deb` |
 
@@ -164,18 +177,21 @@ of its own).
 To switch the Gaming Mode grant off but keep the app, record the "no" and
 remove the record and the rule (the helper rewrites the rule from the record
 at every start, and a setup that finds neither the record nor the "no" writes
-the record again):
+the answer the screen gets next):
 
 ```bash
 sudo sh -c 'touch /home/.proxysvpn/gaming-mode-off && rm -f /home/.proxysvpn/gaming-mode-user /etc/polkit-1/rules.d/49-proxysvpn.rules'
 ```
 
 Every later connect then asks for the password, Gaming Mode cannot connect,
-and an app update does not switch it back on. Only a setup after
-`/home/.proxysvpn` is removed writes the record again. The choice is kept in
-those two files and nowhere else: a first setup that was cut short (the
-power went, the password window was killed) has decided nothing, and the next
-one records the user as the first would have.
+and an app update does not switch it back on. Only after `/home/.proxysvpn`
+is removed — More → Remove system files, which also forgets the answer the
+app holds for its current run — does the screen ask again, and only an
+"allow" there writes the record again. The choice is kept in those two files
+and, until a setup has written it, in the running app's memory, nowhere
+else: a first setup that was cut short (the power went, the password window
+was killed) has decided nothing, and the next one writes the answer as the
+first would have.
 
 ## DNS on SteamOS
 
@@ -303,8 +319,11 @@ tests on Linux):
   file's place without waiting on it (root opens each staged file once, with
   dd's `iflag=nofollow,nonblock`), refuses a staging folder that is not the
   person's alone, refuses folders others can change, records the
-  Gaming Mode user on SteamOS while nothing was decided yet (a first setup cut
-  short included) and keeps an explicit "no"; the polkit rule's text and its
+  Gaming Mode user on SteamOS after "allow" while nothing was decided yet (a
+  first setup cut short included), writes the "no" after "only with a
+  password", writes nothing and grants nothing without an answer, and keeps
+  an explicit "no"; the question coming back after the removal; the polkit
+  rule's text and its
   quoting; the rule kept in step with the record, repaired after deletion,
   withdrawn for an unsafe path or record or for the "no"; SteamOS detection;
   the error codes;
