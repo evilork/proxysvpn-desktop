@@ -61,10 +61,13 @@ connect from one. Now the first connect copies a standalone helper binary
 (`src/bin/proxysvpn-helper.rs`, the same `run_helper` without Tauri) and
 tun2socks into `/home/.proxysvpn/bin`, root-owned, through one pkexec running a
 fixed setup script that checks the copies' SHA-256 before anything runs, and
-later connects run that copy (`helper/install.rs`). On SteamOS the setup also
-lets the person who made it start that one helper without a password, so that
-Gaming Mode, which has no polkit agent, can connect; More → Remove system
-files takes all of it away again (docs/STEAMDECK.md). Everything about the
+later connects run that copy (`helper/install.rs`). On SteamOS, when the
+person answered "allow" on the app's Gaming Mode screen, the setup also lets
+them start that one helper without a password, so that Gaming Mode, which has
+no polkit agent, can connect; "only with a password" records the "no", and
+without an answer nothing is granted. More → Remove system files takes all of
+it away again, and the screen asks again before the next setup
+(docs/STEAMDECK.md). Everything about the
 `.deb` below is unchanged — the same executable, helper arguments and polkit
 action — except that a pkexec the app starts without a terminal, the
 `.deb`'s included, carries pkexec's own `--disable-internal-agent`: without a
