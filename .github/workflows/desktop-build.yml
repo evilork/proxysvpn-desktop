@@ -297,6 +297,18 @@ jobs:
             fi
           done
           readelf -d "$work/squashfs-root/usr/bin/proxysvpn-helper" | grep -E 'NEEDED|RUNPATH|RPATH' || true
+          # The shared libraries linuxdeploy put into the image, and the
+          # Ubuntu packages they came from: THIRD-PARTY-NOTICES.md lists the
+          # LGPL ones (scripts/gen-notices.mjs, APPIMAGE_LIBRARIES) and points
+          # at these packages for their exact source.
+          libs="$(find "$work/squashfs-root/usr/lib" -maxdepth 1 -name '*.so*' -printf '%f\n' | sort)"
+          echo "Libraries in usr/lib:"
+          echo "$libs"
+          echo "Their Ubuntu packages:"
+          for lib in $libs; do
+            dpkg -S "*/$lib" 2>/dev/null | head -n 1 | cut -d: -f1 || true
+          done | sort -u | xargs -r dpkg-query -W \
+            -f='${Package} ${Version} (source ${source:Package} ${source:Version})\n' || true
           rm -rf "$work"
 
       - name: List bundle output with checksums

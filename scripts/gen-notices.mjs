@@ -28,6 +28,11 @@
 //     scripts/sidecars.lock), the GPL-3.0-or-later Go modules linked into
 //     the stock desktop Xray-core and Hysteria, and the Rubik font. Wintun is
 //     not listed here: its own licence file is installed beside wintun.dll.
+//   • The LGPL system libraries the Linux AppImage carries (APPIMAGE_LIBRARIES
+//     below): linuxdeploy copies WebKitGTK, GTK and what they link from the
+//     CI image (Ubuntu 22.04) into the image's usr/lib. They are shared
+//     libraries, loaded at run time and replaceable; the licences screen says
+//     so for every row of kind "library", and THIRD-PARTY-NOTICES.md says how.
 //   • The Go modules inside libXray, when scripts/libxray-notices.json exists
 //     (written by scripts/build-libxray.sh with the Apple engine). Two of them
 //     ARE the engines above: their pinned version, source and our patch go
@@ -185,6 +190,58 @@ const STATIC_COMPONENTS = [
     platforms: ALL_PLATFORMS,
   },
 ];
+
+/**
+ * The LGPL shared libraries in the Linux AppImage's usr/lib: WebKitGTK and
+ * GTK 3, and what they link that linuxdeploy does not leave to the system
+ * (its excludelist keeps glibc, libstdc++, GL, X11, fontconfig, freetype,
+ * harfbuzz, fribidi, libgpg-error and a few more out). Versions are what
+ * Ubuntu 22.04 ships when CI builds the image, so none is pinned here; the
+ * exact source of each is Ubuntu's source package of that version, and the
+ * project's own repository is the `source` below. Licences are the projects'
+ * SPDX expressions as Fedora's packages state them; where a project offers a
+ * choice, the options whose texts are bundled are listed. Permissively
+ * licensed libraries of the image (libxml2, libwebp, pixman, …) are not
+ * listed one by one yet, as with the engines' Go modules.
+ *
+ * Only the AppImage carries them: the .deb depends on the distribution's own
+ * packages instead. The screen has one list per platform, so they are listed
+ * for "linux" and the row says "AppImage only".
+ */
+const APPIMAGE_LIBRARIES = [
+  ["WebKitGTK (libwebkit2gtk-4.1, libjavascriptcoregtk-4.1)", "LGPL-2.1-only AND BSD-2-Clause", "https://webkitgtk.org/releases/"],
+  ["GTK 3 (libgtk-3, libgdk-3)", "LGPL-2.0-or-later", "https://gitlab.gnome.org/GNOME/gtk"],
+  ["GLib (libglib-2.0, libgobject-2.0, libgio-2.0, libgmodule-2.0)", "LGPL-2.1-or-later", "https://gitlab.gnome.org/GNOME/glib"],
+  ["GDK-Pixbuf (libgdk_pixbuf-2.0 and its loaders)", "LGPL-2.1-or-later", "https://gitlab.gnome.org/GNOME/gdk-pixbuf"],
+  ["Pango (libpango-1.0, libpangocairo-1.0, libpangoft2-1.0)", "LGPL-2.0-or-later", "https://gitlab.gnome.org/GNOME/pango"],
+  ["cairo (libcairo, libcairo-gobject)", "LGPL-2.1-only OR MPL-1.1", "https://gitlab.freedesktop.org/cairo/cairo"],
+  ["ATK (libatk-1.0)", "LGPL-2.0-or-later", "https://gitlab.gnome.org/GNOME/atk"],
+  ["AT-SPI (libatspi, libatk-bridge-2.0)", "LGPL-2.1-or-later", "https://gitlab.gnome.org/GNOME/at-spi2-core"],
+  ["libsoup (libsoup-3.0)", "LGPL-2.0-or-later AND LGPL-2.1-or-later", "https://gitlab.gnome.org/GNOME/libsoup"],
+  ["GStreamer (libgstreamer-1.0, the gst-plugins-base and gst-plugins-bad libraries)", "LGPL-2.1-or-later", "https://gitlab.freedesktop.org/gstreamer/gstreamer"],
+  ["librsvg (librsvg-2)", "LGPL-2.1-or-later", "https://gitlab.gnome.org/GNOME/librsvg"],
+  ["libsecret (libsecret-1)", "LGPL-2.1-or-later", "https://gitlab.gnome.org/GNOME/libsecret"],
+  ["Enchant (libenchant-2)", "LGPL-2.0-or-later", "https://github.com/rrthomas/enchant"],
+  // GPL-2.0-only OR LGPL-2.1-or-later OR MPL-1.1: either of the last two
+  // covers the copy in the image.
+  ["Hyphen (libhyphen)", "LGPL-2.1-or-later OR MPL-1.1", "https://github.com/hunspell/hyphen"],
+  ["libmanette (libmanette-0.2)", "LGPL-2.1-or-later", "https://gitlab.gnome.org/GNOME/libmanette"],
+  ["libgudev (libgudev-1.0)", "LGPL-2.1-or-later", "https://gitlab.gnome.org/GNOME/libgudev"],
+  ["libseccomp", "LGPL-2.1-only", "https://github.com/seccomp/libseccomp"],
+  ["libtasn1", "LGPL-2.1-or-later", "https://gitlab.com/gnutls/libtasn1"],
+  ["Libgcrypt (libgcrypt)", "LGPL-2.1-or-later", "https://gnupg.org/software/libgcrypt/"],
+  ["libsystemd", "LGPL-2.1-or-later", "https://github.com/systemd/systemd"],
+  ["libthai", "LGPL-2.1-or-later", "https://github.com/tlwg/libthai"],
+  ["libdatrie", "LGPL-2.1-or-later", "https://github.com/tlwg/libdatrie"],
+  ["util-linux (libmount, libblkid)", "LGPL-2.1-or-later", "https://github.com/util-linux/util-linux"],
+].map(([name, license, source]) => ({
+  kind: "library",
+  name,
+  version: null,
+  license,
+  source,
+  platforms: ["linux"],
+}));
 
 /** A Set: a crate both builds link would otherwise be reported twice. */
 const problems = new Set();
@@ -583,7 +640,7 @@ function libxrayComponents(notices) {
  */
 function staticComponents(engines) {
   const out = [];
-  for (const component of STATIC_COMPONENTS) {
+  for (const component of [...STATIC_COMPONENTS, ...APPIMAGE_LIBRARIES]) {
     const license = readLicense(component.license, component.name);
     if (!license) continue;
     const pinned = component.platforms.includes("ios") ? engines.get(component.name) : undefined;
@@ -638,7 +695,7 @@ function build() {
     for (const line of problems) console.error(`  - ${line}`);
     process.exit(1);
   }
-  const kindOrder = ["engine", "font", "cargo", "go", "npm"];
+  const kindOrder = ["engine", "font", "library", "cargo", "go", "npm"];
   components.sort(
     (a, b) =>
       kindOrder.indexOf(a.kind) - kindOrder.indexOf(b.kind) ||
