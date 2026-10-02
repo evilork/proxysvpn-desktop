@@ -306,10 +306,14 @@ export default function App() {
     // the screen comes before that setup rather than after a restart.
     if (info?.systemFiles) {
       try {
+        // Only the Gaming Mode question is asked again here. The data notice
+        // lets people on when its record cannot be written (a full disk), so
+        // it would come back on every connect and never let one through.
         const fresh = await bridge.onboarding();
-        if (fresh.steps.length > 0) {
+        const gaming = fresh.steps.filter((step) => step === "gamingMode");
+        if (gaming.length > 0) {
           connectAfterOnboarding.current = true;
-          setOnboarding(fresh.steps);
+          setOnboarding(gaming);
           return;
         }
       } catch {
