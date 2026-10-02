@@ -121,6 +121,7 @@ Mode. The Gaming Mode record is kept.
 | `/home/.proxysvpn/bin/proxysvpn-helper` | root:root 0755 | the root helper, a copy from the AppImage |
 | `/home/.proxysvpn/bin/tun2socks` | root:root 0755 | the one engine root runs |
 | `/home/.proxysvpn/gaming-mode-user` | root:root 0644 | SteamOS only: the user name the rule is for |
+| `/home/.proxysvpn/gaming-mode-off` | root:root | only if you switched Gaming Mode off: the "no" that keeps the record from coming back |
 | `/etc/polkit-1/rules.d/49-proxysvpn.rules` | root:root 0644 | SteamOS only: the Gaming Mode rule |
 | `/run/proxysvpn/`, `/var/lib/proxysvpn/` | root, 0700 | the helper's crash-recovery notes, as with the `.deb` |
 
@@ -152,16 +153,21 @@ tun2socks anyway), a sudoers drop-in (the same grant through a second
 mechanism), and a root service running all the time (more surface, and a design
 of its own).
 
-To switch the Gaming Mode grant off but keep the app (the helper rewrites the
-rule from the record at every start, so remove both):
+To switch the Gaming Mode grant off but keep the app, record the "no" and
+remove the record and the rule (the helper rewrites the rule from the record
+at every start, and a setup that finds neither the record nor the "no" writes
+the record again):
 
 ```bash
-sudo rm /home/.proxysvpn/gaming-mode-user /etc/polkit-1/rules.d/49-proxysvpn.rules
+sudo sh -c 'touch /home/.proxysvpn/gaming-mode-off && rm -f /home/.proxysvpn/gaming-mode-user /etc/polkit-1/rules.d/49-proxysvpn.rules'
 ```
 
 Every later connect then asks for the password, Gaming Mode cannot connect,
-and an app update does not switch it back on. Only a fresh setup (after
-`/home/.proxysvpn` is removed) writes the record again.
+and an app update does not switch it back on. Only a setup after
+`/home/.proxysvpn` is removed writes the record again. The choice is kept in
+those two files and nowhere else: a first setup that was cut short (the
+power went, the password window was killed) has decided nothing, and the next
+one records the user as the first would have.
 
 ## DNS on SteamOS
 
@@ -257,9 +263,11 @@ tests on Linux):
   `/bin/sh`** as pkexec would run it minus root — it installs both files, hands
   the waiting request to the helper, refuses a swapped or linked staged file
   without leaving it behind, refuses folders others can change, records the
-  Gaming Mode user on the first SteamOS setup only; the polkit rule's text and
-  its quoting; the rule kept in step with the record, repaired after deletion,
-  withdrawn for an unsafe path or record; SteamOS detection; the error codes;
+  Gaming Mode user on SteamOS while nothing was decided yet (a first setup cut
+  short included) and keeps an explicit "no"; the polkit rule's text and its
+  quoting; the rule kept in step with the record, repaired after deletion,
+  withdrawn for an unsafe path or record or for the "no"; SteamOS detection;
+  the error codes;
 * `tauri.linux.conf.json` merged over `tauri.conf.json` is accepted by Tauri's
   own config types.
 

@@ -120,9 +120,14 @@
 //! The rule is written by the helper, not by the setup script, so that one
 //! function renders it and a SteamOS update that resets /etc (it usually keeps
 //! it) is repaired by the next start in Desktop Mode instead of leaving Gaming
-//! Mode broken with nothing to say why. The record is only written by the
-//! first setup (the folder did not exist yet): removing it switches the rule
-//! off for good, through app updates too, until /home/.proxysvpn is removed.
+//! Mode broken with nothing to say why.
+//!
+//! The choice is kept in a file of its own, never read from the folder's age:
+//! the setup writes the record only when it finds neither the record nor
+//! [`GAMING_OFF`], the explicit "no". So a first setup cut short after it made
+//! the folder still records the user when it is run again, and switching the
+//! grant off (writing [`GAMING_OFF`], docs/STEAMDECK.md) holds through app
+//! updates, until /home/.proxysvpn is removed.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 // Reason for the allow: only the Linux GUI and helper call into this, but the
 // rules and the setup script are tested on the developer's Mac as well — the
@@ -142,6 +147,10 @@ pub const ENGINE_BIN: &str = super::proto::SIDECAR_NAME;
 /// The record, in [`INSTALL_DIR`], of the user Gaming Mode may start the
 /// helper for (SteamOS only).
 pub const GAMING_RECORD: &str = "gaming-mode-user";
+/// The record, in [`INSTALL_DIR`], that Gaming Mode was switched off: the
+/// "no" that keeps a later setup from writing [`GAMING_RECORD`] again. Its
+/// presence is all it says.
+pub const GAMING_OFF: &str = "gaming-mode-off";
 /// The setup's fifth argument when the record should be written.
 pub const GAMING_FLAG: &str = "gaming-mode";
 /// The polkit rule the installed helper keeps in step with the record. 49, so
@@ -192,15 +201,14 @@ private() {
 }
 parent=$(dirname -- "$dest")
 private "$parent" || { say "$parent is not a folder only uid $me can change"; exit 73; }
-fresh=yes
-[ ! -e "$dest" ] && [ ! -L "$dest" ] || fresh=no
 for dir in "$dest" "$dest/bin"; do
     [ -e "$dir" ] || [ -L "$dir" ] || mkdir -m 0755 -- "$dir"
     private "$dir" || { say "$dir is not a folder only uid $me can change"; exit 73; }
 done
+decided() { [ -e "$dest/$1" ] || [ -L "$dest/$1" ]; }
 if [ "$gaming" != gaming-mode ]; then
     rm -f -- "$dest/gaming-mode-user"
-elif [ "$fresh" = yes ]; then
+elif ! decided gaming-mode-user && ! decided gaming-mode-off; then
     user=$(id -nu "${PKEXEC_UID:?}")
     printf '%s\n' "$user" > "$dest/.gaming-mode-user.new"
     chmod 0644 "$dest/.gaming-mode-user.new"
@@ -334,8 +342,8 @@ pub fn polkit_rule(user: &str, helper: &Path) -> Option<String> {
 // password window can appear. It allows nothing else.
 //
 // The helper rewrites this file from {INSTALL_DIR}/{GAMING_RECORD}
-// at every start. To withdraw it, remove that record as well as this file, or
-// remove {INSTALL_DIR} entirely.
+// at every start. To withdraw it, create {INSTALL_DIR}/{GAMING_OFF}
+// and remove this file, or remove {INSTALL_DIR} entirely.
 polkit.addRule(function (action, subject) {{
     if (action.id === "org.freedesktop.policykit.exec" &&
         action.lookup("program") === "{helper}" &&
@@ -679,7 +687,13 @@ pub fn sync_rule(exe: &Path, install_dir: &Path, top: &Path, rule: &Path, owner:
         }
     }
 
-    let user = match read_record(&install_dir.join(GAMING_RECORD), owner) {
+    // The explicit "no" outweighs any record: Gaming Mode was switched off.
+    let user = if node_facts(&install_dir.join(GAMING_OFF)).is_some() {
+        Ok(None)
+    } else {
+        read_record(&install_dir.join(GAMING_RECORD), owner)
+    };
+    let user = match user {
         Ok(user) => user,
         Err(reason) => return withdraw(reason),
     };
@@ -1361,8 +1375,9 @@ mod tests {
         }
 
         /// SteamOS: the first setup records who typed the password; a later
-        /// one keeps whatever the record says now, so removing it stays a
-        /// decision; elsewhere the record is removed.
+        /// one keeps whatever was decided — the record as it is, or the
+        /// explicit "no" — so switching it off stays a decision; elsewhere
+        /// the record is removed.
         #[test]
         fn the_first_setup_on_steamos_records_its_user_and_later_ones_keep_the_choice() {
             let base = temp("record");
@@ -1376,15 +1391,51 @@ mod tests {
             assert_eq!(std::fs::metadata(&record).expect("meta").mode() & 0o7777, 0o644);
             assert!(parse_gaming_record(&std::fs::read(&record).expect("read")).is_some());
 
+            // Another name in the record (written by hand): kept as it is.
+            std::fs::write(&record, "deck\n").expect("record");
+            let update = run_setup_as(&base, &dest, &staged, &hs, &es, true);
+            assert_eq!(update.code, Some(0), "{}", update.stderr);
+            assert_eq!(std::fs::read_to_string(&record).expect("record"), "deck\n");
+
+            // Switched off as docs/STEAMDECK.md says: the "no", and no record.
+            std::fs::write(dest.join(GAMING_OFF), b"").expect("off");
             std::fs::remove_file(&record).expect("switched off");
             let update = run_setup_as(&base, &dest, &staged, &hs, &es, true);
             assert_eq!(update.code, Some(0), "{}", update.stderr);
             assert!(!record.exists(), "an update does not switch it back on");
+            assert!(dest.join(GAMING_OFF).exists());
 
             std::fs::write(&record, "deck\n").expect("record");
             let elsewhere = run_setup_as(&base, &dest, &staged, &hs, &es, false);
             assert_eq!(elsewhere.code, Some(0), "{}", elsewhere.stderr);
             assert!(!record.exists(), "not SteamOS: no record");
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        /// A first setup cut short after it made the folder — the password
+        /// window's process killed, the Deck switched off — has decided
+        /// nothing yet, so the next one still records the user. The old
+        /// script took "the folder exists" for "decided" and lost Gaming
+        /// Mode for good here.
+        #[test]
+        fn a_first_setup_cut_short_records_the_user_when_it_runs_again() {
+            let base = temp("interrupted");
+            let (staged, hs, es) = staged_from(&base);
+            let dest = base.join(".proxysvpn");
+            let record = dest.join(GAMING_RECORD);
+
+            // What the script leaves when it stops right after its mkdir, and
+            // a temp record from a stop in the middle of writing it.
+            std::fs::create_dir_all(dest.join(BIN_DIR)).expect("bin");
+            for dir in [dest.clone(), dest.join(BIN_DIR)] {
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+            }
+            std::fs::write(dest.join(".gaming-mode-user.new"), b"half").expect("temp");
+
+            let again = run_setup_as(&base, &dest, &staged, &hs, &es, true);
+            assert_eq!(again.code, Some(0), "{}", again.stderr);
+            assert_eq!(std::fs::read_to_string(&record).expect("record"), format!("{}\n", my_name()));
+            assert!(!dest.join(".gaming-mode-user.new").exists());
             let _ = std::fs::remove_dir_all(&base);
         }
 
@@ -1425,6 +1476,13 @@ mod tests {
             assert_eq!(sync_rule(&helper, &install, &base, &rule, me()), RuleSync::Removed);
             assert!(!rule.exists());
             assert_eq!(sync_rule(&helper, &install, &base, &rule, me()), RuleSync::Unchanged);
+
+            // The explicit "no" outweighs a record that is still there.
+            std::fs::write(install.join(GAMING_RECORD), "deck\n").expect("record");
+            assert_eq!(sync_rule(&helper, &install, &base, &rule, me()), RuleSync::Written("deck".to_string()));
+            std::fs::write(install.join(GAMING_OFF), b"").expect("off");
+            assert_eq!(sync_rule(&helper, &install, &base, &rule, me()), RuleSync::Removed);
+            assert!(!rule.exists());
             let leftovers = std::fs::read_dir(rule.parent().expect("dir")).expect("list").count();
             assert_eq!(leftovers, 0, "no temp file is left in rules.d");
             let _ = std::fs::remove_dir_all(&base);
