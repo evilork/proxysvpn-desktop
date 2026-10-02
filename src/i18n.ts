@@ -144,6 +144,10 @@ const ru = {
   // URL scheme (guideline 2.5.1).
   "ob.ios.where":
     "Разрешение можно дать и позже: Настройки → Основные → VPN и управление устройством.",
+  "ob.gaming.title": "Игровой режим без пароля",
+  "ob.gaming.body":
+    "При первом подключении система один раз спросит пароль пользователя deck, и ProxysVPN скопирует свой помощник в /home/.proxysvpn. После этого ProxysVPN сможет подключаться в игровом режиме без пароля: это разрешение останется на устройстве. Убрать его можно в «Ещё» → «Удалить системные файлы».",
+  "ob.gaming.action": "Понятно, продолжить",
   "ob.waiting": "Ждём ответа системы…",
   "ob.denied": "Разрешение не получено. Без него включить не получится",
   "ob.showWhere": "Показать, где нажать",
@@ -737,6 +741,10 @@ const en: Partial<Record<MsgKey, string>> = {
     "The system will ask once and request Face ID, Touch ID or your passcode. It will not ask again.",
   "ob.ios.action": "Allow",
   "ob.ios.where": "You can also allow it later: Settings → General → VPN & Device Management.",
+  "ob.gaming.title": "Gaming Mode without a password",
+  "ob.gaming.body":
+    "On the first connect the system asks for the deck user's password once, and ProxysVPN copies its helper into /home/.proxysvpn. After that ProxysVPN can connect in Gaming Mode without a password: that permission stays on this device. You can remove it in More → Remove system files.",
+  "ob.gaming.action": "Got it, continue",
   "ob.waiting": "Waiting for the system…",
   "ob.denied": "Permission was not granted. Without it we cannot turn protection on",
   "ob.showWhere": "Show me where to tap",

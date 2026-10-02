@@ -40,7 +40,7 @@
 //! even start on a system that lacks them.
 //!
 //! ── How the copy is made ───────────────────────────────────────────────────
-//! One pkexec, one password window, running a fixed script ([`SETUP_SCRIPT`])
+//! One pkexec, one password window, running a fixed script ([`setup_script`])
 //! under the system's own `/bin/sh`:
 //!
 //! 1. The GUI hashes both files where they are, in its read-only mount, and
@@ -156,7 +156,8 @@ pub const GAMING_RECORD: &str = "gaming-mode-user";
 /// "no" that keeps a later setup from writing [`GAMING_RECORD`] again. Its
 /// presence is all it says.
 pub const GAMING_OFF: &str = "gaming-mode-off";
-/// The setup's fifth argument when the record should be written.
+/// The setup's fifth argument on SteamOS: write the record if nothing was
+/// decided yet.
 pub const GAMING_FLAG: &str = "gaming-mode";
 /// The polkit rule the installed helper keeps in step with the record. 49, so
 /// it is read before the distribution's 50-default.rules.
@@ -181,7 +182,7 @@ pub const EXIT_FILES: i32 = 65;
 /// A copy or a hash could not be made (a full disk).
 pub const EXIT_COPY: i32 = 74;
 
-/// How [`SETUP_SCRIPT`] reads a staged file `$src` into its temp copy `$tmp`:
+/// How [`SETUP_BODY`] reads a staged file `$src` into its temp copy `$tmp`:
 /// the one open root makes of a path the person controls. `nofollow`: a link
 /// in the file's place fails the open (ELOOP) instead of leading root to
 /// /etc/shadow or a device. `nonblock`: a FIFO in its place gives nothing or
@@ -190,24 +191,72 @@ pub const EXIT_COPY: i32 = 74;
 /// Debian, Fedora, Arch; the tests run it as written (macOS gets a stand-in).
 pub const STAGED_OPEN: &str = r#"dd if="$src" of="$tmp" bs=1048576 count=256 iflag=nofollow,nonblock status=none"#;
 
-/// The script root runs, through pkexec, to make the copy and start it.
+/// What the setup does about Gaming Mode, as the GUI found the device. Only
+/// the words the password window shows depend on it ([`setup_script`],
+/// [`setup_args`]); the script itself decides from the device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gaming {
+    /// Not SteamOS: no record, no rule.
+    Off,
+    /// SteamOS, and the record or the "no" is already there: kept as it is.
+    Kept,
+    /// SteamOS, and nothing was decided yet: this setup writes the record, so
+    /// from then on this user starts the helper without a password.
+    Granted,
+}
+
+// ── What the password window says ─────────────────────────────────────────
+// The AppImage cannot install a polkit policy of its own, so pkexec asks with
+// its generic action, and its message is "Authentication is needed to run
+// `$(cmdline_short)' as the super user" (pkexec.c). `cmdline_short` is the
+// command line — `/bin/sh -c <script> <arguments>` joined with spaces — cut,
+// once longer than 80 bytes, to its first 38 bytes, " ... " and its last 37.
+// KDE Plasma's agent, the one in SteamOS's Desktop Mode, shows that message
+// and no other detail of the command. So the script's first line starts with
+// the 27 bytes that follow `/bin/sh -c ` in it, and the last argument, which
+// the script never reads, is the 37 bytes that end it: "/bin/sh -c #
+// ProxysVPN sets up its VPN ... so Gaming Mode then needs no password". The
+// whole first line says it in full for whoever reads the command (the
+// journal, `ps`, an agent that shows it).
+//
+// English and ASCII only: pkexec cuts at byte offsets, and a cut through a
+// Cyrillic letter would hand polkit a message that is not UTF-8. The app's
+// own screen says it first, in the person's language (`gamingMode` in
+// onboarding, src/components/OnboardingScreen.tsx).
+
+/// The first line of a setup that grants nothing new.
+const SETUP_HEAD: &str = "# ProxysVPN sets up its VPN helper as root in /home/.proxysvpn and starts it. To undo: ProxysVPN > More > Remove system files";
+/// [`SETUP_HEAD`] for a setup that grants Gaming Mode.
+const SETUP_HEAD_GRANT: &str = "# ProxysVPN sets up its VPN helper as root in /home/.proxysvpn and lets this user start it without a password from now on, so Gaming Mode can connect. To undo: ProxysVPN > More > Remove system files";
+/// The end of the window's message for a setup that grants nothing new.
+pub const DIALOG_TAIL: &str = "helper as root and starts the tunnel.";
+/// The end of the window's message for a setup that grants Gaming Mode.
+pub const DIALOG_TAIL_GRANT: &str = "so Gaming Mode then needs no password";
+
+/// The script root runs, through pkexec, to make the copy and start it:
+/// [`SETUP_BODY`] after its first line.
 ///
 /// Arguments: `$1` the install folder ([`INSTALL_DIR`] with its parent
 /// resolved to the physical folder, so `/var/home/.proxysvpn` where `/home`
 /// is a link), `$2` the staging
 /// folder, `$3` and `$4` the SHA-256 of the helper and of tun2socks as the GUI
-/// read them in its mount, `$5` [`GAMING_FLAG`] on SteamOS and `-` elsewhere.
-/// The user the record names is pkexec's `PKEXEC_UID`, the person who typed
-/// the password, never an argument. Nothing in it reads stdin and nothing writes to
-/// stdout: both are the protocol pipe the exec'd helper inherits, and the
-/// GUI's first request is already waiting in it. POSIX sh and GNU coreutils
-/// only, so dash (Debian) and bash as sh (SteamOS, Arch) run it the same; the
-/// unit tests run it too. GNU, not just POSIX, for one thing: dd's
-/// `iflag=nofollow,nonblock`, the one open of a staged file root makes
-/// ([`STAGED_OPEN`]). The first line is a comment because the generic polkit
-/// dialog shows the start of the command line.
-pub const SETUP_SCRIPT: &str = r#"# ProxysVPN: copy the tunnel helper into a folder only root can change, then start it (docs/STEAMDECK.md)
-set -eu
+/// read them in its mount, `$5` [`GAMING_FLAG`] on SteamOS and `-` elsewhere,
+/// `$6` the end of what the password window shows ([`DIALOG_TAIL`]), never
+/// read. The user the record names is pkexec's `PKEXEC_UID`, the person who
+/// typed the password, never an argument. Nothing in it reads stdin and
+/// nothing writes to stdout: both are the protocol pipe the exec'd helper
+/// inherits, and the GUI's first request is already waiting in it. POSIX sh
+/// and GNU coreutils only, so dash (Debian) and bash as sh (SteamOS, Arch) run
+/// it the same; the unit tests run it too. GNU, not just POSIX, for one thing:
+/// dd's `iflag=nofollow,nonblock`, the one open of a staged file root makes
+/// ([`STAGED_OPEN`]).
+pub fn setup_script(gaming: Gaming) -> String {
+    let head = if gaming == Gaming::Granted { SETUP_HEAD_GRANT } else { SETUP_HEAD };
+    format!("{head}\n{SETUP_BODY}")
+}
+
+/// The setup script below its first line ([`setup_script`]).
+pub const SETUP_BODY: &str = r#"set -eu
 dest=$1 staged=$2 helper_sum=$3 engine_sum=$4 gaming=$5
 umask 077
 me=$(id -u) uid=${PKEXEC_UID:?}
@@ -285,23 +334,24 @@ pub fn launch_kind(appimage: Option<&OsStr>, appdir: Option<&Path>, exe: &Path) 
     }
 }
 
-/// The arguments for `pkexec /bin/sh …` that run [`SETUP_SCRIPT`].
+/// The arguments for `pkexec /bin/sh …` that run [`setup_script`].
 pub fn setup_args(
     install_dir: &Path,
     staged: &Path,
     helper_sum: &str,
     engine_sum: &str,
-    gaming: bool,
+    gaming: Gaming,
 ) -> Vec<OsString> {
     vec![
         OsString::from("-c"),
-        OsString::from(SETUP_SCRIPT),
+        OsString::from(setup_script(gaming)),
         OsString::from(SETUP_NAME),
         install_dir.as_os_str().to_os_string(),
         staged.as_os_str().to_os_string(),
         OsString::from(helper_sum),
         OsString::from(engine_sum),
-        OsString::from(if gaming { GAMING_FLAG } else { "-" }),
+        OsString::from(if gaming == Gaming::Off { "-" } else { GAMING_FLAG }),
+        OsString::from(if gaming == Gaming::Granted { DIALOG_TAIL_GRANT } else { DIALOG_TAIL }),
     ]
 }
 
@@ -508,6 +558,28 @@ pub fn node_facts(path: &Path) -> Option<NodeFacts> {
         mode: meta.mode(),
         kind,
     })
+}
+
+/// Was Gaming Mode decided on this device: is the record or the "no" in
+/// `install_dir`, whatever it holds? Read by the GUI, which may look into the
+/// root-owned folder (0755) but not change it, to say what the setup will do.
+#[cfg(unix)]
+pub fn gaming_decided(install_dir: &Path) -> bool {
+    [GAMING_RECORD, GAMING_OFF]
+        .iter()
+        .any(|name| node_facts(&install_dir.join(name)).is_some())
+}
+
+/// What the setup does about Gaming Mode on this device ([`Gaming`]).
+#[cfg(unix)]
+pub fn gaming_for(steamos: bool, install_dir: &Path) -> Gaming {
+    if !steamos {
+        Gaming::Off
+    } else if gaming_decided(install_dir) {
+        Gaming::Kept
+    } else {
+        Gaming::Granted
+    }
 }
 
 /// Open `path` for reading only if it is a regular file, never through a
@@ -750,6 +822,63 @@ pub fn sync_gaming_rule() -> RuleSync {
 
 // ------------------------------------------------------------- GUI side, Linux
 
+/// Is this process the AppImage's own executable? [`launch_kind`] with this
+/// process's environment and executable.
+#[cfg(target_os = "linux")]
+pub fn this_launch() -> Launch {
+    let Ok(exe) = std::env::current_exe() else {
+        return Launch::Package;
+    };
+    let appdir = std::env::var_os("APPDIR")
+        .filter(|dir| !dir.is_empty())
+        .and_then(|dir| std::fs::canonicalize(dir).ok());
+    launch_kind(std::env::var_os("APPIMAGE").as_deref(), appdir.as_deref(), &exe)
+}
+
+/// `install_dir` with its parent resolved to the physical folder: pkexec runs
+/// realpath(3) on the program it is given, and a /home that is a link
+/// (/var/home on Fedora's atomic desktops, Bazzite among them) must be judged
+/// — and handed to the scripts, which refuse a linked parent — as the folder
+/// it really is.
+#[cfg(target_os = "linux")]
+fn physical_install_dir(install_dir: &Path) -> PathBuf {
+    std::fs::canonicalize(install_dir).unwrap_or_else(|_| {
+        let parent = install_dir.parent().unwrap_or(Path::new("/"));
+        let name = install_dir.file_name().unwrap_or_default();
+        std::fs::canonicalize(parent)
+            .unwrap_or_else(|_| parent.to_path_buf())
+            .join(name)
+    })
+}
+
+/// The person read the app's screen about Gaming Mode in this run of the
+/// app (`gamingMode` in onboarding). Not kept on disk: the screen comes back
+/// at the next start for as long as nothing was decided on the device.
+static GAMING_NOTICE_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Must the window explain, before the first setup, that it will let this
+/// user start the helper without a password? On the SteamOS AppImage, while
+/// nothing was decided on the device ([`gaming_decided`]) and the screen was
+/// not read in this run. Never anywhere else.
+pub fn gaming_notice_pending() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        !GAMING_NOTICE_SEEN.load(std::sync::atomic::Ordering::Relaxed)
+            && running_on_steamos()
+            && this_launch() == Launch::AppImage
+            && !gaming_decided(&physical_install_dir(Path::new(INSTALL_DIR)))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+/// "Continue" on that screen.
+pub fn acknowledge_gaming_notice() {
+    GAMING_NOTICE_SEEN.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Is this SteamOS? Read once per process.
 #[cfg(target_os = "linux")]
 pub fn running_on_steamos() -> bool {
@@ -795,17 +924,8 @@ fn staging_dir() -> anyhow::Result<PathBuf> {
 /// Returns the verdict and the physical install folder.
 #[cfg(target_os = "linux")]
 fn inspect(install_dir: &Path, wants: &[(&'static str, &str)]) -> (Installed, PathBuf) {
-    // Physical paths throughout: pkexec runs realpath(3) on the program it is
-    // given, and a /home that is a link (/var/home on Fedora's atomic
-    // desktops, Bazzite among them) must be judged — and handed to the setup,
-    // which refuses a linked parent — as the folder it really is.
-    let physical = std::fs::canonicalize(install_dir).unwrap_or_else(|_| {
-        let parent = install_dir.parent().unwrap_or(Path::new("/"));
-        let name = install_dir.file_name().unwrap_or_default();
-        std::fs::canonicalize(parent)
-            .unwrap_or_else(|_| parent.to_path_buf())
-            .join(name)
-    });
+    // Physical paths throughout (`physical_install_dir`).
+    let physical = physical_install_dir(install_dir);
     let parents: Vec<(PathBuf, Option<NodeFacts>)> = physical
         .ancestors()
         .skip(1)
@@ -834,10 +954,10 @@ fn inspect(install_dir: &Path, wants: &[(&'static str, &str)]) -> (Installed, Pa
 /// current, else the setup script with freshly staged files.
 ///
 /// `own_exe` is the GUI executable inside the mount; the helper and tun2socks
-/// sit beside it in the AppImage's `usr/bin`. `gaming` asks the setup to write
-/// the Gaming Mode record (SteamOS).
+/// sit beside it in the AppImage's `usr/bin`. `steamos` asks the setup to
+/// write the Gaming Mode record if nothing was decided yet ([`Gaming`]).
 #[cfg(target_os = "linux")]
-pub fn plan_appimage_spawn(own_exe: &Path, gaming: bool) -> Result<SpawnPlan, crate::privilege::HelperSetupFailed> {
+pub fn plan_appimage_spawn(own_exe: &Path, steamos: bool) -> Result<SpawnPlan, crate::privilege::HelperSetupFailed> {
     use crate::privilege::HelperSetupFailed as Fail;
 
     let own_dir = own_exe
@@ -869,7 +989,7 @@ pub fn plan_appimage_spawn(own_exe: &Path, gaming: bool) -> Result<SpawnPlan, cr
             })?;
             Ok(SpawnPlan {
                 program: PathBuf::from(SHELL),
-                args: setup_args(&install_dir, &staged, &helper_sum, &engine_sum, gaming),
+                args: setup_args(&install_dir, &staged, &helper_sum, &engine_sum, gaming_for(steamos, &install_dir)),
                 staged: Some(staged),
                 setup: true,
             })
@@ -1029,19 +1149,31 @@ mod tests {
 
     #[test]
     fn the_setup_is_one_fixed_script_with_its_arguments_after_it() {
-        let args = setup_args(Path::new(INSTALL_DIR), Path::new("/run/user/1000/s"), H, E, true);
+        let args = setup_args(Path::new(INSTALL_DIR), Path::new("/run/user/1000/s"), H, E, Gaming::Granted);
         let text: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(text[0], "-c");
-        assert_eq!(text[1], SETUP_SCRIPT);
-        assert_eq!(&text[2..], [SETUP_NAME, INSTALL_DIR, "/run/user/1000/s", H, E, GAMING_FLAG]);
-        let off = setup_args(Path::new(INSTALL_DIR), Path::new("/s"), H, E, false);
-        assert_eq!(off.last().map(|a| a.to_string_lossy().into_owned()).as_deref(), Some("-"));
-        assert!(!SETUP_SCRIPT.contains("$6"), "the user is PKEXEC_UID, never an argument");
-        assert!(SETUP_SCRIPT.contains(STAGED_OPEN), "the tests run the open the script makes");
-        assert!(!SETUP_SCRIPT.contains("head -c") && !SETUP_SCRIPT.contains("cat "), "no other open of a staged file");
-        assert!(SETUP_SCRIPT.starts_with("# ProxysVPN:"), "the polkit dialog shows the start");
+        assert_eq!(text[1], setup_script(Gaming::Granted));
+        assert_eq!(
+            &text[2..],
+            [SETUP_NAME, INSTALL_DIR, "/run/user/1000/s", H, E, GAMING_FLAG, DIALOG_TAIL_GRANT]
+        );
+        let kept = setup_args(Path::new(INSTALL_DIR), Path::new("/s"), H, E, Gaming::Kept);
+        let kept: Vec<String> = kept.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(&kept[7..], [GAMING_FLAG, DIALOG_TAIL]);
+        let off = setup_args(Path::new(INSTALL_DIR), Path::new("/s"), H, E, Gaming::Off);
+        let off: Vec<String> = off.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(&off[7..], ["-", DIALOG_TAIL]);
+        // One body for all three; only the comment on the first line differs.
+        for gaming in [Gaming::Off, Gaming::Kept, Gaming::Granted] {
+            let script = setup_script(gaming);
+            assert!(script.starts_with("# ProxysVPN sets up its VPN helper as root"), "{gaming:?}");
+            assert_eq!(script.split_once('\n').map(|(_, body)| body), Some(SETUP_BODY));
+        }
+        assert!(!SETUP_BODY.contains("$6"), "the user is PKEXEC_UID, never an argument; $6 is for the window");
+        assert!(SETUP_BODY.contains(STAGED_OPEN), "the tests run the open the script makes");
+        assert!(!SETUP_BODY.contains("head -c") && !SETUP_BODY.contains("cat "), "no other open of a staged file");
         for code in [EXIT_FOLDER, EXIT_FILES, EXIT_COPY] {
-            assert!(SETUP_SCRIPT.contains(&format!("exit {code}")), "{code}");
+            assert!(SETUP_BODY.contains(&format!("exit {code}")), "{code}");
             assert!(code != 126 && code != 127, "pkexec's own codes");
         }
         assert_eq!(installed_helper(Path::new(INSTALL_DIR)), Path::new("/home/.proxysvpn/bin/proxysvpn-helper"));
@@ -1122,6 +1254,49 @@ mod tests {
         rest.collect::<Vec<_>>().join(" ")
     }
 
+    /// pkexec.c's `cmdline_short`, what its message quotes: the command line
+    /// as it is, or, past 80 bytes, its first 38 bytes, " ... " and its last
+    /// 37 — cut at bytes, so the window can only show it if both cuts land
+    /// between characters.
+    fn pkexec_cmdline_short(command_line: &str) -> String {
+        let bytes = command_line.as_bytes();
+        if bytes.len() <= 80 {
+            return command_line.to_string();
+        }
+        let mut short = bytes[..38].to_vec();
+        short.extend_from_slice(b" ... ");
+        short.extend_from_slice(&bytes[bytes.len() - 37..]);
+        String::from_utf8(short).expect("a message polkit can carry")
+    }
+
+    /// What the password window quotes says what the setup is about to do,
+    /// in full words at both ends, and says it before the person types.
+    #[test]
+    fn the_password_window_says_what_the_setup_does() {
+        let window = |gaming| {
+            let args = setup_args(
+                Path::new("/var/home/.proxysvpn"),
+                Path::new("/run/user/1000/proxysvpn-helper-setup"),
+                H,
+                E,
+                gaming,
+            );
+            pkexec_cmdline_short(&pkexec_command_line(&crate::privilege::pkexec_args(Path::new(SHELL), args)))
+        };
+        assert_eq!(
+            window(Gaming::Granted),
+            "/bin/sh -c # ProxysVPN sets up its VPN ... so Gaming Mode then needs no password"
+        );
+        let plain = "/bin/sh -c # ProxysVPN sets up its VPN ... helper as root and starts the tunnel.";
+        assert_eq!(window(Gaming::Kept), plain);
+        assert_eq!(window(Gaming::Off), plain);
+        for text in [SETUP_HEAD, SETUP_HEAD_GRANT, DIALOG_TAIL, DIALOG_TAIL_GRANT] {
+            assert!(text.is_ascii(), "pkexec cuts at bytes: {text}");
+        }
+        assert!(SETUP_HEAD_GRANT.contains("without a password") && SETUP_HEAD_GRANT.contains("Remove system files"));
+        assert!(SETUP_HEAD.contains("Remove system files") && !SETUP_HEAD.contains("password"));
+    }
+
     /// The option that stops pkexec's terminal prompt is pkexec's own and
     /// never reaches `command_line`, so the Gaming Mode rule still matches
     /// the helper the GUI starts — and only it.
@@ -1136,7 +1311,10 @@ mod tests {
         assert!(rule.contains(&format!(r#"action.lookup("command_line") === "{command_line}""#)), "{rule}");
 
         // The setup and anything else started through pkexec do not match.
-        let setup = crate::privilege::pkexec_args(Path::new(SHELL), setup_args(Path::new(INSTALL_DIR), Path::new("/s"), "h", "e", true));
+        let setup = crate::privilege::pkexec_args(
+            Path::new(SHELL),
+            setup_args(Path::new(INSTALL_DIR), Path::new("/s"), "h", "e", Gaming::Granted),
+        );
         assert!(!rule.contains(&format!(r#"=== "{}""#, pkexec_command_line(&setup))));
         let dev = crate::privilege::pkexec_args(helper, ["--helper", "--dev"]);
         assert!(!rule.contains(&format!(r#"=== "{}""#, pkexec_command_line(&dev))));
@@ -1279,6 +1457,7 @@ close($out) or die "dd: $op{of}: $!\n";
         ) -> Run {
             use std::io::Write;
 
+            let gaming = if gaming { Gaming::Kept } else { Gaming::Off };
             let mut child = Command::new(SHELL)
                 .args(setup_args(dest, staged, helper_sum, engine_sum, gaming))
                 .env("PATH", path_with_tools(base))
@@ -1631,6 +1810,28 @@ close($out) or die "dd: $op{of}: $!\n";
             assert_eq!(again.code, Some(0), "{}", again.stderr);
             assert_eq!(std::fs::read_to_string(&record).expect("record"), format!("{}\n", my_name()));
             assert!(!dest.join(".gaming-mode-user.new").exists());
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        /// What the window says, and whether the app's own screen comes
+        /// first, follows what is decided on the device: nothing yet is a
+        /// grant; the record or the "no", whatever they hold, is kept.
+        #[test]
+        fn the_grant_is_announced_only_while_nothing_is_decided() {
+            let base = temp("decided");
+            let dest = base.join(".proxysvpn");
+            assert_eq!(gaming_for(true, &dest), Gaming::Granted, "no folder yet");
+            std::fs::create_dir_all(dest.join(BIN_DIR)).expect("bin");
+            assert_eq!(gaming_for(true, &dest), Gaming::Granted, "a folder alone decides nothing");
+            assert_eq!(gaming_for(false, &dest), Gaming::Off);
+
+            std::fs::write(dest.join(GAMING_RECORD), "deck\n").expect("record");
+            assert_eq!(gaming_for(true, &dest), Gaming::Kept);
+            std::fs::remove_file(dest.join(GAMING_RECORD)).expect("remove");
+            std::os::unix::fs::symlink(base.join("nowhere"), dest.join(GAMING_OFF)).expect("link");
+            assert!(gaming_decided(&dest), "a dangling \"no\" is still a no");
+            assert_eq!(gaming_for(true, &dest), Gaming::Kept);
+            assert_eq!(gaming_for(false, &dest), Gaming::Off);
             let _ = std::fs::remove_dir_all(&base);
         }
 

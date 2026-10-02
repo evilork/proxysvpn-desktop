@@ -43,6 +43,9 @@ const COPY: Record<BarrierStep, { title: MsgKey; body: MsgKey; action: MsgKey }>
   },
   password: { title: "ob.pass.title", body: "ob.pass.body", action: "ob.pass.action" },
   iosPermission: { title: "ob.ios.title", body: "ob.ios.body", action: "ob.ios.action" },
+  // SteamOS: said before the system's password window, which can only quote
+  // a shortened command line (pvpn-platform helper/install.rs).
+  gamingMode: { title: "ob.gaming.title", body: "ob.gaming.body", action: "ob.gaming.action" },
 };
 
 export default function OnboardingScreen({
@@ -119,8 +122,9 @@ export default function OnboardingScreen({
   const copy = COPY[step];
   const failureKey: MsgKey = step === "moveToApplications" ? "ob.move.failed" : "ob.denied";
   // The Login Items link: direct macOS builds only, never on iOS (no public
-  // address for that page) and never in an App Store build.
-  const settingsLink = failed && !IS_APPSTORE && step !== "iosPermission";
+  // address for that page), never in an App Store build, and never for the
+  // SteamOS notice, whose button only says it was read.
+  const settingsLink = failed && !IS_APPSTORE && step !== "iosPermission" && step !== "gamingMode";
 
   return (
     <Screen

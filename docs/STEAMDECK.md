@@ -58,12 +58,19 @@ Switch to Desktop).
    dialog on SteamOS shows "The deck user needs a password" with these same
    steps (`STEAMOS_PASSWORD_NEEDED`).
 
-4. **First connect, in Desktop Mode.** Double-click the AppImage, sign in with
-   the pair code, press Connect. The system's permission dialog appears once.
-   It is polkit's generic one — the AppImage cannot install a policy file of
-   its own — so it reads "Authentication is needed to run `/bin/sh` as the
-   super user", and the command under "Details" starts with
-   `# ProxysVPN: copy the tunnel helper into a folder only root can change`.
+4. **First connect, in Desktop Mode.** Double-click the AppImage. Before
+   anything else the app shows its own screen, **"Gaming Mode without a
+   password"**: the first connect will ask for the `deck` password once, and
+   from then on ProxysVPN can connect in Gaming Mode without one; the
+   permission stays on the Deck until it is removed in **More → Remove system
+   files**. Press "Got it, continue", sign in with the pair code, press
+   Connect. The system's permission dialog appears once. It is polkit's
+   generic one — the AppImage cannot install a policy file of its own — and
+   pkexec quotes the command it runs, cut to its first 38 and last 37 bytes,
+   so it reads "Authentication is needed to run `/bin/sh -c # ProxysVPN sets
+   up its VPN ... so Gaming Mode then needs no password' as the super user"
+   (on another Linux, or once Gaming Mode was decided: "... helper as root
+   and starts the tunnel."). The command's first line says it in full.
    Type the `deck` password. That one dialog:
 
    * copies `proxysvpn-helper` and `tun2socks` out of the AppImage into
@@ -281,7 +288,8 @@ tests on Linux):
 * that the AppImage starts on SteamOS at all, and its window in Desktop Mode
   and under gamescope;
 * the KDE polkit agent in Desktop Mode with the generic `/bin/sh` action, with
-  and without a `deck` password;
+  and without a `deck` password, and the exact text it shows (taken from
+  pkexec's source, `cmdline_short`, and pinned by a unit test);
 * that polkit on SteamOS loads the rule and that Gaming Mode's session counts
   as local and active, so the helper starts there without a prompt;
 * that Gaming Mode without the rule makes pkexec say "No authentication agent

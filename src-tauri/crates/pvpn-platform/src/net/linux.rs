@@ -148,14 +148,6 @@ struct Spawn {
     setup: bool,
 }
 
-/// Is this process the AppImage's own executable? See `install::launch_kind`.
-fn launch_kind(exe: &std::path::Path) -> Launch {
-    let appdir = std::env::var_os("APPDIR")
-        .filter(|dir| !dir.is_empty())
-        .and_then(|dir| std::fs::canonicalize(dir).ok());
-    install::launch_kind(std::env::var_os("APPIMAGE").as_deref(), appdir.as_deref(), exe)
-}
-
 fn spawn_command() -> Result<Spawn> {
     let exe = std::env::current_exe().context("locate our own executable")?;
     // Debug builds only. The helper ignores the flag in a release build anyway
@@ -176,7 +168,7 @@ fn spawn_command() -> Result<Spawn> {
         return Ok(Spawn { cmd, staged: None, setup: false });
     }
 
-    if launch_kind(&exe) == Launch::AppImage {
+    if install::this_launch() == Launch::AppImage {
         let pkexec = privilege::which("pkexec")
             .ok_or_else(|| anyhow::Error::new(privilege::ElevationUnavailable::NoPkexec))?;
         // Typed, so the window shows "could not prepare its files" rather

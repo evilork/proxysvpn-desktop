@@ -4156,6 +4156,14 @@ fn onboarding_steps(consent_paths: &[std::path::PathBuf]) -> Vec<&'static str> {
     if consent::is_pending(consent_paths) {
         steps.push("dataNotice");
     }
+    // The SteamOS AppImage before its first setup: that setup lets this user
+    // start the root helper without a password from then on (Gaming Mode
+    // cannot ask), and the person reads it here before the system's password
+    // window asks (pvpn-platform helper/install.rs). Nowhere else.
+    #[cfg(desktop)]
+    if pvpn_platform::helper::install::gaming_notice_pending() {
+        steps.push("gamingMode");
+    }
     #[cfg(target_os = "macos")]
     {
         if !running_from_applications() {
@@ -4201,6 +4209,14 @@ fn bundle_path() -> Option<std::path::PathBuf> {
 async fn run_onboarding(step: &str) -> Result<(), AppError> {
     match step {
         "dataNotice" => record_data_notice(),
+        // Read in this run; the device itself records the choice once the
+        // setup has run, so nothing is written here.
+        #[cfg(desktop)]
+        "gamingMode" => {
+            pvpn_platform::helper::install::acknowledge_gaming_notice();
+            logger::log("info", "app", "Gaming Mode notice read");
+            Ok(())
+        }
         #[cfg(target_os = "macos")]
         "moveToApplications" => move_to_applications().await,
         #[cfg(target_os = "macos")]

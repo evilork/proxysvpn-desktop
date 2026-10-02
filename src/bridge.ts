@@ -281,8 +281,15 @@ export interface RoutingState {
 /**
  * `dataNotice` is the declaration of the data the app uses (guideline 5.4);
  * the core puts it first on every platform until it has been seen.
+ * `gamingMode`: the SteamOS AppImage before its first setup, which lets the
+ * Deck's user start the tunnel helper without a password from then on.
  */
-export type OnboardingStep = "dataNotice" | "moveToApplications" | "password" | "iosPermission";
+export type OnboardingStep =
+  | "dataNotice"
+  | "moveToApplications"
+  | "password"
+  | "iosPermission"
+  | "gamingMode";
 
 export interface OnboardingState {
   steps: OnboardingStep[];
