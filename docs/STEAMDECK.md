@@ -262,7 +262,10 @@ tests on Linux):
   ownership, mode and checksum case; **the setup script itself, run under
   `/bin/sh`** as pkexec would run it minus root — it installs both files, hands
   the waiting request to the helper, refuses a swapped or linked staged file
-  without leaving it behind, refuses folders others can change, records the
+  without leaving it behind, refuses a FIFO or a link to a device in a staged
+  file's place without waiting on it (root opens each staged file once, with
+  dd's `iflag=nofollow,nonblock`), refuses a staging folder that is not the
+  person's alone, refuses folders others can change, records the
   Gaming Mode user on SteamOS while nothing was decided yet (a first setup cut
   short included) and keeps an explicit "no"; the polkit rule's text and its
   quoting; the rule kept in step with the record, repaired after deletion,

@@ -46,11 +46,16 @@
 //! 1. The GUI hashes both files where they are, in its read-only mount, and
 //!    copies them into a private folder of its own ([`staging_dir`]) that root
 //!    can read and the mount is not.
-//! 2. Root copies each staged file into a 0600 temp file inside the root-owned
+//! 2. Root checks that the staging folder is a real folder of the person who
+//!    typed the password (`PKEXEC_UID`) that nobody else may change, then
+//!    copies each staged file into a 0600 temp file inside the root-owned
 //!    folder, hashes *that copy* against the sum the GUI passed, and only then
-//!    makes it executable and renames it into place. Swapping a staged file at
-//!    any moment — for a link to /etc/shadow, for another program — can only
-//!    fail the hash: the copy is never readable by others and never runs.
+//!    makes it executable and renames it into place. The person still owns
+//!    the staged files and may swap them at any moment, so root opens each one
+//!    exactly once, with dd's `iflag=nofollow,nonblock`: a link put in its
+//!    place — to /etc/shadow, to a device — is not followed, and a FIFO does
+//!    not hold root waiting for a writer. Whatever is read can only fail the
+//!    hash: the copy is never readable by others and never runs.
 //! 3. The script `exec`s the installed helper, which speaks the protocol on
 //!    the pipe the GUI already holds. The setup is the first connect.
 //!
@@ -170,10 +175,20 @@ pub const SETUP_NAME: &str = "proxysvpn-setup";
 /// The setup script's own exit codes, from sysexits.h, clear of pkexec's
 /// 126 and 127: a folder of the chain is not root's alone.
 pub const EXIT_FOLDER: i32 = 73;
-/// A staged file is missing or does not hash to its sum.
+/// The staging folder is not the person's alone, or a staged file is missing
+/// or does not hash to its sum.
 pub const EXIT_FILES: i32 = 65;
 /// A copy or a hash could not be made (a full disk).
 pub const EXIT_COPY: i32 = 74;
+
+/// How [`SETUP_SCRIPT`] reads a staged file `$src` into its temp copy `$tmp`:
+/// the one open root makes of a path the person controls. `nofollow`: a link
+/// in the file's place fails the open (ELOOP) instead of leading root to
+/// /etc/shadow or a device. `nonblock`: a FIFO in its place gives nothing or
+/// EAGAIN at once instead of holding root until someone writes to it. 256 MiB
+/// at most, far above the helper and tun2socks. GNU coreutils: SteamOS,
+/// Debian, Fedora, Arch; the tests run it as written (macOS gets a stand-in).
+pub const STAGED_OPEN: &str = r#"dd if="$src" of="$tmp" bs=1048576 count=256 iflag=nofollow,nonblock status=none"#;
 
 /// The script root runs, through pkexec, to make the copy and start it.
 ///
@@ -185,31 +200,34 @@ pub const EXIT_COPY: i32 = 74;
 /// The user the record names is pkexec's `PKEXEC_UID`, the person who typed
 /// the password, never an argument. Nothing in it reads stdin and nothing writes to
 /// stdout: both are the protocol pipe the exec'd helper inherits, and the
-/// GUI's first request is already waiting in it. POSIX sh and coreutils only,
-/// so dash (Debian) and bash as sh (SteamOS, Arch) run it the same; the unit
-/// tests run it too. The first line is a comment because the generic polkit
+/// GUI's first request is already waiting in it. POSIX sh and GNU coreutils
+/// only, so dash (Debian) and bash as sh (SteamOS, Arch) run it the same; the
+/// unit tests run it too. GNU, not just POSIX, for one thing: dd's
+/// `iflag=nofollow,nonblock`, the one open of a staged file root makes
+/// ([`STAGED_OPEN`]). The first line is a comment because the generic polkit
 /// dialog shows the start of the command line.
 pub const SETUP_SCRIPT: &str = r#"# ProxysVPN: copy the tunnel helper into a folder only root can change, then start it (docs/STEAMDECK.md)
 set -eu
 dest=$1 staged=$2 helper_sum=$3 engine_sum=$4 gaming=$5
 umask 077
-me=$(id -u)
+me=$(id -u) uid=${PKEXEC_UID:?}
 say() { printf 'proxysvpn-setup: %s\n' "$*" >&2; }
-private() {
+owned() {
     [ -d "$1" ] && [ ! -L "$1" ] || return 1
-    [ -n "$(find "$1" -maxdepth 0 -user "$me" ! -perm -0020 ! -perm -0002 -print)" ]
+    [ -n "$(find "$1" -maxdepth 0 -user "$2" ! -perm -0020 ! -perm -0002 -print)" ]
 }
 parent=$(dirname -- "$dest")
-private "$parent" || { say "$parent is not a folder only uid $me can change"; exit 73; }
+owned "$parent" "$me" || { say "$parent is not a folder only uid $me can change"; exit 73; }
+owned "$staged" "$uid" || { say "$staged is not a folder only uid $uid can change"; exit 65; }
 for dir in "$dest" "$dest/bin"; do
     [ -e "$dir" ] || [ -L "$dir" ] || mkdir -m 0755 -- "$dir"
-    private "$dir" || { say "$dir is not a folder only uid $me can change"; exit 73; }
+    owned "$dir" "$me" || { say "$dir is not a folder only uid $me can change"; exit 73; }
 done
 decided() { [ -e "$dest/$1" ] || [ -L "$dest/$1" ]; }
 if [ "$gaming" != gaming-mode ]; then
     rm -f -- "$dest/gaming-mode-user"
 elif ! decided gaming-mode-user && ! decided gaming-mode-off; then
-    user=$(id -nu "${PKEXEC_UID:?}")
+    user=$(id -nu "$uid")
     printf '%s\n' "$user" > "$dest/.gaming-mode-user.new"
     chmod 0644 "$dest/.gaming-mode-user.new"
     mv -f -- "$dest/.gaming-mode-user.new" "$dest/gaming-mode-user"
@@ -218,7 +236,7 @@ take() {
     src=$staged/$1 tmp=$dest/bin/.$1.new
     rm -f -- "$tmp"
     [ -f "$src" ] && [ ! -L "$src" ] || { say "$1 was not staged"; exit 65; }
-    head -c 268435456 -- "$src" > "$tmp" || { rm -f -- "$tmp"; say "$1 could not be copied"; exit 74; }
+    dd if="$src" of="$tmp" bs=1048576 count=256 iflag=nofollow,nonblock status=none || { rm -f -- "$tmp"; say "$1 could not be copied"; exit 74; }
     sum=$(sha256sum < "$tmp") || { rm -f -- "$tmp"; say "$1 could not be hashed"; exit 74; }
     if [ "${sum%% *}" != "$2" ]; then rm -f -- "$tmp"; say "$1 does not match its checksum"; exit 65; fi
     chmod 0755 "$tmp"
@@ -1019,6 +1037,8 @@ mod tests {
         let off = setup_args(Path::new(INSTALL_DIR), Path::new("/s"), H, E, false);
         assert_eq!(off.last().map(|a| a.to_string_lossy().into_owned()).as_deref(), Some("-"));
         assert!(!SETUP_SCRIPT.contains("$6"), "the user is PKEXEC_UID, never an argument");
+        assert!(SETUP_SCRIPT.contains(STAGED_OPEN), "the tests run the open the script makes");
+        assert!(!SETUP_SCRIPT.contains("head -c") && !SETUP_SCRIPT.contains("cat "), "no other open of a staged file");
         assert!(SETUP_SCRIPT.starts_with("# ProxysVPN:"), "the polkit dialog shows the start");
         for code in [EXIT_FOLDER, EXIT_FILES, EXIT_COPY] {
             assert!(SETUP_SCRIPT.contains(&format!("exit {code}")), "{code}");
@@ -1152,9 +1172,42 @@ mod tests {
             (helper, engine)
         }
 
+        /// A stand-in for GNU dd where the system's has no
+        /// `iflag=nofollow,nonblock` (macOS): the operands [`STAGED_OPEN`]
+        /// uses, through the same open(2) flags, and nothing else. On Linux
+        /// the tests run coreutils' own dd.
+        const DD_STAND_IN: &str = r#"#!/usr/bin/perl
+use strict; use warnings; use Fcntl;
+my %op = map { split /=/, $_, 2 } @ARGV;
+my $flags = O_RDONLY;
+for (split /,/, $op{iflag} // "") {
+    if ($_ eq "nofollow") { $flags |= O_NOFOLLOW } elsif ($_ eq "nonblock") { $flags |= O_NONBLOCK } else { die "dd: iflag $_\n" }
+}
+sysopen(my $in, $op{if}, $flags) or die "dd: $op{if}: $!\n";
+open(my $out, ">", $op{of}) or die "dd: $op{of}: $!\n";
+my $left = ($op{bs} // 512) * ($op{count} // 1);
+while ($left > 0) {
+    my $n = sysread($in, my $buf, $left < 65536 ? $left : 65536);
+    die "dd: $op{if}: $!\n" unless defined $n;
+    last if $n == 0;
+    print {$out} $buf or die "dd: $op{of}: $!\n";
+    $left -= $n;
+}
+close($out) or die "dd: $op{of}: $!\n";
+"#;
+
+        fn shim(base: &Path, name: &str, text: &str) -> PathBuf {
+            let dir = base.join("shim");
+            std::fs::create_dir_all(&dir).expect("shim");
+            std::fs::write(dir.join(name), text).expect("shim");
+            std::fs::set_permissions(dir.join(name), std::fs::Permissions::from_mode(0o755)).expect("chmod");
+            dir
+        }
+
         /// `sha256sum` is coreutils on Linux and /sbin/sha256sum on recent
-        /// macOS; an older Mac only has shasum, so the test brings a shim.
-        fn path_with_sha256sum(base: &Path) -> std::ffi::OsString {
+        /// macOS; an older Mac only has shasum, so the test brings a shim. dd
+        /// gets one where it lacks GNU's flags ([`DD_STAND_IN`]).
+        fn path_with_tools(base: &Path) -> std::ffi::OsString {
             let system = std::env::var_os("PATH").unwrap_or_default();
             let found = std::env::split_paths(&system)
                 .chain([PathBuf::from("/sbin")])
@@ -1163,14 +1216,45 @@ mod tests {
             if found {
                 dirs.push(PathBuf::from("/sbin"));
             } else {
-                let shim = base.join("shim");
-                std::fs::create_dir_all(&shim).expect("shim");
-                std::fs::write(shim.join("sha256sum"), "#!/bin/sh\nexec shasum -a 256 \"$@\"\n").expect("shim");
-                std::fs::set_permissions(shim.join("sha256sum"), std::fs::Permissions::from_mode(0o755))
-                    .expect("chmod");
-                dirs.insert(0, shim);
+                dirs.insert(0, shim(base, "sha256sum", "#!/bin/sh\nexec shasum -a 256 \"$@\"\n"));
+            }
+            let gnu_dd = Command::new("dd")
+                .args(["if=/dev/null", "of=/dev/null", "iflag=nofollow,nonblock", "status=none"])
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success());
+            if !gnu_dd {
+                dirs.insert(0, shim(base, "dd", DD_STAND_IN));
             }
             std::env::join_paths(dirs).expect("PATH")
+        }
+
+        /// Wait for `child`, but fail the test instead of hanging when it
+        /// blocks: what a FIFO in the wrong place would do to root.
+        fn finish(mut child: std::process::Child, what: &str) -> Run {
+            use std::io::Read;
+
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            let status = loop {
+                if let Some(status) = child.try_wait().expect("wait") {
+                    break status;
+                }
+                if std::time::Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("{what} blocked");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            };
+            let mut stdout = String::new();
+            let mut stderr = String::new();
+            if let Some(mut out) = child.stdout.take() {
+                out.read_to_string(&mut stdout).expect("stdout");
+            }
+            if let Some(mut err) = child.stderr.take() {
+                err.read_to_string(&mut stderr).expect("stderr");
+            }
+            Run { code: status.code(), stdout, stderr }
         }
 
         struct Run {
@@ -1197,7 +1281,7 @@ mod tests {
 
             let mut child = Command::new(SHELL)
                 .args(setup_args(dest, staged, helper_sum, engine_sum, gaming))
-                .env("PATH", path_with_sha256sum(base))
+                .env("PATH", path_with_tools(base))
                 .env("PKEXEC_UID", me().to_string())
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -1210,12 +1294,7 @@ mod tests {
                 .expect("stdin")
                 .write_all(b"{\"request\":{\"id\":1,\"req\":\"hello\"}}\n")
                 .expect("request");
-            let out = child.wait_with_output().expect("wait");
-            Run {
-                code: out.status.code(),
-                stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-            }
+            finish(child, "the setup")
         }
 
         fn me() -> u32 {
@@ -1300,6 +1379,122 @@ mod tests {
             assert_eq!(run.code, Some(EXIT_FILES), "{}", run.stderr);
             assert!(!fresh.join(BIN_DIR).join(HELPER_BIN).exists());
             assert!(!fresh.join(BIN_DIR).join(".proxysvpn-helper.new").exists());
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        fn mkfifo(path: &Path) {
+            let status = Command::new("mkfifo").arg(path).status().expect("mkfifo");
+            assert!(status.success(), "mkfifo {}", path.display());
+        }
+
+        /// A FIFO in place of a staged file — a reader root would wait on
+        /// for ever — and links to a device or to a FIFO are refused at once,
+        /// and nothing of them is left where root would run it.
+        #[test]
+        fn a_fifo_or_a_link_in_place_of_a_staged_file_is_refused_without_waiting() {
+            let base = temp("fifo");
+            let (staged, hs, es) = staged_from(&base);
+            let dest = base.join(".proxysvpn");
+            let fifo = base.join("fifo");
+            mkfifo(&fifo);
+
+            std::fs::remove_file(staged.join(HELPER_BIN)).expect("remove");
+            mkfifo(&staged.join(HELPER_BIN));
+            let run = run_setup(&base, &dest, &staged, &hs, &es);
+            assert_eq!(run.code, Some(EXIT_FILES), "{}", run.stderr);
+            assert!(!run.stdout.contains("helper started"), "the helper must not start");
+            assert!(!dest.join(BIN_DIR).join(HELPER_BIN).exists());
+
+            for target in [Path::new("/dev/zero"), fifo.as_path()] {
+                std::fs::remove_file(staged.join(HELPER_BIN)).expect("remove");
+                std::os::unix::fs::symlink(target, staged.join(HELPER_BIN)).expect("link");
+                let run = run_setup(&base, &dest, &staged, &hs, &es);
+                assert_eq!(run.code, Some(EXIT_FILES), "{}: {}", target.display(), run.stderr);
+                assert!(!dest.join(BIN_DIR).join(HELPER_BIN).exists());
+                assert!(!dest.join(BIN_DIR).join(".proxysvpn-helper.new").exists());
+            }
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        /// The staged files are the person's, so the folder they are in must
+        /// be theirs alone and a real folder: not one others may write into,
+        /// not a link somewhere else.
+        #[test]
+        fn a_staging_folder_others_can_change_or_a_linked_one_stops_the_setup() {
+            let base = temp("staged-folder");
+            let (staged, hs, es) = staged_from(&base);
+            let dest = base.join(".proxysvpn");
+
+            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o770)).expect("chmod");
+            let run = run_setup(&base, &dest, &staged, &hs, &es);
+            assert_eq!(run.code, Some(EXIT_FILES), "{}", run.stderr);
+            assert!(run.stderr.contains("is not a folder only uid"), "{}", run.stderr);
+            assert!(!dest.exists(), "nothing is created before the check");
+            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+
+            let linked = base.join("linked");
+            std::os::unix::fs::symlink(&staged, &linked).expect("link");
+            let run = run_setup(&base, &dest, &linked, &hs, &es);
+            assert_eq!(run.code, Some(EXIT_FILES), "{}", run.stderr);
+            assert!(!dest.exists());
+
+            let run = run_setup(&base, &dest, &staged, &hs, &es);
+            assert_eq!(run.code, Some(0), "{}", run.stderr);
+            let _ = std::fs::remove_dir_all(&base);
+        }
+
+        /// The open itself, as the script makes it ([`STAGED_OPEN`]), for a
+        /// file swapped after the script's checks: a link is not followed and
+        /// a FIFO does not hold it, with or without a writer. Coreutils' dd on
+        /// Linux; on macOS this checks the stand-in the other tests use.
+        #[test]
+        fn the_one_open_of_a_staged_file_never_follows_a_link_or_waits_on_a_fifo() {
+            let base = temp("open");
+            let copy = |src: &Path| {
+                let tmp = base.join("copy");
+                let _ = std::fs::remove_file(&tmp);
+                let child = Command::new(SHELL)
+                    .args(["-c", &format!("src=$1 tmp=$2; {STAGED_OPEN}"), "sh"])
+                    .arg(src)
+                    .arg(&tmp)
+                    .env("PATH", path_with_tools(&base))
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .expect("sh");
+                let run = finish(child, "the staged open");
+                (run, std::fs::read(&tmp).ok())
+            };
+
+            let plain = base.join("plain");
+            std::fs::write(&plain, b"helper bytes").expect("plain");
+            let (run, copied) = copy(&plain);
+            assert_eq!(run.code, Some(0), "{}", run.stderr);
+            assert_eq!(copied.as_deref(), Some(&b"helper bytes"[..]));
+
+            let link = base.join("link");
+            std::os::unix::fs::symlink(&plain, &link).expect("link");
+            let (run, _) = copy(&link);
+            assert_ne!(run.code, Some(0), "a link is not followed");
+
+            let fifo = base.join("fifo");
+            mkfifo(&fifo);
+            let (run, copied) = copy(&fifo);
+            assert!(copied.unwrap_or_default().is_empty(), "no writer: nothing, at once ({})", run.stderr);
+
+            // A writer that holds the FIFO open and never writes.
+            #[cfg(target_os = "linux")]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                let _writer = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(&fifo)
+                    .expect("writer");
+                let (run, copied) = copy(&fifo);
+                assert!(copied.unwrap_or_default().is_empty(), "a silent writer: nothing, at once ({})", run.stderr);
+            }
             let _ = std::fs::remove_dir_all(&base);
         }
 
