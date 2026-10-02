@@ -58,8 +58,8 @@ Switch to Desktop).
    dialog on SteamOS shows "The deck user needs a password" with these same
    steps (`STEAMOS_PASSWORD_NEEDED`).
 
-4. **First connect, in Desktop Mode.** Double-click the AppImage. Before
-   anything else the app shows its own screen, **"Gaming Mode without a
+4. **First connect, in Desktop Mode.** Double-click the AppImage. Right after
+   the data notice the app shows a screen of its own, **"Gaming Mode without a
    password"**: the first connect will ask for the `deck` password once, and
    from then on ProxysVPN can connect in Gaming Mode without one; the
    permission stays on the Deck until it is removed in **More → Remove system
@@ -77,7 +77,8 @@ Switch to Desktop).
      `/home/.proxysvpn/bin/`, checking that the copies are byte for byte the
      files in the AppImage (SHA-256, checked by root on its own copy);
    * records that `deck` may start that helper without a password
-     (`/home/.proxysvpn/gaming-mode-user`, SteamOS only);
+     (`/home/.proxysvpn/gaming-mode-user`, SteamOS only, unless Gaming Mode
+     was already decided on this Deck);
    * starts the helper, and the tunnel comes up.
 
    The helper then writes `/etc/polkit-1/rules.d/49-proxysvpn.rules` from that
