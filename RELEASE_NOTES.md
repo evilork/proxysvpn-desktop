@@ -1,3 +1,75 @@
+# ProxysVPN Desktop v0.3.4-beta
+
+🇷🇺 Steam Deck: сборка AppImage и управление геймпадом. Нативная сборка для Windows на ARM. Ссылки открываются только на наши сайты. Плюс «Вставить другую ссылку» и название WataFast.
+
+🇬🇧 Steam Deck: an AppImage build and controller support. A native Windows on ARM build. Links open only our own sites. Plus "Paste another link" and the name WataFast.
+
+## 🇷🇺 Установка
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. Подписи кода пока нет, поэтому каждая система один раз предупреждает.
+
+- **macOS 12+ (Apple Silicon):** откройте `ProxysVPN_0.3.4_aarch64.dmg`, перетащите ProxysVPN на ярлык Applications, затем один раз в Терминале `xattr -dr com.apple.quarantine /Applications/ProxysVPN.app` (или «Всё равно открыть» в Системных настройках → Конфиденциальность и безопасность). При запуске приложение спрашивает пароль администратора.
+- **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.4_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». При каждом запуске — запрос прав администратора (UAC).
+- **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.4_arm64-setup.exe`, шаги те же. Файл x64 там тоже работает, через эмуляцию.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.4_amd64.deb`. Нужен сеанс с агентом polkit. Удаление: `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, Linux x86_64):** `ProxysVPN_0.3.4_amd64.AppImage`. Сделайте файл исполняемым (`chmod +x`), первый запуск и первое подключение — в режиме рабочего стола. Шаги, игровой режим и управление — в docs/STEAMDECK.md.
+
+## 🇷🇺 Что нового
+
+- **Steam Deck.** Сборка в виде AppImage для Linux x86_64: тот же туннель, что в .deb. Первое подключение — в режиме рабочего стола: приложение копирует своего помощника в папку root (`/home/.proxysvpn`) с одним запросом пароля пользователя deck и спрашивает, разрешить ли игровому режиму подключаться без пароля. Передумать можно в «Ещё» → «Удалить системные файлы». После обновления приложения первое подключение снова нужно сделать в режиме рабочего стола. В образ вложен список библиотек LGPL с адресами их исходного кода.
+- **Геймпад и полный экран на Steam Deck.** В игровом режиме окно занимает весь экран, а текст и элементы крупнее. По окну можно ходить без мыши и касания: крестовина переносит кольцо фокуса, A нажимает, B закрывает верхний экран. Код привязки вводится через экранную клавиатуру (Steam + X). Раскладку Steam Input лучше один раз выбрать, как описано в docs/STEAMDECK.md. Работает только на SteamOS.
+- **Windows на ARM.** Нативный установщик `ProxysVPN_0.3.4_arm64-setup.exe`: движки и драйвер Wintun для arm64, ничего из туннеля не работает в эмуляции.
+- **«Вставить другую ссылку».** Если ссылка занята другим устройством, под главной кнопкой появилась тихая вторая строка: она открывает экран добавления ссылки. Раньше единственная кнопка вела в кабинет, а чтобы вставить другую ссылку, приходилось искать «Отвязать это устройство» внизу настроек. Текст называет оба выхода: добавить в кабинете или в боте ещё одно устройство и вставить его ссылку либо сбросить привязку там.
+- **«Страны» говорят про обновление.** Строка под списком: список и пинг обновляются каждый раз, когда открывается этот экран. Отдельных кнопок для этого нет.
+- **Безопасность: ссылки открываются только на наши сайты.** Приложение принимает любую ссылку подписки, в том числе чужой панели, а адреса кнопки «Поддержка» и сообщения сервиса (`support-url`, `announce-url`) приходят из подписки: чужая подписка могла поставить под нашу кнопку любую страницу. Теперь приложение открывает только страницы по https на наших сайтах и страницу нашего бота в Telegram; чужие адреса из подписки не показываются, а кабинет строится только на наших сайтах.
+- **Название — WataFast.** Автоматический выбор и протокол в списке стран пишутся «WataFast», с заглавной F, как на сайтах.
+- **Инструкция для Windows** (README) описывает остановку загрузки в Edge: «Перед открытием файла убедитесь, что вы ему доверяете» и где спрятана кнопка «Всё равно сохранить». Там же сказано, почему Windows предупреждает: установщик не подписан сертификатом издателя.
+
+## 🇷🇺 Известные ограничения
+
+- **IPv6 не идёт через туннель** ни на одной системе. Программы, которые сами соединяются по IPv6 (звонки WebRTC, приложения со своим DNS), в сети с IPv6 могут ходить мимо VPN.
+- **Windows:** системный DNS пока не направляется в туннель: имена разрешает DNS вашей сети.
+- **Steam Deck:** сборка не запускалась на настоящей Steam Deck. Она проверена в симуляции: тот же AppImage в окружении SteamOS 3.7, 3.8 и 3.9 под gamescope — окно занимает весь экран 1280×800, стрелки, Enter и Escape и виртуальный геймпад двигают фокус и нажимают. Не проверено то, что есть только на самой приставке: раскладки Steam Input, экранная клавиатура Steam, подключение без пароля в настоящем игровом режиме, касание и вид на её экране. Что именно проверено и что нет — в docs/STEAMDECK.md.
+- **Windows на ARM** (Snapdragon, Surface Pro X): нативная сборка собрана и проверена в CI на ARM-машине, но на настоящем ARM-компьютере ещё не запускалась, поэтому не подтверждено, что она убирает задержку подключения. Не проверялось и то, что на компьютере не ARM64 её установщик останавливается до первой страницы и называет файл x64. Сборка x64 работает через эмуляцию, и подключение может занимать от 30 секунд до 2 минут, потому что в эмуляции драйвер Wintun не может удалить адаптер от прошлого запуска.
+- **Windows, обновление с 0.3.2 и старше:** их деинсталлятор не умеет закрывать приложение. Если установщик скажет, что не может закрыть ProxysVPN, выйдите из приложения через трей и нажмите «Повторить».
+- **Нет подписи кода и автообновления.**
+- **macOS:** только Apple Silicon. Всё приложение работает от root: движки запускаются из копии в папке root, а сам исполняемый файл — из бандла в «Программах». После сбоя движки могут работать до следующего запуска ProxysVPN, и он их остановит.
+- **Linux:** только x86_64.
+
+## 🇬🇧 Install
+
+Compare each file's SHA-256 with `SHA256SUMS.txt`. Nothing is code-signed yet, so each system warns once.
+
+- **macOS 12+ (Apple Silicon):** open `ProxysVPN_0.3.4_aarch64.dmg`, drag ProxysVPN onto the Applications shortcut, then once in Terminal `xattr -dr com.apple.quarantine /Applications/ProxysVPN.app` (or "Open Anyway" in System Settings → Privacy & Security). The app asks for the administrator password at launch.
+- **Windows 10/11 (x64):** download `ProxysVPN_0.3.4_x64-setup.exe`. Microsoft Edge may hold the download: the way to keep the file is hidden behind the arrow to the right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". Every launch asks for administrator rights (UAC).
+- **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.4_arm64-setup.exe`, the same steps. The x64 file works there too, under emulation.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.4_amd64.deb`. Needs a session with a polkit agent. Remove with `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, x86_64 Linux):** `ProxysVPN_0.3.4_amd64.AppImage`. Make the file executable (`chmod +x`); the first start and the first connect happen in Desktop Mode. The steps, Gaming Mode and the controller are in docs/STEAMDECK.md.
+
+## 🇬🇧 What's new
+
+- **Steam Deck.** An AppImage build for x86_64 Linux: the same tunnel as the .deb. The first connect happens in Desktop Mode: the app copies its root helper into a root-owned folder (`/home/.proxysvpn`) with one password prompt for the deck user, and asks whether Gaming Mode may connect without a password. You can change your mind in "More" → "Remove system files". After the app is updated, the first connect has to be made in Desktop Mode again. The image carries a list of the LGPL libraries it bundles, with the addresses of their source.
+- **Controller and a full screen on the Steam Deck.** In Gaming Mode the window fills the screen, and the text and controls are larger. The window can be used without a mouse or a touch: the D-pad moves a focus ring, A presses, B closes the top screen. The pair code is typed with the on-screen keyboard (Steam + X). It is best to pick the Steam Input layout once, as docs/STEAMDECK.md describes. SteamOS only.
+- **Windows on ARM.** A native installer, `ProxysVPN_0.3.4_arm64-setup.exe`: arm64 engines and Wintun driver, nothing of the tunnel runs under emulation.
+- **"Paste another link".** When a link is taken by another device, a quiet second line under the main button opens the add-link screen. Before, the only button led to the cabinet, and to try another link you had to find "Unlink this device" at the bottom of the settings. The text names both ways out: add one more device in the cabinet or the bot and paste its link, or reset the binding there.
+- **Countries says it refreshes.** One line under the list: the list and the ping are refreshed every time this screen is opened. There is no button for it.
+- **Security: links open only our own sites.** The app takes any subscription link, a third-party panel's included, and the addresses behind the "Support" button and the service's notice (`support-url`, `announce-url`) come from the subscription: a foreign subscription could put any page under our button. The app now opens only https pages of our own sites and our bot's page in Telegram; a foreign address from a subscription is not offered, and the cabinet is built only on our sites.
+- **The name is WataFast.** The automatic choice and the protocol in the list of countries are written "WataFast", with a capital F, as on the sites.
+- **The Windows install guide** (README) covers Edge holding the download ("Make sure you trust the file before you open it") and where the "Keep anyway" button is hidden. It also says why Windows warns: the installer is not signed with a publisher certificate.
+
+## 🇬🇧 Known limitations
+
+- **IPv6 does not go through the tunnel** on any system. Programs that connect over IPv6 on their own (WebRTC calls, apps with their own DNS) can go outside the VPN on an IPv6 network.
+- **Windows:** the system DNS is not sent into the tunnel yet; your network's DNS resolves names.
+- **Steam Deck:** the build has not been run on a real Steam Deck. It was checked in a simulation: the same AppImage in the userspace of SteamOS 3.7, 3.8 and 3.9 under gamescope — the window fills the 1280×800 screen, and the arrow keys, Enter, Escape and a virtual controller move the focus and press. Not verified is what exists only on the device itself: Steam Input layouts, Steam's on-screen keyboard, connecting without a password in the real Gaming Mode, touch, and how it looks on its screen. What was checked and what was not is in docs/STEAMDECK.md.
+- **Windows on ARM** (Snapdragon, Surface Pro X): the native build is built and checked in CI on an ARM machine, but it has not been run on a real ARM PC, so it is not confirmed that it removes the connect delay. Nor has it been checked that on a PC that is not ARM64 its installer stops before the first page and names the x64 file. The x64 build runs under emulation, and connecting can take 30 seconds to 2 minutes because the Wintun driver cannot remove the previous run's adapter there.
+- **Windows, upgrading from 0.3.2 or older:** their uninstaller cannot close the app. If the installer says it cannot close ProxysVPN, quit the app from the tray and press "Retry".
+- **No code signing and no automatic updates.**
+- **macOS:** Apple Silicon only. The whole app runs as root: the engines run from a copy in a root-owned folder, the app's own executable from the bundle in Applications. After a crash the engines may keep running until ProxysVPN is opened again, which stops them.
+- **Linux:** x86_64 only.
+
+---
+
 # ProxysVPN Desktop v0.3.3-beta
 
 🇷🇺 Windows 10/11 (x64) после живой проверки: подключение на Windows исправлено. Плюс исправления, найденные при проверке в виртуальных машинах.
