@@ -25,9 +25,11 @@ Russian sites and anything on your "always direct" list go straight out.
 ## Download and install
 
 Installers are on the [Releases page](https://github.com/evilork/proxysvpn-desktop/releases).
-Nothing is code-signed yet (no Apple Developer ID, no Windows certificate),
-so each system warns once. Compare the installer's SHA-256 with
-`SHA256SUMS.txt` on the release page before you install:
+Since 0.3.7 the macOS image is signed with the Apple Developer ID of
+Watafast LLC and notarized by Apple. The Windows installers are not signed
+with a publisher certificate yet, so Windows warns before it runs them. Compare
+the installer's SHA-256 with `SHA256SUMS.txt` on the release page before you
+install:
 
 ```bash
 shasum -a 256 ProxysVPN_*            # macOS
@@ -39,12 +41,14 @@ certutil -hashfile ProxysVPN_<version>_x64-setup.exe SHA256   # Windows
 
 1. Open `ProxysVPN_<version>_aarch64.dmg` and drag **ProxysVPN** onto the
    **Applications** shortcut.
-2. Remove the download quarantine once, in Terminal:
-   `xattr -dr com.apple.quarantine /Applications/ProxysVPN.app`
-   (or launch it, press **Done**, then System Settings → Privacy & Security →
-   **Open Anyway**; on macOS 15 and later right-click → Open no longer works).
-3. Launch ProxysVPN and enter your administrator password: the tunnel needs it.
-4. Pair with a code or a QR from the cabinet / bot, or paste your link.
+2. Launch ProxysVPN. macOS asks once whether to open an app downloaded from
+   the internet: press **Open**. Then enter your administrator password: the
+   tunnel needs it.
+3. Pair with a code or a QR from the cabinet / bot, or paste your link.
+
+Versions 0.3.6 and older are not signed by Apple's rules and need one more
+step before the first launch, in Terminal:
+`xattr -dr com.apple.quarantine /Applications/ProxysVPN.app`
 
 Details and troubleshooting: [INSTALL.md](INSTALL.md) (Russian).
 
@@ -122,8 +126,8 @@ not been run on a real Steam Deck yet.
 - **macOS and Linux: the Check screen does not test DNS yet.** The system
   resolver points into the tunnel there; the "No leaks" row checks IPv6 only
   and says so, which is why it is never green on these two systems.
-- **No code signing and no automatic updates.** Install new versions from the
-  Releases page by hand.
+- **No code signing on Windows and Linux, and no automatic updates.** Install
+  new versions from the Releases page by hand.
 - **macOS:** after a crash or Force Quit the engines may keep running until
   ProxysVPN is opened again; opening it cleans them up.
 - **macOS:** the whole app runs as root (the price of not having a signed

@@ -1,3 +1,101 @@
+# ProxysVPN Desktop v0.3.7-beta
+
+🇷🇺 Приложение принимает только ссылку подписки ProxysVPN. Страна, выбранная, пока интернета нет, включается, когда сеть возвращается. Образ для macOS подписан и заверен Apple: открывается двойным щелчком, без команды в Терминале. Знак приложения чёткий в любом размере.
+
+🇬🇧 The app takes a ProxysVPN subscription link only. A country picked while the internet is away is the one protection comes back on when the network returns. The macOS image is signed and notarized by Apple: it opens with a double click, with no Terminal command. The app's mark is sharp at every size.
+
+## 🇷🇺 Установка
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. Образ для macOS подписан сертификатом Apple Developer ID (Watafast LLC) и заверен Apple. У файлов для Windows и Linux подписи кода пока нет, поэтому эти системы один раз предупреждают.
+
+- **macOS 12+ (Apple Silicon):** откройте `ProxysVPN_0.3.7_aarch64.dmg`, перетащите ProxysVPN на ярлык Applications, при первом запуске нажмите «Открыть». Команда в Терминале больше не нужна. При запуске приложение спрашивает пароль администратора.
+- **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.7_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». При каждом запуске — запрос прав администратора (UAC).
+- **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.7_arm64-setup.exe`, шаги те же. Файл x64 там тоже работает, через эмуляцию.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.7_amd64.deb`. Нужен сеанс с агентом polkit. Удаление: `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, Linux x86_64):** `ProxysVPN_0.3.7_amd64.AppImage`. Сделайте файл исполняемым (`chmod +x`), первый запуск и первое подключение — в режиме рабочего стола. Шаги, игровой режим и управление — в docs/STEAMDECK.md.
+
+## 🇷🇺 Что нового
+
+- **Только подписка ProxysVPN.** Приложение принимает ссылку только с наших адресов. На ссылку другого сервиса оно отвечает сразу: «Это не ссылка ProxysVPN. Возьмите её в боте: «📡 Мои устройства»» — и никуда по ней не обращается. Раньше такая ссылка принималась, а приложение потом писало, что серверы недоступны, и повторяло попытки без конца. Если чужая ссылка осталась от прежней версии, экран скажет «Эта ссылка не подходит», а «Что делать» → «Добавить ссылку» откроет экран, где её можно заменить.
+- **Образ для macOS подписан и заверен Apple.** Образ открывается двойным щелчком, а при первом запуске macOS один раз спрашивает, открыть ли приложение, загруженное из интернета. Шаг с `xattr` в Терминале нужен только версиям 0.3.6 и старше.
+- **Строка «Новости в Telegram».** В «Ещё» → «О приложении», сразу после «Поддержки»: открывает наш новостной канал в браузере.
+- **Знак приложения чёткий в любом размере.** Щит на главном экране, значок окна, значок в трее и на панели задач нарисованы заново, без ступенек на краях.
+
+## 🇷🇺 Что исправлено
+
+- **Страна, выбранная без интернета.** Если выбрать страну, пока приложение пишет «Нет интернета», защита после возврата сети включается на выбранной стране. Раньше она возвращалась на прежний сервер, а в списке закреплённой значилась другая страна.
+- **Страна, выбранная в первые секунды обрыва.** То же для выбора, сделанного, когда сеть уже пропала, а экран ещё пишет «Защищено»: приложение ждёт возврата сети и переводит защиту на выбранную страну. Раньше оно отвечало «Не удалось переключить страну» и возвращалось на прежний сервер.
+- **«Германия · подключено» — только когда это так.** Строка о подключении к выбранной стране показывается, только пока защита действительно стоит на ней.
+
+## 🇷🇺 Известные ограничения
+
+- **Проверка этого выпуска:** код этого выпуска запускался вживую 7 октября 2026 года на четырёх системах, в сборках с прежним номером версии. Windows 11 на ARM в виртуальной машине (установщик arm64, и установщик x64 под эмуляцией — поверх выпуска 0.3.6): отказ чужой ссылке и имени-двойнику, замена чужой ссылки, оставшейся от 0.3.6, подключение, выбор страны при пропавшей сети, закрытые адреса сайта, знак приложения. Debian 13 в виртуальной машине (.deb поверх выпуска 0.3.6 и AppImage): то же, кроме закрытых адресов. macOS 27 на настоящем компьютере с Apple Silicon (подписанный и заверенный образ): установка перетаскиванием, первый запуск, подключение, два отключения Wi-Fi с выбором страны. Файлы выпуска собраны из того же кода с номером 0.3.7; перед публикацией каждый из пяти ставился поверх прежней сборки и подключался. Не проверялось: настоящий компьютер x64, настоящая Steam Deck, сеть с IPv6; на macOS — экраны отказа чужой ссылке и выбор страны под надписью «Нет интернета» (см. ниже).
+- **Выбранная страна при выключенной защите:** строку «Страна: …» окно помнит само, пока приложение запущено. После перезапуска приложения выбор нужно сделать заново.
+- **После возврата сети:** если сеть на компьютере пропала при включённой защите и потом вернулась, строка «Подтвердить не удалось» может держаться до 5 минут при открытом окне и до 15 при скрытом, хотя VPN уже работает. Трафик всё это время идёт через VPN. В 0.3.6 здесь было написано «до минуты» — проверка на настоящем Wi-Fi показала больше.
+- **Закрытые адреса сайта:** при подготовке этого выпуска часть прогнали вживую в виртуальной машине Windows 11, где наши адреса закрывались искусственно (соединение висит или отклоняется): при закрытом основном адресе отвечает запасной, при всех закрытых приложение включается по сохранённому списку. В настоящей заблокированной сети и на других системах вживую не проверялась. Если приложение ещё ни разу не получало список серверов, а все наши адреса в вашей сети закрыты, включаться ему не по чему: войдите и один раз включите защиту в сети, где сайт открывается.
+- **«Нет интернета» на Mac с виртуальными машинами:** пока на Mac запущена или стоит на паузе виртуальная машина (замечено с UTM), приложение принимает её внутреннюю сеть за подключение и при пропавшем интернете пишет «Подтвердить не удалось» вместо «Нет интернета». На защиту это не влияет.
+- **IPv6:** у серверов нет выхода по IPv6, сайты открываются по IPv4. Более точный маршрут IPv6, который раздаёт сам роутер, сильнее нашего: строка «Утечек нет» такой случай показывает, но не исправляет. Если система не дала направить IPv6 в туннель (так бывает, когда IPv6 в ней выключен), приложение всё равно подключается; на Windows оно пробует ещё несколько раз примерно в первые 40 секунд после подключения. В настоящей сети с IPv6 не проверялось.
+- **«Утечек нет»:** строка показывает состояние на момент проверки. То, что изменилось позже, она увидит при следующей проверке.
+- **Windows:** мимо VPN имена всё ещё могут идти, если в настройках туннеля выбран системный резолвер или в самой Windows включён DNS поверх HTTPS. Имена устройств домашней сети (LLMNR, mDNS, NetBIOS) не закрываются.
+- **macOS и Linux:** DNS в строке «Утечек нет» не проверяется, поэтому зелёной она там не бывает.
+- **Пауза:** не проверена на настоящем сне и пробуждении компьютера и на настоящей смене Wi-Fi — только на их подобии в виртуальных машинах: смена сети — при подготовке 0.3.6 (Debian), сон — при подготовке 0.3.5. Если на миг не читается адрес роутера, приложение принимает это за смену сети: пауза кончится раньше, защита вернётся.
+- **Починка соединения и закреплённая страна:** починка может перевести защиту на другую страну, даже если страна закреплена вручную; закрепление остаётся, и следующее включение вернётся на неё.
+- **Щит и кнопки под ним:** первые 0,6 секунды после того, как кнопка сменилась или сдвинулась (например, «Включить» стала «Отменой», появился экран паузы, закрылся список стран или панель поверх экрана), нажатия, которые включают или выключают защиту, не действуют — так случайный второй щелчок и нажатие, которое метило в другое место, ничего не отменяют. Если нажатие не сработало, нажмите ещё раз.
+- **Steam Deck:** сборка не запускалась на настоящей Steam Deck. В симуляции (окружение SteamOS 3.7, 3.8 и 3.9 под gamescope) проверен AppImage, собранный из кода этой версии (0.3.7). Не проверено то, что есть только на самой приставке: раскладки Steam Input, экранная клавиатура Steam, подключение без пароля в настоящем игровом режиме, касание и вид на её экране. Что именно проверено и что нет — в docs/STEAMDECK.md.
+- **Windows, обновление с 0.3.2 и старше:** их деинсталлятор не умеет закрывать приложение. Если установщик скажет, что не может закрыть ProxysVPN, выйдите из приложения через трей и нажмите «Повторить».
+- **Windows, меню в трее:** если меню открыто в тот момент, когда пауза заканчивается по времени, оно закрывается само, а на месте его угла до следующего щелчка остаётся белый квадратик. Ни на что не влияет.
+- **Подпись кода и обновления:** образ для macOS подписан и заверен Apple; у файлов для Windows и Linux подписи кода нет. Автообновления нет.
+- **macOS:** только Apple Silicon. Всё приложение работает от root: движки запускаются из копии в папке root, а сам исполняемый файл — из бандла в «Программах». После сбоя движки могут работать до следующего запуска ProxysVPN, и он их остановит. Щелчок по кнопке в окне приложения, когда активно другое приложение, только выводит окно вперёд: нажмите кнопку ещё раз.
+- **Linux:** только x86_64. Окно пароля при первом подключении AppImage вживую не проверено: в Debian 13, где шла проверка, права администратора выдаются без запроса.
+- **Linux без systemd-resolved:** если приложение и его служебный процесс убиты принудительно в один момент (например, `kill -9` или нехватка памяти), в `/etc/resolv.conf` остаётся резолвер туннеля, и сайты не открываются по имени, пока защита выключена. Включите защиту один раз: с ней имена работают, а при выключении файл возвращается к прежнему виду.
+
+## 🇬🇧 Install
+
+Compare each file's SHA-256 with `SHA256SUMS.txt`. The macOS image is signed with an Apple Developer ID certificate (Watafast LLC) and notarized by Apple. The Windows and Linux files are not code-signed yet, so those systems warn once.
+
+- **macOS 12+ (Apple Silicon):** open `ProxysVPN_0.3.7_aarch64.dmg`, drag ProxysVPN onto the Applications shortcut, and press "Open" at the first launch. The Terminal command is no longer needed. The app asks for the administrator password at launch.
+- **Windows 10/11 (x64):** download `ProxysVPN_0.3.7_x64-setup.exe`. Microsoft Edge may hold the download: the way to keep the file is hidden behind the arrow to the right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". Every launch asks for administrator rights (UAC).
+- **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.7_arm64-setup.exe`, the same steps. The x64 file works there too, under emulation.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.7_amd64.deb`. Needs a session with a polkit agent. Remove with `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, x86_64 Linux):** `ProxysVPN_0.3.7_amd64.AppImage`. Make the file executable (`chmod +x`); the first start and the first connect happen in Desktop Mode. The steps, Gaming Mode and the controller are in docs/STEAMDECK.md.
+
+## 🇬🇧 What's new
+
+- **A ProxysVPN subscription only.** The app takes a link only on our own addresses. To another service's link it answers at once: "This is not a ProxysVPN link. Get it in the bot: «📡 My devices»", and it sends nothing to that address. Before, such a link was taken, and the app then said the servers could not be reached and went on retrying without end. If a foreign link is left over from an earlier version, the screen says "This link does not fit", and "What to do" → "Add link" opens the screen where it can be replaced.
+- **The macOS image is signed and notarized by Apple.** The image opens with a double click, and at the first launch macOS asks once whether to open an app downloaded from the internet. The `xattr` step in Terminal is needed only by versions 0.3.6 and older.
+- **A "News on Telegram" row.** In "More" → "About", right after "Support": it opens our news channel in the browser.
+- **The app's mark is sharp at every size.** The shield on the main screen, the window icon, the tray icon and the taskbar icon are redrawn, with no steps along the edges.
+
+## 🇬🇧 What's fixed
+
+- **A country picked while offline.** If you pick a country while the app says "No internet", protection comes back on the picked country when the network returns. Before, it came back on the previous server while the list showed another country as pinned.
+- **A country picked in the first seconds of an outage.** The same for a pick made when the network is already gone but the screen still says "Protected": the app waits for the network and moves protection to the picked country. Before, it answered "Could not switch the country" and came back on the previous server.
+- **"Germany · connected" only when it is so.** The line about being connected to the picked country is shown only while protection really stands on it.
+
+## 🇬🇧 Known limitations
+
+- **How this release was checked:** the code of this release was run live on 7 October 2026 on four systems, in builds that still carried the previous version number. Windows 11 on ARM in a virtual machine (the arm64 installer, and the x64 installer under emulation over the released 0.3.6): the refusal of another service's link and of a look-alike name, replacing a foreign link left by 0.3.6, connecting, picking a country with the network gone, closed site addresses, the app's mark. Debian 13 in a virtual machine (the .deb over the released 0.3.6, and the AppImage): the same, except the closed addresses. macOS 27 on a real Apple Silicon computer (the signed and notarized image): install by drag, the first launch, connecting, two Wi-Fi outages with a country picked in each. The release files are built from the same code with the number 0.3.7; before publication each of the five was installed over the previous build and connected. Not checked: a real x64 computer, a real Steam Deck, a network with IPv6; on macOS, the screens that refuse a foreign link and a pick made under "No internet" (see below).
+- **A picked country with protection off:** the window itself remembers the line "Country: …" for as long as the app runs. After the app is restarted the country has to be picked again.
+- **After the network returns:** if the computer lost its network with protection on and then got it back, the line "Could not confirm" can stay for up to 5 minutes with the window open and up to 15 with it hidden, although the VPN already works. Traffic goes through the VPN all that time. The 0.3.6 notes said "up to a minute" here; a check on a real Wi-Fi showed more.
+- **Closed site addresses:** while this release was prepared the part was run live in a Windows 11 virtual machine where our addresses were closed on purpose (a connection that hangs, or one that is refused): with the main address closed a reserve one answers, with all of them closed the app turns on from the saved list. It has not been tried on a real blocked network, or live on the other systems. If the app has never fetched the list of servers and all our addresses are closed on your network, it has nothing to turn on from: sign in and turn protection on once on a network where the site opens.
+- **"No internet" on a Mac with virtual machines:** while a virtual machine is running or paused on the Mac (seen with UTM), the app takes its internal network for a connection and, with the internet gone, says "Could not confirm" instead of "No internet". Protection is not affected.
+- **IPv6:** the servers have no IPv6 exit, sites open over IPv4. A more specific IPv6 route handed out by the router itself wins over ours: the "No leaks" row shows that case but does not repair it. If the system does not let IPv6 be sent into the tunnel (as when IPv6 is switched off in it), the app connects all the same; on Windows it tries a few more times in about the first 40 seconds after a connect. Not tried on a real network with IPv6.
+- **"No leaks":** the row shows the state at the moment of the check. What changed later it sees at the next check.
+- **Windows:** names can still go past the VPN if the system resolver is chosen in the tunnel settings or DNS over HTTPS is switched on in Windows itself. Names of devices on the home network (LLMNR, mDNS, NetBIOS) are not covered.
+- **macOS and Linux:** the "No leaks" row does not check DNS, so it is never green there.
+- **Pause:** not checked on a real sleep and wake of a computer or on a real change of Wi-Fi — only on their likeness in virtual machines: a change of network while 0.3.6 was prepared (Debian), sleep while 0.3.5 was prepared. If the router's address cannot be read for a moment, the app takes that for a change of network: the pause ends early and protection comes back.
+- **Repair of the connection and a pinned country:** a repair can move protection to another country even when a country is pinned by hand; the pin stays, and the next connect returns to it.
+- **The shield and the buttons under it:** for the first 0.6 seconds after a button has changed or moved (for example "Turn on" became "Cancel", the paused screen appeared, the country list or a panel over the screen closed), presses that turn protection on or off do nothing, so that a stray second click, or a press aimed at something else, cancels nothing. If a press did not work, press again.
+- **Steam Deck:** the build has not been run on a real Steam Deck. The simulation (the userspace of SteamOS 3.7, 3.8 and 3.9 under gamescope) was run on an AppImage built from the code of this version (0.3.7). Not verified is what exists only on the device itself: Steam Input layouts, Steam's on-screen keyboard, connecting without a password in the real Gaming Mode, touch, and how it looks on its screen. What was checked and what was not is in docs/STEAMDECK.md.
+- **Windows, upgrading from 0.3.2 or older:** their uninstaller cannot close the app. If the installer says it cannot close ProxysVPN, quit the app from the tray and press "Retry".
+- **Windows, the tray menu:** if the menu is open at the moment a pause ends by its timer, it closes by itself, and a small white square stays where its corner was until the next click. It affects nothing.
+- **Code signing and updates:** the macOS image is signed and notarized by Apple; the Windows and Linux files are not code-signed. There are no automatic updates.
+- **macOS:** Apple Silicon only. The whole app runs as root: the engines run from a copy in a root-owned folder, the app's own executable from the bundle in Applications. After a crash the engines may keep running until ProxysVPN is opened again, which stops them. A click on a button in the app's window while another app is the active one only brings the window forward: press the button again.
+- **Linux:** x86_64 only. The password window of the AppImage's first connect has not been checked live: on Debian 13, where the checks ran, administrator rights are granted without asking.
+- **Linux without systemd-resolved:** if the app and its helper process are both killed by force at the same moment (for example `kill -9` or the memory killer), `/etc/resolv.conf` keeps the tunnel's resolver, and sites do not open by name while protection is off. Turn protection on once: names work with it, and turning it off puts the file back as it was.
+
+---
+
 # ProxysVPN Desktop v0.3.6-beta
 
 🇷🇺 Окно сразу отвечает на нажатие: выбранная страна тут же появляется на главном экране, а «Включить» и «Выключить» сразу пишут «Включаем…» и «Выключаем…». Рядом с названием приложения стоит значок «бета». Три исправления после проверки 0.3.5 вживую.
