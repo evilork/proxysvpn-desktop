@@ -1,0 +1,1003 @@
+diff --git a/proxy/tun/handler.go b/proxy/tun/handler.go
+--- a/proxy/tun/handler.go
++++ b/proxy/tun/handler.go
+@@ -161,6 +161,11 @@
+ 
+ 	ctx, cancel := context.WithCancel(t.ctx)
+ 	defer cancel()
++	// ProxysVPN (scripts/libxray/xray-core-udp-flows.patch): a UDP flow that
++	// has ended cancels what is still done for it, see udp_fullcone.go.
++	if flow, ok := conn.(interface{ onceEnded(func()) }); ok {
++		flow.onceEnded(cancel)
++	}
+ 	ctx = c.ContextWithID(ctx, session.NewID())
+ 
+ 	// if the connection is already closed, conn.RemoteAddr() will be nil
+diff --git a/proxy/tun/stack_gvisor.go b/proxy/tun/stack_gvisor.go
+--- a/proxy/tun/stack_gvisor.go
++++ b/proxy/tun/stack_gvisor.go
+@@ -48,6 +48,9 @@
+ 	handler     *Handler
+ 	stack       *stack.Stack
+ 	endpoint    stack.LinkEndpoint
++	// ProxysVPN (scripts/libxray/xray-core-udp-flows.patch): kept, so that
++	// Close can end the UDP flows; upstream leaves them to their outbounds.
++	udp *udpConnectionHandler
+ }
+ 
+ // NewStack builds new ip stack (using gVisor)
+@@ -108,6 +111,7 @@
+ 
+ 	// Use custom UDP packet handler, instead of strict gVisor forwarder, for FullCone NAT support
+ 	udpForwarder := newUdpConnectionHandler(t.handler.HandleConnection, t.writeRawUDPPacket)
++	t.udp = udpForwarder
+ 	ipStack.SetTransportProtocolHandler(udp.ProtocolNumber, func(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
+ 		data := pkt.Clone().Data().AsRange().ToSlice()
+ 		// if len(data) == 0 {
+@@ -204,6 +208,9 @@
+ 		return nil
+ 	}
+ 	t.endpoint.Attach(nil)
++	if t.udp != nil {
++		t.udp.close()
++	}
+ 	t.stack.Close()
+ 	for _, endpoint := range t.stack.CleanupEndpoints() {
+ 		endpoint.Abort()
+diff --git a/proxy/tun/udp_fullcone.go b/proxy/tun/udp_fullcone.go
+--- a/proxy/tun/udp_fullcone.go
++++ b/proxy/tun/udp_fullcone.go
+@@ -4,6 +4,7 @@
+ 	"context"
+ 	"io"
+ 	"sync"
++	"sync/atomic"
+ 	"time"
+ 
+ 	"github.com/xtls/xray-core/common/buf"
+@@ -16,19 +17,77 @@
+ 	dest *net.Destination
+ }
+ 
++// ProxysVPN (scripts/libxray/xray-core-udp-flows.patch). Upstream keeps one
++// flow per UDP source socket of an app and leaves its end to the outbound,
++// which lets go of it after the policy's connIdle: 300 s. A flow is a queue,
++// three goroutines and, towards a node, a connection of its own: 40 to 70 KiB
++// for a socket that sent one datagram. A game that opens a few hundred of
++// them in a minute takes the packet tunnel extension over the 50 MiB the
++// system allows it, and stopping the engine did not end them either.
++//
++// What a flow gets here is what a home router gives it: 30 s while it has
++// only been tried, 120 s once it is a stream, 10 s for a name query. The
++// table has a ceiling, and so has the number of flows still winding down;
++// and a flow that has ended cancels whatever its outbound is still doing a
++// moment later, so a dial that never completes does not wind down for the
++// 80 s its retries would take.
++type udpLimits struct {
++	// packets of one flow waiting for its outbound (upstream: 1024)
++	queue int
++	// idle time allowed to a flow that is not a stream yet
++	idleNew time.Duration
++	// idle time allowed to a stream: answered, and alive for streamAfter
++	idleStream  time.Duration
++	streamAfter time.Duration
++	// idle time allowed to a flow to port 53
++	idleDNS time.Duration
++	// flows in the table; one more ends the flow closest to its own end
++	maxFlows int
++	// flows whose handler has not returned, in the table or out of it;
++	// past this a new source's packet is dropped
++	maxRunning int
++	// what an outbound gets to deliver the answers on their way after its
++	// flow has ended; then its context is cancelled
++	windDown   time.Duration
++	sweepEvery time.Duration
++}
++
++var udpDeviceLimits = udpLimits{
++	queue:       64,
++	idleNew:     30 * time.Second,
++	idleStream:  120 * time.Second,
++	streamAfter: 2 * time.Second,
++	idleDNS:     10 * time.Second,
++	maxFlows:    128,
++	maxRunning:  192,
++	windDown:    2 * time.Second,
++	sweepEvery:  2 * time.Second,
++}
++
+ // sub-handler specifically for udp connections under main handler
+ type udpConnectionHandler struct {
+ 	sync.RWMutex
+ 
+ 	udpConns map[net.Destination]*udpConn
++	running  int
++	sweeping bool
++	closed   bool
+ 
++	limits udpLimits
++	// time since the handler was made; monotonic, so a clock set by the
++	// network does not age the flows
++	clock func() time.Duration
++
+ 	handleConnection func(conn net.Conn, dest net.Destination)
+ 	writePacket      func(data []byte, src net.Destination, dst net.Destination) error
+ }
+ 
+ func newUdpConnectionHandler(handleConnection func(conn net.Conn, dest net.Destination), writePacket func(data []byte, src net.Destination, dst net.Destination) error) *udpConnectionHandler {
++	born := time.Now()
+ 	handler := &udpConnectionHandler{
+ 		udpConns:         make(map[net.Destination]*udpConn),
++		limits:           udpDeviceLimits,
++		clock:            func() time.Duration { return time.Since(born) },
+ 		handleConnection: handleConnection,
+ 		writePacket:      writePacket,
+ 	}
+@@ -42,6 +101,7 @@
+ 	u.RLock()
+ 	conn, found := u.udpConns[src]
+ 	if found {
++		conn.touch()
+ 		select {
+ 		case conn.egress <- &packet{
+ 			data: data,
+@@ -60,11 +120,31 @@
+ 
+ 	conn, found = u.udpConns[src]
+ 	if !found {
+-		egress := make(chan *packet, 1024)
+-		conn = &udpConn{handler: u, egress: egress, src: src, dst: dst}
++		if u.closed {
++			return
++		}
++		if u.running >= u.limits.maxRunning {
++			errors.LogDebug(context.Background(), "drop udp with size ", len(data), " to ", dst.NetAddr(), " > too many flows")
++			return
++		}
++		if len(u.udpConns) >= u.limits.maxFlows {
++			u.endNearestLocked()
++		}
++
++		now := u.clock()
++		egress := make(chan *packet, u.limits.queue)
++		conn = &udpConn{handler: u, egress: egress, src: src, dst: dst, born: now}
++		conn.last.Store(int64(now))
+ 		u.udpConns[src] = conn
++		u.running++
+ 
+-		go u.handleConnection(conn, dst)
++		go u.run(conn, dst)
++		if !u.sweeping {
++			u.sweeping = true
++			go u.sweep()
++		}
++	} else {
++		conn.touch()
+ 	}
+ 
+ 	// send packet data to the egress channel, if it has buffer, or discard
+@@ -78,13 +158,93 @@
+ 	}
+ }
+ 
+-func (u *udpConnectionHandler) connectionFinished(src net.Destination) {
++func (u *udpConnectionHandler) run(conn *udpConn, dst net.Destination) {
++	defer func() {
++		u.Lock()
++		u.running--
++		u.Unlock()
++	}()
++	u.handleConnection(conn, dst)
++}
++
++func (u *udpConnectionHandler) connectionFinished(conn *udpConn) {
+ 	u.Lock()
+-	conn, found := u.udpConns[src]
+-	if found {
+-		delete(u.udpConns, src)
++	u.endLocked(conn)
++	u.Unlock()
++}
++
++// endLocked takes the flow out of the table and ends its reader, which is
++// what makes the outbound let go of it. The table is asked for this very
++// flow: one ended here is closed again by its handler a moment later, and by
++// then its source may already have a new flow.
++func (u *udpConnectionHandler) endLocked(conn *udpConn) {
++	if u.udpConns[conn.src] == conn {
++		delete(u.udpConns, conn.src)
++	}
++	if !conn.ended {
++		conn.ended = true
+ 		close(conn.egress)
++		if conn.cancel != nil {
++			time.AfterFunc(u.limits.windDown, conn.cancel)
++		}
+ 	}
++}
++
++// endNearestLocked makes room for a new flow by ending the one that had the
++// least time left anyway: an answered name query before a datagram that is
++// still being tried, either of them before a stream.
++func (u *udpConnectionHandler) endNearestLocked() {
++	var nearest *udpConn
++	var soonest time.Duration
++	for _, conn := range u.udpConns {
++		ends := conn.idleSince() + conn.allowance(u.limits)
++		if nearest == nil || ends < soonest {
++			nearest, soonest = conn, ends
++		}
++	}
++	if nearest != nil {
++		u.endLocked(nearest)
++	}
++}
++
++// expire ends the flows that have been idle for as long as they are allowed
++// and reports whether any is left.
++func (u *udpConnectionHandler) expire() bool {
++	u.Lock()
++	defer u.Unlock()
++
++	now := u.clock()
++	for _, conn := range u.udpConns {
++		if now-conn.idleSince() >= conn.allowance(u.limits) {
++			u.endLocked(conn)
++		}
++	}
++	if len(u.udpConns) == 0 {
++		u.sweeping = false
++		return false
++	}
++	return true
++}
++
++// sweep runs while there are flows, so a tunnel nobody uses wakes nothing.
++func (u *udpConnectionHandler) sweep() {
++	ticker := time.NewTicker(u.limits.sweepEvery)
++	defer ticker.Stop()
++	for range ticker.C {
++		if !u.expire() {
++			return
++		}
++	}
++}
++
++// close ends every flow and takes no new one: the stack is going away, and
++// an engine that is stopped must not keep what the apps had open.
++func (u *udpConnectionHandler) close() {
++	u.Lock()
++	u.closed = true
++	for _, conn := range u.udpConns {
++		u.endLocked(conn)
++	}
+ 	u.Unlock()
+ }
+ 
+@@ -95,8 +255,52 @@
+ 	egress chan *packet
+ 	src    net.Destination
+ 	dst    net.Destination
++
++	// when the flow began and when a packet last went either way, on the
++	// handler's clock
++	born time.Duration
++	last atomic.Int64
++	// the far side has answered
++	replied atomic.Bool
++	// egress is closed; under the handler's lock
++	ended bool
++	// ends what the outbound does for this flow; under the handler's lock
++	cancel func()
+ }
+ 
++// onceEnded is how Handler.HandleConnection hands over the cancel of the
++// context it dispatches the flow with. An outbound that reads the flow to
++// its end leaves by itself within a second; one that is still dialling a
++// node that does not answer would stay for every retry of that dial.
++func (c *udpConn) onceEnded(cancel func()) {
++	u := c.handler
++	u.Lock()
++	defer u.Unlock()
++	if c.ended {
++		time.AfterFunc(u.limits.windDown, cancel)
++		return
++	}
++	c.cancel = cancel
++}
++
++func (c *udpConn) touch() {
++	c.last.Store(int64(c.handler.clock()))
++}
++
++func (c *udpConn) idleSince() time.Duration {
++	return time.Duration(c.last.Load())
++}
++
++func (c *udpConn) allowance(limits udpLimits) time.Duration {
++	if c.dst.Port == 53 {
++		return limits.idleDNS
++	}
++	if c.replied.Load() && c.idleSince()-c.born >= limits.streamAfter {
++		return limits.idleStream
++	}
++	return limits.idleNew
++}
++
+ func (c *udpConn) ReadMultiBuffer() (buf.MultiBuffer, error) {
+ 	for {
+ 		e, ok := <-c.egress
+@@ -130,6 +334,8 @@
+ }
+ 
+ func (c *udpConn) WriteMultiBuffer(mb buf.MultiBuffer) error {
++	c.replied.Store(true)
++	c.touch()
+ 	for i, b := range mb {
+ 		dst := c.dst
+ 		if b.UDP != nil {
+@@ -151,6 +357,8 @@
+ 
+ // Write returning packets back
+ func (c *udpConn) Write(p []byte) (int, error) {
++	c.replied.Store(true)
++	c.touch()
+ 	// sending packets back mean sending payload with source/destination reversed
+ 	err := c.handler.writePacket(p, c.dst, c.src)
+ 	if err != nil {
+@@ -161,7 +369,7 @@
+ }
+ 
+ func (c *udpConn) Close() error {
+-	c.handler.connectionFinished(c.src)
++	c.handler.connectionFinished(c)
+ 
+ 	return nil
+ }
+diff --git a/proxy/tun/udp_flows_proxysvpn_test.go b/proxy/tun/udp_flows_proxysvpn_test.go
+new file mode 100644
+--- /dev/null
++++ b/proxy/tun/udp_flows_proxysvpn_test.go
+@@ -0,0 +1,370 @@
++package tun
++
++// ProxysVPN (scripts/libxray/xray-core-udp-flows.patch). A tester's iPhone,
++// 11.10.2026: with a game open the packet tunnel extension went from 11 to
++// 49.5 MiB in a few minutes on a few kilobytes of traffic, and the system
++// ended it three times. Measured on this engine: one UDP socket of an app
++// that sent a single datagram held 40 to 70 KiB for 300 s, and a stopped
++// engine went on holding it. These tests are the rules that end a flow: how
++// long each kind lives, how many there may be, and that the stack takes its
++// flows with it. scripts/build-libxray.sh runs them on the patched source.
++
++import (
++	"context"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/xtls/xray-core/common/net"
++)
++
++// A flow table under test. Its flows are read to their end the way
++// Handler.HandleConnection leaves them to an outbound, and the clock is the
++// test's own.
++type proxysvpnFlows struct {
++	*udpConnectionHandler
++	now atomic.Int64
++	// handlers that have read their flow to its end
++	ended atomic.Int32
++	// when set, a handler returns only after this is closed: an outbound
++	// takes a moment to wind down after its flow has ended
++	linger chan struct{}
++}
++
++func newProxysvpnFlows(limits udpLimits, linger bool) *proxysvpnFlows {
++	f := &proxysvpnFlows{}
++	if linger {
++		f.linger = make(chan struct{})
++	}
++	f.udpConnectionHandler = newUdpConnectionHandler(func(conn net.Conn, _ net.Destination) {
++		defer conn.Close()
++		datagram := make([]byte, 2048)
++		for {
++			if _, err := conn.Read(datagram); err != nil {
++				break
++			}
++		}
++		f.ended.Add(1)
++		if f.linger != nil {
++			<-f.linger
++		}
++	}, func([]byte, net.Destination, net.Destination) error { return nil })
++	f.limits = limits
++	f.clock = func() time.Duration { return time.Duration(f.now.Load()) }
++	return f
++}
++
++// Limits of the device with the sweeper out of the way: these tests move the
++// clock and call expire themselves.
++func proxysvpnLimits() udpLimits {
++	limits := udpDeviceLimits
++	limits.sweepEvery = time.Hour
++	return limits
++}
++
++// Sets the clock, in milliseconds since the table was made.
++func (f *proxysvpnFlows) at(ms int64) {
++	f.now.Store(ms * int64(time.Millisecond))
++}
++
++// A datagram from the app's socket on this port to the far side's port.
++func (f *proxysvpnFlows) send(from, to int) {
++	f.HandlePacket(
++		net.UDPDestination(net.IPAddress([]byte{10, 111, 0, 2}), net.Port(from)),
++		net.UDPDestination(net.IPAddress([]byte{198, 51, 100, 7}), net.Port(to)),
++		[]byte("datagram"),
++	)
++}
++
++func (f *proxysvpnFlows) flow(from int) *udpConn {
++	f.RLock()
++	defer f.RUnlock()
++	return f.udpConns[net.UDPDestination(net.IPAddress([]byte{10, 111, 0, 2}), net.Port(from))]
++}
++
++func (f *proxysvpnFlows) open(t *testing.T, want ...int) {
++	t.Helper()
++	f.RLock()
++	count := len(f.udpConns)
++	f.RUnlock()
++	if count != len(want) {
++		t.Fatalf("%d flows in the table, expected %d (%v)", count, len(want), want)
++	}
++	for _, from := range want {
++		if f.flow(from) == nil {
++			t.Fatalf("the flow from port %d is gone, expected %v", from, want)
++		}
++	}
++}
++
++func (f *proxysvpnFlows) handlers() int {
++	f.RLock()
++	defer f.RUnlock()
++	return f.running
++}
++
++func proxysvpnEventually(t *testing.T, what string, done func() bool) {
++	t.Helper()
++	deadline := time.Now().Add(5 * time.Second)
++	for !done() {
++		if time.Now().After(deadline) {
++			t.Fatal(what)
++		}
++		time.Sleep(time.Millisecond)
++	}
++}
++
++func TestProxysVPNUDPFlowLifetimes(t *testing.T) {
++	f := newProxysvpnFlows(proxysvpnLimits(), false)
++
++	f.at(0)
++	f.send(1001, 53)   // a name query
++	f.send(1002, 7777) // a datagram nobody answers
++	f.send(1003, 7777) // answered once: a probe, not a stream
++	f.send(1004, 7777) // answered, and still talking three seconds later
++	f.at(100)
++	if _, err := f.flow(1003).Write([]byte("answer")); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := f.flow(1004).Write([]byte("answer")); err != nil {
++		t.Fatal(err)
++	}
++	f.at(3000)
++	f.send(1004, 7777)
++
++	steps := []struct {
++		at   int64
++		open []int
++	}{
++		{9900, []int{1001, 1002, 1003, 1004}},
++		{10000, []int{1002, 1003, 1004}}, // the query: 10 s
++		{29900, []int{1002, 1003, 1004}},
++		{30000, []int{1003, 1004}}, // never answered: 30 s
++		{30100, []int{1004}},       // answered once at 0.1 s: 30 s after that
++		{122900, []int{1004}},
++		{123000, nil}, // a stream, last heard at 3 s: 120 s
++	}
++	for _, step := range steps {
++		f.at(step.at)
++		if left := f.expire(); left != (len(step.open) > 0) {
++			t.Fatalf("at %d ms expire reported flows left = %v", step.at, left)
++		}
++		f.open(t, step.open...)
++	}
++	proxysvpnEventually(t, "the handlers of the ended flows did not return", func() bool {
++		return f.ended.Load() == 4 && f.handlers() == 0
++	})
++}
++
++func TestProxysVPNUDPFlowCeilings(t *testing.T) {
++	limits := proxysvpnLimits()
++	limits.maxFlows = 4
++	limits.maxRunning = 6
++	f := newProxysvpnFlows(limits, true)
++
++	f.at(0)
++	f.send(2001, 7777) // a stream by 2.5 s: its end is 122.5 s
++	f.at(100)
++	if _, err := f.flow(2001).Write([]byte("answer")); err != nil {
++		t.Fatal(err)
++	}
++	f.at(2500)
++	f.send(2001, 7777)
++	f.at(3000)
++	f.send(2002, 53) // ends at 13 s
++	f.at(4000)
++	f.send(2003, 7777) // ends at 34 s
++	f.at(5000)
++	f.send(2004, 7777) // ends at 35 s
++	f.open(t, 2001, 2002, 2003, 2004)
++	if queue := cap(f.flow(2001).egress); queue != limits.queue {
++		t.Fatalf("a flow queues %d packets, expected %d", queue, limits.queue)
++	}
++
++	// The table is full: each new flow ends the one nearest to its own end.
++	f.at(6000)
++	f.send(2005, 7777)
++	f.open(t, 2001, 2003, 2004, 2005)
++	f.at(7000)
++	f.send(2006, 7777)
++	f.open(t, 2001, 2004, 2005, 2006)
++	proxysvpnEventually(t, "the two flows that made room were not ended", func() bool { return f.ended.Load() == 2 })
++
++	// Their outbounds are still winding down, so six handlers are alive. A
++	// seventh source is dropped, and it costs nobody a flow.
++	if running := f.handlers(); running != 6 {
++		t.Fatalf("%d handlers alive, expected 6", running)
++	}
++	f.at(8000)
++	f.send(2007, 7777)
++	f.open(t, 2001, 2004, 2005, 2006)
++
++	close(f.linger)
++	proxysvpnEventually(t, "the handlers of the ended flows did not return", func() bool { return f.handlers() == 4 })
++	f.at(9000)
++	f.send(2007, 7777)
++	f.open(t, 2001, 2005, 2006, 2007)
++
++	// What the ceilings are for. A flow towards a node measured 59 to
++	// 70 KiB; the extension has about 39 MiB above its own 11, and the
++	// engine's connections for everything else live there too.
++	const flowCost = 70 << 10
++	if most := udpDeviceLimits.maxRunning * flowCost; most > 14<<20 {
++		t.Fatalf("UDP flows may take %d KiB of the extension's memory, more than 14 MiB", most>>10)
++	}
++	if udpDeviceLimits.maxRunning < udpDeviceLimits.maxFlows {
++		t.Fatal("fewer handlers allowed than flows in the table: a full table could never be reached")
++	}
++}
++
++func TestProxysVPNUDPFlowsEndWithTheStack(t *testing.T) {
++	f := newProxysvpnFlows(proxysvpnLimits(), true)
++
++	f.at(0)
++	f.send(3001, 7777)
++	f.send(3002, 7777)
++	first := f.flow(3001)
++
++	// A flow that timed out is closed once more by its handler, later: by
++	// then the same socket may have a new flow, and that one must stay.
++	f.at(30000)
++	f.expire()
++	f.open(t)
++	f.send(3001, 7777)
++	second := f.flow(3001)
++	if second == nil || second == first {
++		t.Fatal("a socket whose flow timed out did not get a new one")
++	}
++	if err := first.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if f.flow(3001) != second {
++		t.Fatal("closing the old flow took the new one of the same socket out of the table")
++	}
++
++	f.close()
++	f.open(t)
++	close(f.linger)
++	proxysvpnEventually(t, "flows outlived the stack", func() bool {
++		return f.ended.Load() == 3 && f.handlers() == 0
++	})
++
++	// Packets may still arrive while the stack goes away, and an outbound
++	// may still answer a flow that has ended.
++	f.send(3003, 7777)
++	f.open(t)
++	if _, err := second.Write([]byte("late answer")); err != nil {
++		t.Fatal(err)
++	}
++	if err := second.Close(); err != nil {
++		t.Fatal(err)
++	}
++}
++
++// The sweeper on its own clock: nobody calls expire here.
++func TestProxysVPNUDPFlowsEndByThemselves(t *testing.T) {
++	ended := make(chan struct{}, 2)
++	u := newUdpConnectionHandler(func(conn net.Conn, _ net.Destination) {
++		defer conn.Close()
++		datagram := make([]byte, 2048)
++		for {
++			if _, err := conn.Read(datagram); err != nil {
++				break
++			}
++		}
++		ended <- struct{}{}
++	}, func([]byte, net.Destination, net.Destination) error { return nil })
++	u.limits.idleNew = 40 * time.Millisecond
++	u.limits.sweepEvery = 5 * time.Millisecond
++
++	src := net.UDPDestination(net.IPAddress([]byte{10, 111, 0, 2}), 4001)
++	dst := net.UDPDestination(net.IPAddress([]byte{198, 51, 100, 7}), 7777)
++	idle := func() bool {
++		u.RLock()
++		defer u.RUnlock()
++		return len(u.udpConns) == 0 && u.running == 0 && !u.sweeping
++	}
++	// Twice: the sweeper stops with the last flow and has to come back.
++	for round := 1; round <= 2; round++ {
++		u.HandlePacket(src, dst, []byte("datagram"))
++		select {
++		case <-ended:
++		case <-time.After(5 * time.Second):
++			t.Fatalf("round %d: an idle flow was not ended", round)
++		}
++		proxysvpnEventually(t, "the table did not come to rest", idle)
++	}
++}
++
++// An outbound that never reads its flow, as when the dial to the node does
++// not complete: the end of the flow tells it nothing. What Handler.
++// HandleConnection hands over with onceEnded ends it a moment later, whether
++// the flow ended after the handing over or before it.
++func TestProxysVPNUDPFlowCancelsItsOutbound(t *testing.T) {
++	var now atomic.Int64
++	gate := make(chan struct{})
++	released := make(chan time.Time, 2)
++	u := newUdpConnectionHandler(func(conn net.Conn, _ net.Destination) {
++		defer conn.Close()
++		ctx, cancel := context.WithCancel(context.Background())
++		defer cancel()
++		<-gate
++		conn.(interface{ onceEnded(func()) }).onceEnded(cancel)
++		<-ctx.Done()
++		released <- time.Now()
++	}, func([]byte, net.Destination, net.Destination) error { return nil })
++	u.limits.windDown = 60 * time.Millisecond
++	u.limits.sweepEvery = time.Hour
++	u.clock = func() time.Duration { return time.Duration(now.Load()) }
++
++	dst := net.UDPDestination(net.IPAddress([]byte{198, 51, 100, 7}), 7777)
++	send := func(port int) net.Destination {
++		src := net.UDPDestination(net.IPAddress([]byte{10, 111, 0, 2}), net.Port(port))
++		u.HandlePacket(src, dst, []byte("datagram"))
++		return src
++	}
++	// Ends every flow in the table and says when.
++	end := func() time.Time {
++		now.Add(int64(u.limits.idleNew))
++		u.expire()
++		return time.Now()
++	}
++	expect := func(what string, ended time.Time) {
++		t.Helper()
++		select {
++		case at := <-released:
++			if at.Sub(ended) < u.limits.windDown {
++				t.Fatalf("%s: cancelled %v after its flow ended, before the %v it is given", what, at.Sub(ended), u.limits.windDown)
++			}
++		case <-time.After(5 * time.Second):
++			t.Fatalf("%s: never cancelled", what)
++		}
++	}
++
++	// Handed over first, ended afterwards.
++	src := send(5001)
++	gate <- struct{}{}
++	proxysvpnEventually(t, "the cancel was not handed over", func() bool {
++		u.RLock()
++		defer u.RUnlock()
++		return u.udpConns[src].cancel != nil
++	})
++	select {
++	case <-released:
++		t.Fatal("a flow that is still open was cancelled")
++	case <-time.After(2 * u.limits.windDown):
++	}
++	expect("handed over, then ended", end())
++
++	// Ended first: the handler was not there yet.
++	send(5002)
++	ended := end()
++	gate <- struct{}{}
++	expect("ended, then handed over", ended)
++
++	proxysvpnEventually(t, "the handlers did not return", func() bool {
++		u.RLock()
++		defer u.RUnlock()
++		return u.running == 0
++	})
++}
+diff --git a/proxy/tun/udp_flows_restart_proxysvpn_test.go b/proxy/tun/udp_flows_restart_proxysvpn_test.go
+new file mode 100644
+--- /dev/null
++++ b/proxy/tun/udp_flows_restart_proxysvpn_test.go
+@@ -0,0 +1,267 @@
++//go:build darwin
++
++package tun_test
++
++// ProxysVPN (scripts/libxray/xray-core-udp-flows.patch). MemoryGuard.swift
++// restarts the engine in place to get memory back. The UDP flows of the
++// stopped engine used to stay, each with its goroutines and its connection,
++// so the restart freed nothing: a tester's journal of 11.10.2026 reads 47.8,
++// 48.8 and 49.4 MiB across two restarts, and then the system ended the
++// extension. Here apps resolve names through the tunnel from many sockets,
++// the engine is restarted the way the guard does it, and what the first
++// engine held for those sockets has to be gone. The second test is the same
++// with flows whose outbound never got through to its node.
++
++import (
++	"fmt"
++	"net"
++	"runtime"
++	"strings"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/xtls/xray-core/core"
++	_ "github.com/xtls/xray-core/main/distro/all"
++	"golang.org/x/sys/unix"
++	"gvisor.dev/gvisor/pkg/tcpip"
++	"gvisor.dev/gvisor/pkg/tcpip/checksum"
++	"gvisor.dev/gvisor/pkg/tcpip/header"
++)
++
++var (
++	proxysvpnFlowApp      = tcpip.AddrFrom4([4]byte{10, 111, 0, 2})
++	proxysvpnFlowResolver = tcpip.AddrFrom4([4]byte{10, 111, 0, 1})
++	proxysvpnFlowServer   = tcpip.AddrFrom4([4]byte{203, 0, 113, 7})
++)
++
++// A datagram from an app's own socket, as the utun hands it over.
++func proxysvpnFlowDatagram(srcPort uint16, dst tcpip.Address, dstPort uint16, payload []byte) []byte {
++	udpLen := header.UDPMinimumSize + len(payload)
++	ipLen := header.IPv4MinimumSize + udpLen
++	p := make([]byte, 4+ipLen)
++	p[3] = unix.AF_INET
++	ip := header.IPv4(p[4:])
++	ip.Encode(&header.IPv4Fields{
++		TotalLength: uint16(ipLen), TTL: 64, Protocol: uint8(header.UDPProtocolNumber),
++		SrcAddr: proxysvpnFlowApp, DstAddr: dst,
++	})
++	ip.SetChecksum(^ip.CalculateChecksum())
++	udp := header.UDP(p[4+header.IPv4MinimumSize:])
++	udp.Encode(&header.UDPFields{SrcPort: srcPort, DstPort: dstPort, Length: uint16(udpLen)})
++	copy(udp.Payload(), payload)
++	sum := header.PseudoHeaderChecksum(header.UDPProtocolNumber, proxysvpnFlowApp, dst, uint16(udpLen))
++	udp.SetChecksum(^udp.CalculateChecksum(checksum.Checksum(payload, sum)))
++	return p
++}
++
++// A query for an A record.
++func proxysvpnFlowQuery(srcPort uint16, name string) []byte {
++	query := []byte{byte(srcPort >> 8), byte(srcPort), 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0}
++	for _, label := range strings.Split(name, ".") {
++		query = append(query, byte(len(label)))
++		query = append(query, label...)
++	}
++	return proxysvpnFlowDatagram(srcPort, proxysvpnFlowResolver, 53, append(query, 0, 0, 1, 0, 1))
++}
++
++// Name handling as the app's configuration has it: queries go to the dns
++// outbound and are answered from the engine's own resolver.
++const proxysvpnFlowNames = `"dns":{"hosts":{"domain:game.test":"198.51.100.9"},"servers":["localhost"],"queryStrategy":"UseIPv4"},
++	"outbounds":[{"protocol":"blackhole","tag":"block"},
++		{"protocol":"dns","tag":"dns-out","settings":{"rules":[{"action":"hijack","qType":"1,28"},{"action":"return","rCode":0}]}}],
++	"routing":{"rules":[{"type":"field","outboundTag":"dns-out","port":53}]}`
++
++// The engine on a duplicate of the tunnel's descriptor; rest is the
++// configuration after the tun inbound.
++func proxysvpnFlowStart(t *testing.T, own int, rest string) *core.Instance {
++	t.Helper()
++	fd, err := unix.Dup(own)
++	if err != nil {
++		t.Fatal(err)
++	}
++	text := fmt.Sprintf(`{"log":{"loglevel":"none"},"env":{"xray.tun.fd":"%d"},
++		"inbounds":[{"tag":"tun-in","protocol":"tun","settings":{"name":"utun","mtu":1500}}],
++		%s}`, fd, rest)
++	config, err := core.LoadConfig("json", strings.NewReader(text))
++	if err != nil {
++		t.Fatal(err)
++	}
++	server, err := core.New(config)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := server.Start(); err != nil {
++		t.Fatal(err)
++	}
++	return server
++}
++
++func TestProxysVPNRestartEndsUDPFlows(t *testing.T) {
++	const sockets = 60
++
++	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_DGRAM, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	own, far := pair[0], pair[1]
++	defer unix.Close(own)
++	defer unix.Close(far)
++
++	// The apps' side of the tunnel: counts the answers that come back.
++	var answers atomic.Int32
++	stop := make(chan struct{})
++	drained := make(chan struct{})
++	go func() {
++		defer close(drained)
++		buf := make([]byte, 2048)
++		for {
++			select {
++			case <-stop:
++				return
++			default:
++			}
++			fds := []unix.PollFd{{Fd: int32(far), Events: unix.POLLIN}}
++			if n, _ := unix.Poll(fds, 20); n <= 0 {
++				continue
++			}
++			n, err := unix.Read(far, buf)
++			if err != nil || n < 4+header.IPv4MinimumSize+header.UDPMinimumSize {
++				continue
++			}
++			ip := header.IPv4(buf[4:n])
++			if ip.Protocol() == uint8(header.UDPProtocolNumber) && header.UDP(ip.Payload()).SourcePort() == 53 {
++				answers.Add(1)
++			}
++		}
++	}()
++	defer func() {
++		close(stop)
++		<-drained
++	}()
++
++	first := proxysvpnFlowStart(t, own, proxysvpnFlowNames)
++	time.Sleep(300 * time.Millisecond)
++	rest := runtime.NumGoroutine()
++
++	for i := 0; i < sockets; i++ {
++		port := uint16(30000 + i)
++		unix.Write(far, proxysvpnFlowQuery(port, fmt.Sprintf("n%d.game.test", i)))
++		time.Sleep(time.Millisecond)
++	}
++	deadline := time.Now().Add(5 * time.Second)
++	for answers.Load() < sockets && time.Now().Before(deadline) {
++		time.Sleep(10 * time.Millisecond)
++	}
++	if got := answers.Load(); got < sockets {
++		t.Fatalf("%d of %d name queries were answered through the tunnel", got, sockets)
++	}
++	// Each socket is a flow the engine keeps: without them this test would
++	// pass on an engine that frees nothing.
++	if held := runtime.NumGoroutine(); held < rest+sockets {
++		t.Fatalf("%d goroutines with %d sockets open, %d at rest: the flows are not there to end", held, sockets, rest)
++	}
++
++	if err := first.Close(); err != nil {
++		t.Fatalf("the engine did not stop: %v", err)
++	}
++	second := proxysvpnFlowStart(t, own, proxysvpnFlowNames)
++	defer second.Close()
++
++	deadline = time.Now().Add(5 * time.Second)
++	for runtime.NumGoroutine() >= rest+sockets/2 && time.Now().Before(deadline) {
++		time.Sleep(50 * time.Millisecond)
++	}
++	if left := runtime.NumGoroutine(); left >= rest+sockets/2 {
++		t.Fatalf("%d goroutines after the restart, %d at rest before it: the stopped engine kept its UDP flows", left, rest)
++	}
++}
++
++// A node that takes the connection and never says a word: the dial of every
++// flow stays in its TLS handshake. Nothing reads such a flow, so its end
++// alone ends nothing; it is the cancel a moment later that does, and without
++// it these handlers would stay for as long as the node keeps the connection.
++func TestProxysVPNRestartEndsUDPFlowsThatNeverConnected(t *testing.T) {
++	const sockets = 40
++
++	node, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	var taken atomic.Int32
++	held := make(chan net.Conn, 16*sockets)
++	go func() {
++		for {
++			conn, err := node.Accept()
++			if err != nil {
++				return
++			}
++			taken.Add(1)
++			select {
++			case held <- conn:
++			default:
++				conn.Close()
++			}
++		}
++	}()
++	defer func() {
++		node.Close()
++		for {
++			select {
++			case conn := <-held:
++				conn.Close()
++			default:
++				return
++			}
++		}
++	}()
++
++	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_DGRAM, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	own, far := pair[0], pair[1]
++	defer unix.Close(own)
++	defer unix.Close(far)
++
++	outbound := fmt.Sprintf(`"outbounds":[{"protocol":"vless","tag":"proxy",
++		"settings":{"vnext":[{"address":"127.0.0.1","port":%d,
++			"users":[{"id":"5783a3e7-e373-51cd-8642-c83782b807c5","encryption":"none"}]}]},
++		"streamSettings":{"network":"tcp","security":"tls","tlsSettings":{"serverName":"node.test"}}}]`,
++		node.Addr().(*net.TCPAddr).Port)
++
++	first := proxysvpnFlowStart(t, own, outbound)
++	time.Sleep(300 * time.Millisecond)
++	rest := runtime.NumGoroutine()
++
++	for i := 0; i < sockets; i++ {
++		unix.Write(far, proxysvpnFlowDatagram(uint16(31000+i), proxysvpnFlowServer, 27015, []byte("ping")))
++		time.Sleep(time.Millisecond)
++	}
++	deadline := time.Now().Add(5 * time.Second)
++	for taken.Load() < sockets && time.Now().Before(deadline) {
++		time.Sleep(10 * time.Millisecond)
++	}
++	if got := taken.Load(); got < sockets {
++		t.Fatalf("%d of %d flows reached the node", got, sockets)
++	}
++	if dialling := runtime.NumGoroutine(); dialling < rest+sockets {
++		t.Fatalf("%d goroutines with %d flows dialling, %d at rest: the flows are not there to end", dialling, sockets, rest)
++	}
++
++	if err := first.Close(); err != nil {
++		t.Fatalf("the engine did not stop: %v", err)
++	}
++	second := proxysvpnFlowStart(t, own, outbound)
++	defer second.Close()
++
++	// Two seconds until the cancel, two more for the retries of the dial to
++	// find out.
++	deadline = time.Now().Add(12 * time.Second)
++	for runtime.NumGoroutine() >= rest+sockets/2 && time.Now().Before(deadline) {
++		time.Sleep(50 * time.Millisecond)
++	}
++	if left := runtime.NumGoroutine(); left >= rest+sockets/2 {
++		t.Fatalf("%d goroutines after the restart, %d at rest before it: flows that never connected were kept", left, rest)
++	}
++}

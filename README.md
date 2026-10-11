@@ -15,7 +15,8 @@ Russian sites and anything on your "always direct" list go straight out.
 - **VLESS Reality / XHTTP and Hysteria2.** xray is always the front of the
   chain, so the split-routing rules apply on every protocol.
 - **Pairing without typing a link:** an 8-character code from the cabinet or
-  the bot, or a QR code scanned with the phone.
+  the bot, or the round sign-in code on the app's screen, read by the scanner
+  in your account on a phone.
 - **Repairs itself:** a dead engine is restarted, a node that stops getting
   through is swapped for another, and the window says what happened.
 - **System tray** with Show / Disconnect / Quit; closing the window keeps the
@@ -44,7 +45,8 @@ certutil -hashfile ProxysVPN_<version>_x64-setup.exe SHA256   # Windows
 2. Launch ProxysVPN. macOS asks once whether to open an app downloaded from
    the internet: press **Open**. Then enter your administrator password: the
    tunnel needs it.
-3. Pair with a code or a QR from the cabinet / bot, or paste your link.
+3. Pair with a code from the cabinet / bot, scan the round code on the
+   app's screen from your account on a phone, or paste your link.
 
 Versions 0.3.6 and older are not signed by Apple's rules and need one more
 step before the first launch, in Terminal:
@@ -66,7 +68,8 @@ with `SHA256SUMS.txt` on the release page if you want to be sure it is ours.
    **More info → Run anyway**.
 3. Allow the administrator prompt (UAC). The app asks for it at every launch:
    it creates the tunnel adapter and routes.
-4. Pair with a code or a QR, or paste your link.
+4. Pair with a code, scan the round code on the app's screen from your
+   account on a phone, or paste your link.
 
 **Windows on ARM** (Snapdragon, Surface Pro X): take
 `ProxysVPN_<version>_arm64-setup.exe`, the steps are the same. The x64 file

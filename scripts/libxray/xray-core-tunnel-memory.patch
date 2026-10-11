@@ -27,3 +27,348 @@ diff --git a/proxy/tun/stack_gvisor.go b/proxy/tun/stack_gvisor.go
  )
  
  // stackGVisor is ip stack implemented by gVisor package
+diff --git a/proxy/tun/restart_proxysvpn_test.go b/proxy/tun/restart_proxysvpn_test.go
+new file mode 100644
+--- /dev/null
++++ b/proxy/tun/restart_proxysvpn_test.go
+@@ -0,0 +1,185 @@
++//go:build darwin
++
++package tun_test
++
++// ProxysVPN (scripts/libxray/xray-core-tunnel-memory.patch). The packet
++// tunnel extension restarts the engine in place when memory runs out
++// (MemoryGuard.swift): it stops Xray and starts it again in the same process
++// on a new duplicate of the same utun descriptor, while the apps keep
++// sending. This is that sequence on a socket pair standing in for the utun.
++// It fails if a new Xray-core no longer comes back from it - the extension
++// would then hold a tunnel that carries nothing.
++
++import (
++	"fmt"
++	"runtime/debug"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/xtls/xray-core/core"
++	_ "github.com/xtls/xray-core/main/distro/all"
++	"golang.org/x/sys/unix"
++	"gvisor.dev/gvisor/pkg/tcpip"
++	"gvisor.dev/gvisor/pkg/tcpip/checksum"
++	"gvisor.dev/gvisor/pkg/tcpip/header"
++)
++
++var (
++	proxysvpnApp  = tcpip.AddrFrom4([4]byte{10, 111, 0, 2})
++	proxysvpnSite = tcpip.AddrFrom4([4]byte{198, 51, 100, 7})
++)
++
++// A SYN from an app behind the tunnel, as the utun hands it over.
++func proxysvpnSyn(srcPort uint16) []byte {
++	const ipLen = header.IPv4MinimumSize + header.TCPMinimumSize
++	p := make([]byte, 4+ipLen)
++	p[3] = unix.AF_INET
++	ip := header.IPv4(p[4:])
++	ip.Encode(&header.IPv4Fields{
++		TotalLength: ipLen, TTL: 64, Protocol: uint8(header.TCPProtocolNumber),
++		SrcAddr: proxysvpnApp, DstAddr: proxysvpnSite,
++	})
++	ip.SetChecksum(^ip.CalculateChecksum())
++	tcp := header.TCP(p[4+header.IPv4MinimumSize:])
++	tcp.Encode(&header.TCPFields{
++		SrcPort: srcPort, DstPort: 443, SeqNum: 1000, DataOffset: header.TCPMinimumSize,
++		Flags: header.TCPFlagSyn, WindowSize: 65535,
++	})
++	sum := header.PseudoHeaderChecksum(header.TCPProtocolNumber, proxysvpnApp, proxysvpnSite, header.TCPMinimumSize)
++	tcp.SetChecksum(^checksum.Checksum(tcp, sum))
++	return p
++}
++
++// Whether the engine answers the SYN from srcPort within the wait.
++func proxysvpnSynAcked(far int, srcPort uint16, wait time.Duration) bool {
++	deadline := time.Now().Add(wait)
++	buf := make([]byte, 2048)
++	for time.Now().Before(deadline) {
++		fds := []unix.PollFd{{Fd: int32(far), Events: unix.POLLIN}}
++		if n, _ := unix.Poll(fds, 50); n <= 0 {
++			continue
++		}
++		n, err := unix.Read(far, buf)
++		if err != nil || n < 4+header.IPv4MinimumSize+header.TCPMinimumSize {
++			continue
++		}
++		ip := header.IPv4(buf[4:n])
++		if ip.Protocol() != uint8(header.TCPProtocolNumber) {
++			continue
++		}
++		tcp := header.TCP(ip.Payload())
++		if tcp.DestinationPort() == srcPort && tcp.Flags() == header.TCPFlagSyn|header.TCPFlagAck {
++			return true
++		}
++	}
++	return false
++}
++
++// The engine on a duplicate of the tunnel's descriptor, started the way
++// libXray's RunXray starts it.
++func proxysvpnStart(t *testing.T, own int) *core.Instance {
++	t.Helper()
++	fd, err := unix.Dup(own)
++	if err != nil {
++		t.Fatal(err)
++	}
++	text := fmt.Sprintf(`{"log":{"loglevel":"none"},"env":{"xray.tun.fd":"%d"},
++		"inbounds":[{"tag":"tun-in","protocol":"tun","settings":{"name":"utun","mtu":1500}}],
++		"outbounds":[{"protocol":"freedom","tag":"direct"}]}`, fd)
++	config, err := core.LoadConfig("json", strings.NewReader(text))
++	if err != nil {
++		t.Fatal(err)
++	}
++	server, err := core.New(config)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := server.Start(); err != nil {
++		t.Fatal(err)
++	}
++	debug.FreeOSMemory()
++	return server
++}
++
++func TestProxysVPNRestartOnTheSameTunnel(t *testing.T) {
++	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_DGRAM, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	own, far := pair[0], pair[1]
++	defer unix.Close(own)
++	defer unix.Close(far)
++
++	first := proxysvpnStart(t, own)
++	unix.Write(far, proxysvpnSyn(40001))
++	if !proxysvpnSynAcked(far, 40001, 3*time.Second) {
++		t.Fatal("the engine did not answer a SYN from the tunnel")
++	}
++
++	// The apps keep sending while the engine is replaced: the guard fires
++	// under load, so the old reader is busy, not waiting.
++	stop := make(chan struct{})
++	sent := make(chan struct{})
++	go func() {
++		defer close(sent)
++		for port := uint16(20000); ; port++ {
++			select {
++			case <-stop:
++				return
++			default:
++				unix.Write(far, proxysvpnSyn(port))
++				time.Sleep(time.Millisecond)
++			}
++		}
++	}()
++	// Nobody reads the answers to that traffic; a full socket must not stall
++	// the engine's writes.
++	drained := make(chan struct{})
++	go func() {
++		defer close(drained)
++		buf := make([]byte, 2048)
++		for {
++			select {
++			case <-stop:
++				return
++			default:
++				fds := []unix.PollFd{{Fd: int32(far), Events: unix.POLLIN}}
++				if n, _ := unix.Poll(fds, 20); n > 0 {
++					unix.Read(far, buf)
++				}
++			}
++		}
++	}()
++
++	time.Sleep(200 * time.Millisecond)
++	if err := first.Close(); err != nil {
++		t.Fatalf("the engine did not stop: %v", err)
++	}
++	first = nil
++	second := proxysvpnStart(t, own)
++	defer second.Close()
++
++	// What libXray does once a second on iOS: whatever the stopped engine
++	// left behind is collected, the descriptor it was handed included.
++	for i := 0; i < 8; i++ {
++		time.Sleep(250 * time.Millisecond)
++		debug.FreeOSMemory()
++	}
++	close(stop)
++	<-sent
++	<-drained
++
++	if _, err := unix.FcntlInt(uintptr(own), unix.F_GETFD, 0); err != nil {
++		t.Fatalf("the tunnel's own descriptor did not outlive the first engine: %v", err)
++	}
++	// A reader of the stopped engine may take one packet before it leaves;
++	// the system's TCP sends a SYN again, and so does this.
++	for attempt := uint16(1); attempt <= 4; attempt++ {
++		unix.Write(far, proxysvpnSyn(41000+attempt))
++		if proxysvpnSynAcked(far, 41000+attempt, 2*time.Second) {
++			return
++		}
++	}
++	t.Fatal("the restarted engine does not answer a SYN from the tunnel")
++}
+diff --git a/transport/internet/splithttp/dialer.go b/transport/internet/splithttp/dialer.go
+--- a/transport/internet/splithttp/dialer.go
++++ b/transport/internet/splithttp/dialer.go
+@@ -96,6 +96,38 @@
+ 		return "3"
+ 	}
+ 	return "2"
++}
++
++// h2StreamReceiveBuffer is how much one HTTP/2 stream may hold for a reader
++// that is slower than the network.
++//
++// ProxysVPN (scripts/libxray/xray-core-tunnel-memory.patch): this build runs
++// inside an Apple packet tunnel extension, which the system ends at about
++// 50 MiB for the whole process. Go's HTTP/2 client lets the server send 4 MiB
++// per stream before the reader has taken a byte, so eight downloads whose app
++// reads slower than the network (a game unpacking what it fetches) hold
++// 32 MiB here, and the tunnel is gone. 512 KiB per stream still carries
++// 40 Mbit/s per stream at 100 ms to the node, and more on a nearer one. The
++// connection's own window stays as it is: a small one would let a few stalled
++// streams stop every other stream that shares the connection.
++const h2StreamReceiveBuffer = 512 << 10
++
++// newH2Transport is the HTTP/2 client of this transport, with the stream
++// window above. The window is a setting of net/http's Transport, which the
++// HTTP/2 one is attached to; requests still go out through dialTLS.
++func newH2Transport(dialTLS func(ctx context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error), keepAlivePeriod time.Duration) *http2.Transport {
++	h2, err := http2.ConfigureTransports(&http.Transport{
++		HTTP2: &http.HTTP2Config{MaxReceiveBufferPerStream: h2StreamReceiveBuffer},
++	})
++	if err != nil {
++		// Never with the toolchain this build pins; the window is then the
++		// library's own.
++		h2 = &http2.Transport{}
++	}
++	h2.DialTLSContext = dialTLS
++	h2.IdleConnTimeout = net.ConnIdleTimeout
++	h2.ReadIdleTimeout = keepAlivePeriod
++	return h2
+ }
+ 
+ func createHTTPClient(dest net.Destination, streamSettings *internet.MemoryStreamConfig) DialerClient {
+@@ -255,13 +287,9 @@
+ 		if keepAlivePeriod < 0 {
+ 			keepAlivePeriod = 0
+ 		}
+-		transport = &http2.Transport{
+-			DialTLSContext: func(ctxInner context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error) {
+-				return dialContext(ctxInner)
+-			},
+-			IdleConnTimeout: net.ConnIdleTimeout,
+-			ReadIdleTimeout: keepAlivePeriod,
+-		}
++		transport = newH2Transport(func(ctxInner context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error) {
++			return dialContext(ctxInner)
++		}, keepAlivePeriod)
+ 	} else {
+ 		httpDialContext := func(ctxInner context.Context, network string, addr string) (net.Conn, error) {
+ 			return dialContext(ctxInner)
+diff --git a/transport/internet/splithttp/h2_window_proxysvpn_test.go b/transport/internet/splithttp/h2_window_proxysvpn_test.go
+new file mode 100644
+--- /dev/null
++++ b/transport/internet/splithttp/h2_window_proxysvpn_test.go
+@@ -0,0 +1,91 @@
++package splithttp
++
++// ProxysVPN (scripts/libxray/xray-core-tunnel-memory.patch). The build runs
++// this test after patching: a toolchain or library bump that silently puts the
++// 4 MiB window back, or stops dialing through the transport's own dialer,
++// fails the build instead of ending tunnels on people's phones.
++
++import (
++	"context"
++	gotls "crypto/tls"
++	"io"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++func TestProxysVPNH2StreamWindow(t *testing.T) {
++	const streams = 8
++	var sent atomic.Int64
++	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		chunk := make([]byte, 32<<10)
++		for i := 0; i < 1024; i++ { // 32 MiB per stream, far past any window
++			n, err := w.Write(chunk)
++			sent.Add(int64(n))
++			if err != nil {
++				return
++			}
++			w.(http.Flusher).Flush()
++		}
++	}))
++	server.EnableHTTP2 = true
++	server.StartTLS()
++	defer server.Close()
++
++	var dials atomic.Int32
++	transport := newH2Transport(func(ctx context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error) {
++		dials.Add(1)
++		return gotls.Dial("tcp", server.Listener.Addr().String(), &gotls.Config{InsecureSkipVerify: true, NextProtos: []string{"h2"}})
++	}, 45*time.Second)
++
++	var responses []*http.Response
++	defer func() {
++		for _, response := range responses {
++			response.Body.Close()
++		}
++	}()
++	for i := 0; i < streams; i++ {
++		request, err := http.NewRequest(http.MethodGet, server.URL, nil)
++		if err != nil {
++			t.Fatal(err)
++		}
++		response, err := transport.RoundTrip(request)
++		if err != nil {
++			t.Fatalf("stream %d: %v", i, err)
++		}
++		if response.ProtoMajor != 2 {
++			t.Fatalf("stream %d spoke %s, not HTTP/2", i, response.Proto)
++		}
++		responses = append(responses, response)
++	}
++	if got := dials.Load(); got != 1 {
++		t.Fatalf("%d streams took %d dials through the transport's dialer, want 1 connection", streams, got)
++	}
++
++	// Nobody reads. The server stops once every stream's window is full.
++	var held int64
++	for settled := 0; settled < 5; {
++		time.Sleep(100 * time.Millisecond)
++		if now := sent.Load(); now == held {
++			settled++
++		} else {
++			held, settled = now, 0
++		}
++	}
++	// A write that had begun when the window closed is counted whole.
++	limit := int64(streams) * (h2StreamReceiveBuffer + 64<<10)
++	if held > limit {
++		t.Fatalf("%d unread streams hold %d KiB, want at most %d KiB (%d KiB per stream)", streams, held>>10, limit>>10, h2StreamReceiveBuffer>>10)
++	}
++	if floor := int64(streams) * h2StreamReceiveBuffer / 2; held < floor {
++		t.Fatalf("%d unread streams hold only %d KiB: the window is smaller than the %d KiB asked for", streams, held>>10, h2StreamReceiveBuffer>>10)
++	}
++
++	// A stream that is read again goes on past its window.
++	if n, err := io.CopyN(io.Discard, responses[0].Body, 2*h2StreamReceiveBuffer); err != nil {
++		t.Fatalf("read %d bytes of a stream that had been waiting: %v", n, err)
++	}
++}

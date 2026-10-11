@@ -60,8 +60,8 @@ Switch to Desktop).
    dialog on SteamOS shows "The deck user needs a password" with these same
    steps (`STEAMOS_PASSWORD_NEEDED`).
 
-4. **First connect, in Desktop Mode.** Double-click the AppImage. Right after
-   the data notice the app asks on a screen of its own, **"Gaming Mode without
+4. **First connect, in Desktop Mode.** Double-click the AppImage. Before
+   anything else the app asks on a screen of its own, **"Gaming Mode without
    a password?"**, with two answers:
 
    * **"Allow Gaming Mode without a password"**: the first connect asks for
@@ -172,8 +172,7 @@ once.
   After a tap or a click the window looks as it does everywhere else; the
   next press of the D-pad brings the ring back where it was.
 * It starts on the screen's main action: "Turn on" on the main screen,
-  "Continue" on the data notice, the chosen country in Countries, "Cancel" in
-  a confirmation. Never on an action that removes something. Two screens
+  the chosen country in Countries, "Cancel" in a confirmation. Never on an action that removes something. Two screens
   start with no ring at all, and the first press there only shows it: the
   **Gaming Mode question**, because one of its two answers grants a standing
   permission, and the **recovery sheet**, because it comes up by itself and
@@ -184,8 +183,7 @@ once.
   switch like "Language").
 * A list scrolls under the ring. A long text (the data notice, a licence) is
   read with the same keys: where nothing is left to move to, Down and Up
-  scroll it a step at a time. On the data notice the ring stays on "Continue"
-  while Down reads the notice to its end.
+  scroll it a step at a time.
 * B closes one layer per press, and the ring returns to the control that
   opened it: back from Licences to the "Licences" row of More, from More to
   the gear.
