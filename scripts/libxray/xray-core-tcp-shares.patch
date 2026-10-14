@@ -1,0 +1,239 @@
+diff --git a/proxy/tun/stack_gvisor.go b/proxy/tun/stack_gvisor.go
+--- a/proxy/tun/stack_gvisor.go
++++ b/proxy/tun/stack_gvisor.go
+@@ -2,6 +2,7 @@
+ 
+ import (
+ 	"context"
++	"sync"
+ 	"time"
+ 
+ 	"github.com/xtls/xray-core/common/errors"
+@@ -38,6 +39,22 @@
+ 	tcpTXBufMinSize = tcp.MinBufferSize
+ 	tcpTXBufDefSize = 128 << 10 // 128KiB
+ 	tcpTXBufMaxSize = 512 << 10 // 512KiB
++
++	// ProxysVPN (scripts/libxray/xray-core-tcp-shares.patch): what the stack
++	// holds for the apps' TCP connections in one direction - data on its way
++	// to an app and not yet acknowledged, data an app sent and Xray has not
++	// yet read - is one budget, shared by the connections open at the time
++	// (tcpShares). The sizes above are per connection: in a speed test an
++	// app opens dozens of connections, the engine runs short of processor
++	// time, every queue fills to its size, and the memory grows with the
++	// number of connections (iPhone 16 Pro Max, VLESS, 14.10.2026: the
++	// extension went from 20 to 47 MiB in seven seconds and was ended, twice
++	// in two minutes). On the bench, with 64 connections on two cores, the
++	// engine peaked at 58 MiB without the budget and at 26 MiB with it, and
++	// carried a third more, the collector having less to walk. One
++	// connection, or a load the engine keeps up with, is the same either way.
++	tcpSharedBudget = 4 << 20  // 4MiB
++	tcpSharedFloor  = 32 << 10 // 32KiB
+ )
+ 
+ // stackGVisor is ip stack implemented by gVisor package
+@@ -77,6 +94,7 @@
+ 		return err
+ 	}
+ 
++	shares := newTCPShares()
+ 	tcpForwarder := tcp.NewForwarder(ipStack, 0, 65535, func(r *tcp.ForwarderRequest) {
+ 		go func(r *tcp.ForwarderRequest) {
+ 			var wq waiter.Queue
+@@ -95,11 +113,13 @@
+ 			options.SetReuseAddress(true)
+ 			options.SetReusePort(true)
+ 
++			shares.join(options)
+ 			t.handler.HandleConnection(
+ 				gonet.NewTCPConn(&wq, ep),
+ 				// local address on the gVisor side is connection destination
+ 				net.TCPDestination(net.IPAddress(id.LocalAddress.AsSlice()), net.Port(id.LocalPort)),
+ 			)
++			shares.leave(options)
+ 
+ 			// close the socket
+ 			ep.Close()
+@@ -280,3 +300,78 @@
+ 
+ 	return gStack, nil
+ }
++
++// tcpShares divides tcpSharedBudget among the TCP connections open at the
++// time: the same share for each, in both directions, set on every one of
++// them from the moment it is open. A size that was set is one gVisor no
++// longer tunes, and it must not: its tuning raises a size from under a
++// share being set while the connection carries (seen on the bench, where a
++// connection tuned before it was given a share kept 512 KiB). A connection
++// whose queue holds more than its new share loses nothing: the writer waits
++// until it drains.
++type tcpShares struct {
++	mu   sync.Mutex
++	open map[*tcpip.SocketOptions]struct{}
++	// The share every open connection has set.
++	set int64
++}
++
++func newTCPShares() *tcpShares {
++	return &tcpShares{open: make(map[*tcpip.SocketOptions]struct{})}
++}
++
++// tcpShareCeiling is the most a connection may grow to in either direction.
++const tcpShareCeiling = min(tcpRXBufMaxSize, tcpTXBufMaxSize)
++
++// tcpShareOf is the share of each of open connections: the budget divided
++// among them, rounded down to a power of two so that it changes only when
++// their number doubles or halves, and within the floor and the ceiling.
++func tcpShareOf(open int) int64 {
++	share := int64(tcpSharedBudget) / int64(max(open, 1))
++	if share >= tcpShareCeiling {
++		return tcpShareCeiling
++	}
++	if share <= tcpSharedFloor {
++		return tcpSharedFloor
++	}
++	round := int64(tcpSharedFloor)
++	for round*2 <= share {
++		round *= 2
++	}
++	return round
++}
++
++func (s *tcpShares) join(options *tcpip.SocketOptions) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	s.open[options] = struct{}{}
++	s.settle(options)
++}
++
++func (s *tcpShares) leave(options *tcpip.SocketOptions) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	delete(s.open, options)
++	s.settle(nil)
++}
++
++// settle sets the share on every open connection when it changed, and on
++// joined alone (nil for none) when it did not.
++func (s *tcpShares) settle(joined *tcpip.SocketOptions) {
++	share := tcpShareOf(len(s.open))
++	if share == s.set {
++		if joined != nil {
++			setTCPShare(joined, share)
++		}
++		return
++	}
++	s.set = share
++	for options := range s.open {
++		setTCPShare(options, share)
++	}
++}
++
++func setTCPShare(options *tcpip.SocketOptions, share int64) {
++	options.SetSendBufferSize(share, true)
++	options.SetReceiveBufferSize(share, true)
++}
+diff --git a/proxy/tun/tcp_shares_proxysvpn_test.go b/proxy/tun/tcp_shares_proxysvpn_test.go
+new file mode 100644
+--- /dev/null
++++ b/proxy/tun/tcp_shares_proxysvpn_test.go
+@@ -0,0 +1,99 @@
++package tun
++
++// ProxysVPN (scripts/libxray/xray-core-tcp-shares.patch): the TCP connections
++// of the tun stack share one budget (tcpShares in stack_gvisor.go). These
++// fail if a connection may again hold its full size however many are open,
++// or if one alone has less than that size.
++
++import (
++	"testing"
++
++	"gvisor.dev/gvisor/pkg/tcpip"
++	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
++	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
++	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
++	"gvisor.dev/gvisor/pkg/waiter"
++)
++
++func TestProxysVPNTCPShareOf(t *testing.T) {
++	for _, c := range []struct {
++		open int
++		want int64
++	}{
++		{0, 512 << 10}, {1, 512 << 10}, {8, 512 << 10},
++		{9, 256 << 10}, {16, 256 << 10},
++		{17, 128 << 10}, {32, 128 << 10},
++		{33, 64 << 10}, {64, 64 << 10},
++		{65, 32 << 10}, {128, 32 << 10}, {10000, 32 << 10},
++	} {
++		if got := tcpShareOf(c.open); got != c.want {
++			t.Errorf("%d connections: a share of %d, want %d", c.open, got, c.want)
++		}
++	}
++	// Above the floor, never more than the budget in all.
++	for open := 1; open <= tcpSharedBudget/tcpSharedFloor; open++ {
++		if all := tcpShareOf(open) * int64(open); all > tcpSharedBudget {
++			t.Fatalf("%d connections hold %d in all, over the budget of %d", open, all, tcpSharedBudget)
++		}
++	}
++}
++
++func TestProxysVPNTCPSharesFollowTheConnections(t *testing.T) {
++	ipStack, err := createStack(channel.New(16, 1500, ""))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer ipStack.Close()
++	var wq waiter.Queue
++	open := func() *tcpip.SocketOptions {
++		ep, err := ipStack.NewEndpoint(tcp.ProtocolNumber, ipv4.ProtocolNumber, &wq)
++		if err != nil {
++			t.Fatal(err)
++		}
++		t.Cleanup(ep.Close)
++		return ep.SocketOptions()
++	}
++	check := func(what string, conns []*tcpip.SocketOptions, send, receive int64) {
++		t.Helper()
++		for i, c := range conns {
++			if got := c.GetSendBufferSize(); got != send {
++				t.Fatalf("%s: connection %d sends with %d, want %d", what, i, got, send)
++			}
++			if got := c.GetReceiveBufferSize(); got != receive {
++				t.Fatalf("%s: connection %d receives with %d, want %d", what, i, got, receive)
++			}
++		}
++	}
++
++	shares := newTCPShares()
++	var conns []*tcpip.SocketOptions
++	join := func(n int) {
++		for range n {
++			c := open()
++			shares.join(c)
++			conns = append(conns, c)
++		}
++	}
++	leave := func(n int) {
++		for range n {
++			shares.leave(conns[len(conns)-1])
++			conns = conns[:len(conns)-1]
++		}
++	}
++
++	join(1)
++	check("one", conns, 512<<10, 512<<10)
++	join(7)
++	check("eight, each with all it may grow to", conns, 512<<10, 512<<10)
++	join(1)
++	check("the ninth", conns, 256<<10, 256<<10)
++	join(7)
++	check("sixteen", conns, 256<<10, 256<<10)
++	join(48)
++	check("sixty-four", conns, 64<<10, 64<<10)
++	leave(56)
++	check("back to eight", conns, 512<<10, 512<<10)
++	leave(8)
++	join(1)
++	check("one again after all were gone", conns, 512<<10, 512<<10)
++}

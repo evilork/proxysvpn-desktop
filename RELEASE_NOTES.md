@@ -1,3 +1,51 @@
+# ProxysVPN Desktop v0.3.10-beta
+
+🇷🇺 Этот выпуск — только для Windows. В списке стран появились строки «Протокол WataFast · тест»: это наш собственный протокол. Остальные страны работают как раньше. Mac и Linux остаются на 0.3.9.
+
+🇬🇧 This release is for Windows only. The country list now has rows marked "WataFast protocol · test": our own protocol. All other countries work as before. The Mac and Linux stay on 0.3.9.
+
+## 🇷🇺 Установка
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. У файлов для Windows подписи кода пока нет, поэтому Windows один раз предупреждает.
+- **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.10_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». При каждом запуске — запрос прав администратора (UAC).
+- **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.10_arm64-setup.exe`, шаги те же.
+- **Если стоит 0.3.9:** приложение само покажет внизу окна строку «Вышла версия 0.3.10» и кнопку «Скачать». 0.3.9 спрашивает о новой версии раз в сутки, пока окно открыто или VPN включён, поэтому строка может появиться не сразу. Ждать не обязательно: установщик можно запустить поверх.
+- **0.3.8 и старше** обновляться сами не умеют: поставьте файл вручную, поверх.
+- **macOS и Linux:** берите 0.3.9 со страницы выпуска v0.3.9-beta.
+
+## 🇷🇺 Что нового
+
+- **Наш протокол WataFast.** В списке стран есть строки «Протокол WataFast · тест». Он работает через отдельную программу, которая ставится вместе с приложением. Протокол ещё на испытании: если такая строка не подключается, выберите обычную страну.
+- **О новой версии — быстрее.** Приложение спрашивает о новой версии раз в шесть часов, а не раз в сутки. Так строка о следующей версии появится в тот же день.
+
+## 🇷🇺 Известные ограничения
+
+- **Как проверен этот выпуск:** установщик для Windows на ARM — на Windows 11 ARM поверх прежней версии: подключение через «Франкфурт» с протоколом WataFast (все пункты «Проверки» зелёные, утечек нет), переход без отключения на «Германию» (VLESS) и обратно на «Австрию» с протоколом, отключение. Установщик x64 на компьютере не проверялся: собран из того же кода, программа протокола в нём проверена при сборке.
+- **Протокол WataFast:** помечен «тест». Скорость на компьютерах не измерялась. «Блокировать интернет, если VPN оборвался» на компьютерах по-прежнему нет.
+- Остальное — как в 0.3.9: список на странице выпуска v0.3.9-beta.
+
+## 🇬🇧 Install
+
+Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The Windows files are not code-signed yet, so Windows warns once.
+- **Windows 10/11 (x64):** download `ProxysVPN_0.3.10_x64-setup.exe`. Microsoft Edge may hold the download: the save button hides behind the arrow right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". Every start asks for administrator rights (UAC).
+- **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.10_arm64-setup.exe`, same steps.
+- **If you have 0.3.9:** the app itself shows the line "Version 0.3.10 is out" and a Download button at the foot of the window. 0.3.9 asks about a new version once a day while the window is open or the VPN is on, so the line may take a while. You need not wait: run the installer over it.
+- **0.3.8 and older** cannot update themselves: install the file by hand, over the old one.
+- **macOS and Linux:** take 0.3.9 from the v0.3.9-beta release page.
+
+## 🇬🇧 What's new
+
+- **Our own WataFast protocol.** The country list has rows marked "WataFast protocol · test". It runs as a separate program installed with the app. The protocol is still being tested: if such a row does not connect, choose an ordinary country.
+- **New versions show sooner.** The app asks about a new version every six hours, not once a day, so the line about the next version shows the same day.
+
+## 🇬🇧 Known limitations
+
+- **How this release was checked:** the Windows on ARM installer, on Windows 11 ARM over the previous version: connected through "Frankfurt" on the WataFast protocol (every item of "Check" green, no leaks), switched without disconnecting to "Germany" (VLESS) and back to "Austria" on the protocol, turned off. The x64 installer was not run on a computer: it is built from the same code, and its protocol program was checked during the build.
+- **WataFast protocol:** marked "test". Its speed on computers was not measured. "Block the internet if the VPN drops" is still not on computers.
+- Everything else is as in 0.3.9: see the v0.3.9-beta release page.
+
+---
+
 # ProxysVPN Desktop v0.3.9-beta
 
 🇷🇺 Приложение само сообщает о новой версии и ставит её — начиная со следующей после этой. Отчёт для поддержки уходит нам одной кнопкой. На экране «Проверка» видно, какие сервисы открываются через выбранную страну. На компьютерах теперь есть то, что недавно появилось на iPhone: блокировка рекламы, счётчик трафика и избранные страны, а ещё запуск вместе с компьютером.

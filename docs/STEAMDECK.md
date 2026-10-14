@@ -176,7 +176,10 @@ once.
   start with no ring at all, and the first press there only shows it: the
   **Gaming Mode question**, because one of its two answers grants a standing
   permission, and the **recovery sheet**, because it comes up by itself and
-  its one button turns protection off.
+  its one button turns protection off. A control below the fold counts for
+  less than any in sight: a page to read (the data notice) opens at its
+  beginning with the ring on the back button, not scrolled down to the links
+  under its text.
 * Up and down go row by row and stop at the first and the last control: no
   wrapping around. Left and right move only between controls standing side by
   side (the two buttons at the bottom of the main screen, the options of a
@@ -186,7 +189,13 @@ once.
   scroll it a step at a time.
 * B closes one layer per press, and the ring returns to the control that
   opened it: back from Licences to the "Licences" row of More, from More to
-  the gear.
+  the gear, from the data notice to "What data we use" (and not to the
+  pair-code field, which takes focus by itself as the sign-in screen appears).
+* The ring stays in sight. When the screen moves it out by itself (a line
+  above it grows: the sign-in screen asking for a new code and saying it
+  failed), the screen scrolls back to it, so the next A presses the control
+  and is not spent on bringing it into view. A control the person scrolled
+  past is left where it is.
 * One press is one press: a button held down, pressed again within a third of
   a second, or pressed in the first third of a second of a new screen, does
   nothing the second time. "Turn on" cannot turn into "Cancel" under a
