@@ -1,17 +1,19 @@
 # ProxysVPN Desktop v0.3.10-beta
 
-🇷🇺 Этот выпуск — только для Windows. В списке стран появились строки «Протокол WataFast · тест»: это наш собственный протокол. Остальные страны работают как раньше. Mac и Linux остаются на 0.3.9.
+🇷🇺 Этот выпуск — для Windows, Linux и Steam Deck. В списке стран появились строки «Протокол WataFast · тест»: это наш собственный протокол. Остальные страны работают как раньше. Mac остаётся на 0.3.9.
 
-🇬🇧 This release is for Windows only. The country list now has rows marked "WataFast protocol · test": our own protocol. All other countries work as before. The Mac and Linux stay on 0.3.9.
+🇬🇧 This release is for Windows, Linux and the Steam Deck. The country list now has rows marked "WataFast protocol · test": our own protocol. All other countries work as before. The Mac stays on 0.3.9.
 
 ## 🇷🇺 Установка
 
-Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. У файлов для Windows подписи кода пока нет, поэтому Windows один раз предупреждает.
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. Подписи кода у файлов пока нет, поэтому Windows один раз предупреждает.
 - **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.10_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». При каждом запуске — запрос прав администратора (UAC).
 - **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.10_arm64-setup.exe`, шаги те же.
-- **Если стоит 0.3.9:** приложение само покажет внизу окна строку «Вышла версия 0.3.10» и кнопку «Скачать». 0.3.9 спрашивает о новой версии раз в сутки, пока окно открыто или VPN включён, поэтому строка может появиться не сразу. Ждать не обязательно: установщик можно запустить поверх.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.10_amd64.deb`. Нужен сеанс с агентом polkit. Удаление: `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, Linux x86_64):** `ProxysVPN_0.3.10_amd64.AppImage`. Сделайте файл исполняемым (`chmod +x`), первый запуск и первое подключение — в режиме рабочего стола. Шаги, игровой режим и управление — в docs/STEAMDECK.md.
+- **Если стоит 0.3.9:** приложение само покажет внизу окна строку «Вышла версия 0.3.10» и кнопку «Скачать». 0.3.9 спрашивает о новой версии раз в сутки, пока окно открыто или VPN включён, поэтому строка может появиться не сразу. Ждать не обязательно: новый файл можно поставить поверх.
 - **0.3.8 и старше** обновляться сами не умеют: поставьте файл вручную, поверх.
-- **macOS и Linux:** берите 0.3.9 со страницы выпуска v0.3.9-beta.
+- **macOS:** берите 0.3.9 со страницы выпуска v0.3.9-beta.
 
 ## 🇷🇺 Что нового
 
@@ -21,17 +23,21 @@
 ## 🇷🇺 Известные ограничения
 
 - **Как проверен этот выпуск:** установщик для Windows на ARM — на Windows 11 ARM поверх прежней версии: подключение через «Франкфурт» с протоколом WataFast (все пункты «Проверки» зелёные, утечек нет), переход без отключения на «Германию» (VLESS) и обратно на «Австрию» с протоколом, отключение. Установщик x64 на компьютере не проверялся: собран из того же кода, программа протокола в нём проверена при сборке.
+- **Linux проверен так:** пакет — на Debian 13: подключение через «Франкфурт» с протоколом WataFast, переход без отключения на «Германию» (VLESS) и обратно на «Австрию» с протоколом, все пункты «Проверки» зелёные, кроме DNS: на Linux приложение его пока не проверяет. После отключения не осталось ни туннеля, ни движков. Файл AppImage — там же: подключение к «Амстердаму» с протоколом, окна пароля не было.
+- **Steam Deck:** на настоящем Steam Deck выпуск не запускался. Файл AppImage проверен на Debian, а программа протокола отвечала в симуляции SteamOS, где нет сети.
 - **Протокол WataFast:** помечен «тест». Скорость на компьютерах не измерялась. «Блокировать интернет, если VPN оборвался» на компьютерах по-прежнему нет.
 - Остальное — как в 0.3.9: список на странице выпуска v0.3.9-beta.
 
 ## 🇬🇧 Install
 
-Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The Windows files are not code-signed yet, so Windows warns once.
+Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The files are not code-signed yet, so Windows warns once.
 - **Windows 10/11 (x64):** download `ProxysVPN_0.3.10_x64-setup.exe`. Microsoft Edge may hold the download: the save button hides behind the arrow right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". Every start asks for administrator rights (UAC).
 - **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.10_arm64-setup.exe`, same steps.
-- **If you have 0.3.9:** the app itself shows the line "Version 0.3.10 is out" and a Download button at the foot of the window. 0.3.9 asks about a new version once a day while the window is open or the VPN is on, so the line may take a while. You need not wait: run the installer over it.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.10_amd64.deb`. Needs a session with a polkit agent. Remove with `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, x86_64 Linux):** `ProxysVPN_0.3.10_amd64.AppImage`. Make the file executable (`chmod +x`); the first start and the first connect happen in Desktop Mode. The steps, Gaming Mode and the controller are in docs/STEAMDECK.md.
+- **If you have 0.3.9:** the app itself shows the line "Version 0.3.10 is out" and a Download button at the foot of the window. 0.3.9 asks about a new version once a day while the window is open or the VPN is on, so the line may take a while. You need not wait: install the new file over it.
 - **0.3.8 and older** cannot update themselves: install the file by hand, over the old one.
-- **macOS and Linux:** take 0.3.9 from the v0.3.9-beta release page.
+- **macOS:** take 0.3.9 from the v0.3.9-beta release page.
 
 ## 🇬🇧 What's new
 
@@ -41,6 +47,8 @@ Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The Windows files
 ## 🇬🇧 Known limitations
 
 - **How this release was checked:** the Windows on ARM installer, on Windows 11 ARM over the previous version: connected through "Frankfurt" on the WataFast protocol (every item of "Check" green, no leaks), switched without disconnecting to "Germany" (VLESS) and back to "Austria" on the protocol, turned off. The x64 installer was not run on a computer: it is built from the same code, and its protocol program was checked during the build.
+- **How Linux was checked:** the package, on Debian 13: connected through "Frankfurt" on the WataFast protocol, switched without disconnecting to "Germany" (VLESS) and back to "Austria" on the protocol; every item of "Check" green except DNS, which the app does not check on Linux yet. After turning off, no tunnel and no engine was left. The AppImage, on the same system: connected to "Amsterdam" on the protocol, with no password window.
+- **Steam Deck:** this release was not run on a real Steam Deck. The AppImage was checked on Debian, and the protocol program answered in a SteamOS simulation that has no network.
 - **WataFast protocol:** marked "test". Its speed on computers was not measured. "Block the internet if the VPN drops" is still not on computers.
 - Everything else is as in 0.3.9: see the v0.3.9-beta release page.
 
