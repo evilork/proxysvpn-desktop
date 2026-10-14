@@ -220,12 +220,10 @@ new file mode 100644
 diff --git a/transport/internet/splithttp/dialer.go b/transport/internet/splithttp/dialer.go
 --- a/transport/internet/splithttp/dialer.go
 +++ b/transport/internet/splithttp/dialer.go
-@@ -96,6 +96,38 @@
- 		return "3"
- 	}
+@@ -98,6 +98,45 @@
  	return "2"
-+}
-+
+ }
+ 
 +// h2StreamReceiveBuffer is how much one HTTP/2 stream may hold for a reader
 +// that is slower than the network.
 +//
@@ -241,8 +239,9 @@ diff --git a/transport/internet/splithttp/dialer.go b/transport/internet/splitht
 +const h2StreamReceiveBuffer = 512 << 10
 +
 +// newH2Transport is the HTTP/2 client of this transport, with the stream
-+// window above. The window is a setting of net/http's Transport, which the
-+// HTTP/2 one is attached to; requests still go out through dialTLS.
++// window above and the frame size of h2_frame_size_proxysvpn.go. The window
++// is a setting of net/http's Transport, which the HTTP/2 one is attached to;
++// requests still go out through dialTLS.
 +func newH2Transport(dialTLS func(ctx context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error), keepAlivePeriod time.Duration) *http2.Transport {
 +	h2, err := http2.ConfigureTransports(&http.Transport{
 +		HTTP2: &http.HTTP2Config{MaxReceiveBufferPerStream: h2StreamReceiveBuffer},
@@ -252,14 +251,22 @@ diff --git a/transport/internet/splithttp/dialer.go b/transport/internet/splitht
 +		// library's own.
 +		h2 = &http2.Transport{}
 +	}
-+	h2.DialTLSContext = dialTLS
++	h2.DialTLSContext = func(ctx context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error) {
++		conn, err := dialTLS(ctx, network, addr, cfg)
++		if err != nil {
++			return nil, err
++		}
++		return capH2SendFrameSize(conn), nil
++	}
 +	h2.IdleConnTimeout = net.ConnIdleTimeout
 +	h2.ReadIdleTimeout = keepAlivePeriod
 +	return h2
- }
- 
++}
++
  func createHTTPClient(dest net.Destination, streamSettings *internet.MemoryStreamConfig) DialerClient {
-@@ -255,13 +287,9 @@
+ 	tlsConfig := tls.ConfigFromStreamSettings(streamSettings)
+ 	realityConfig := reality.ConfigFromStreamSettings(streamSettings)
+@@ -255,13 +294,9 @@
  		if keepAlivePeriod < 0 {
  			keepAlivePeriod = 0
  		}
@@ -370,5 +377,392 @@ new file mode 100644
 +	// A stream that is read again goes on past its window.
 +	if n, err := io.CopyN(io.Discard, responses[0].Body, 2*h2StreamReceiveBuffer); err != nil {
 +		t.Fatalf("read %d bytes of a stream that had been waiting: %v", n, err)
++	}
++}
+diff --git a/transport/internet/splithttp/h2_frame_size_proxysvpn.go b/transport/internet/splithttp/h2_frame_size_proxysvpn.go
+new file mode 100644
+--- /dev/null
++++ b/transport/internet/splithttp/h2_frame_size_proxysvpn.go
+@@ -0,0 +1,120 @@
++package splithttp
++
++import (
++	gotls "crypto/tls"
++
++	"github.com/xtls/xray-core/common/net"
++)
++
++// h2SendFrameSize is the largest frame this client believes the node takes:
++// HTTP/2's default, and the smallest value a peer may announce.
++//
++// ProxysVPN (scripts/libxray/xray-core-tunnel-memory.patch): Go's HTTP/2
++// client reads a request body through a buffer as large as the largest frame
++// the peer says it takes, up to 512 KiB, and keeps that buffer for as long as
++// the body is open. A node built with Go says 1 MiB. In the stream-one mode
++// of this transport the body of the request is the upload half of a proxied
++// connection, so every connection an app holds open cost 512 KiB here whether
++// or not it sent a byte: forty idle connections of a phone's apps were
++// 22 MiB, and the packet tunnel extension is ended at 50 MiB for the whole
++// process (13.10.2026: the tunnel went off at the start of a second speed
++// test). With the default frame size the buffer is 16 KiB.
++const h2SendFrameSize = 16 << 10
++
++const (
++	h2FrameHeaderLen       = 9
++	h2FrameSettings        = 0x4
++	h2FlagSettingsAck      = 0x1
++	h2SettingLen           = 6
++	h2SettingMaxFrameSize  = 0x5
++	h2SettingValueOffset   = 2
++	h2FrameLengthByteCount = 3
++)
++
++// h2FrameSizeConn is the connection to the node as its HTTP/2 client sees it:
++// every SETTINGS_MAX_FRAME_SIZE the node announces reads as h2SendFrameSize.
++// Nothing else on the connection is changed, and nothing the node sends is
++// limited by it - that is what this client announces, not what it is told.
++//
++// Read follows the node's frames only to find SETTINGS frames: nine bytes of
++// header per frame, then the payload is passed over in one step.
++type h2FrameSizeConn struct {
++	net.Conn
++
++	header   [h2FrameHeaderLen]byte // of the frame being started
++	gathered int                    // bytes of header read so far
++	payload  uint32                 // bytes of the current frame's payload still to come
++	settings bool                   // the current frame is a SETTINGS list, not its acknowledgement
++	offset   uint32                 // how far into that list the read side is
++	setting  uint16                 // identifier of the setting at offset
++}
++
++func (c *h2FrameSizeConn) Read(p []byte) (int, error) {
++	n, err := c.Conn.Read(p)
++	c.follow(p[:n])
++	return n, err
++}
++
++func (c *h2FrameSizeConn) follow(p []byte) {
++	for len(p) > 0 {
++		if c.payload == 0 {
++			took := copy(c.header[c.gathered:], p)
++			c.gathered += took
++			p = p[took:]
++			if c.gathered < h2FrameHeaderLen {
++				return
++			}
++			c.gathered = 0
++			c.payload = uint32(c.header[0])<<16 | uint32(c.header[1])<<8 | uint32(c.header[2])
++			c.settings = c.header[h2FrameLengthByteCount] == h2FrameSettings &&
++				c.header[h2FrameLengthByteCount+1]&h2FlagSettingsAck == 0
++			c.offset = 0
++			continue
++		}
++		if !c.settings {
++			pass := uint32(len(p))
++			if pass > c.payload {
++				pass = c.payload
++			}
++			c.payload -= pass
++			p = p[pass:]
++			continue
++		}
++		switch at := c.offset % h2SettingLen; {
++		case at == 0:
++			c.setting = uint16(p[0]) << 8
++		case at == 1:
++			c.setting |= uint16(p[0])
++		case c.setting == h2SettingMaxFrameSize:
++			shift := 8 * (h2SettingLen - 1 - at)
++			p[0] = byte(uint32(h2SendFrameSize) >> shift)
++		}
++		c.offset++
++		c.payload--
++		p = p[1:]
++	}
++}
++
++// h2FrameSizeTLSConn keeps what net/http reads of a TLS connection it was
++// handed: the state it puts into Response.TLS.
++type h2FrameSizeTLSConn struct {
++	*h2FrameSizeConn
++	state interface {
++		ConnectionState() gotls.ConnectionState
++	}
++}
++
++func (c *h2FrameSizeTLSConn) ConnectionState() gotls.ConnectionState {
++	return c.state.ConnectionState()
++}
++
++// capH2SendFrameSize wraps a connection an HTTP/2 client is about to use.
++func capH2SendFrameSize(conn net.Conn) net.Conn {
++	capped := &h2FrameSizeConn{Conn: conn}
++	if state, ok := conn.(interface {
++		ConnectionState() gotls.ConnectionState
++	}); ok {
++		return &h2FrameSizeTLSConn{h2FrameSizeConn: capped, state: state}
++	}
++	return capped
++}
+diff --git a/transport/internet/splithttp/h2_frame_size_proxysvpn_test.go b/transport/internet/splithttp/h2_frame_size_proxysvpn_test.go
+new file mode 100644
+--- /dev/null
++++ b/transport/internet/splithttp/h2_frame_size_proxysvpn_test.go
+@@ -0,0 +1,257 @@
++package splithttp
++
++// ProxysVPN (scripts/libxray/xray-core-tunnel-memory.patch). The build runs
++// these tests after patching: a toolchain or library bump that lets the
++// node's frame size through again, or a change that stops dialing through
++// the wrapped connection, fails the build instead of ending tunnels on
++// people's phones.
++
++import (
++	"bytes"
++	"context"
++	gotls "crypto/tls"
++	"encoding/binary"
++	"io"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"sync"
++	"testing"
++	"time"
++
++	"golang.org/x/net/http2"
++)
++
++// h2ChunkConn hands out what a node sent in reads of a chosen size.
++type h2ChunkConn struct {
++	net.Conn
++	rest  []byte
++	chunk int
++}
++
++func (c *h2ChunkConn) Read(p []byte) (int, error) {
++	if len(c.rest) == 0 {
++		return 0, io.EOF
++	}
++	n := min(len(p), c.chunk, len(c.rest))
++	copy(p, c.rest[:n])
++	c.rest = c.rest[n:]
++	return n, nil
++}
++
++// h2NodeFrames is a node's side of a connection: two SETTINGS lists that ask
++// for big frames, and between them frames whose payload looks like one.
++func h2NodeFrames(t *testing.T, frameSize func(asked uint32) uint32) []byte {
++	t.Helper()
++	var out bytes.Buffer
++	fr := http2.NewFramer(&out, nil)
++	looksLikeASetting := bytes.Repeat([]byte{0x00, 0x05, 0x00, 0x10, 0x00, 0x00}, 700)
++	steps := []func() error{
++		func() error {
++			return fr.WriteSettings(
++				http2.Setting{ID: http2.SettingMaxConcurrentStreams, Val: 250},
++				http2.Setting{ID: http2.SettingMaxFrameSize, Val: frameSize(1 << 20)},
++				http2.Setting{ID: http2.SettingInitialWindowSize, Val: 0x00050005},
++			)
++		},
++		func() error { return fr.WriteSettingsAck() },
++		func() error { return fr.WriteData(1, false, looksLikeASetting) },
++		func() error { return fr.WriteData(3, false, nil) },
++		func() error { return fr.WritePing(false, [8]byte{0, 5, 0, 16, 0, 0, 0, 5}) },
++		func() error { return fr.WriteWindowUpdate(0, 0x00050010) },
++		func() error { return fr.WriteSettings() },
++		func() error {
++			return fr.WriteSettings(
++				http2.Setting{ID: http2.SettingMaxFrameSize, Val: frameSize(1<<24 - 1)},
++				http2.Setting{ID: http2.SettingMaxFrameSize, Val: frameSize(16 << 10)},
++				http2.Setting{ID: http2.SettingHeaderTableSize, Val: 5},
++			)
++		},
++		func() error { return fr.WriteData(1, true, bytes.Repeat(looksLikeASetting, 20)) },
++	}
++	for i, step := range steps {
++		if err := step(); err != nil {
++			t.Fatalf("frame %d: %v", i, err)
++		}
++	}
++	return out.Bytes()
++}
++
++func TestProxysVPNH2SendFrameSizeFollowsFrames(t *testing.T) {
++	sent := h2NodeFrames(t, func(asked uint32) uint32 { return asked })
++	want := h2NodeFrames(t, func(uint32) uint32 { return h2SendFrameSize })
++	if bytes.Equal(sent, want) {
++		t.Fatal("the node of this test asks for nothing above the default")
++	}
++	for _, chunk := range []int{1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 13, 64, 4096, len(sent)} {
++		conn := capH2SendFrameSize(&h2ChunkConn{rest: bytes.Clone(sent), chunk: chunk})
++		got, err := io.ReadAll(conn)
++		if err != nil {
++			t.Fatalf("reads of %d: %v", chunk, err)
++		}
++		if !bytes.Equal(got, want) {
++			t.Fatalf("reads of %d bytes: the node's frames came through changed elsewhere than in SETTINGS_MAX_FRAME_SIZE, or unchanged there", chunk)
++		}
++	}
++}
++
++func TestProxysVPNH2SendFrameSizeKeepsTLSState(t *testing.T) {
++	near, far := net.Pipe()
++	defer near.Close()
++	defer far.Close()
++	type stater interface {
++		ConnectionState() gotls.ConnectionState
++	}
++	if _, ok := capH2SendFrameSize(near).(stater); ok {
++		t.Fatal("a connection without a TLS state got one")
++	}
++	if _, ok := capH2SendFrameSize(gotls.Client(near, &gotls.Config{ServerName: "node.test"})).(stater); !ok {
++		t.Fatal("a TLS connection lost the state net/http reads")
++	}
++}
++
++// h2SentFrames reads what the HTTP/2 client writes to the node and keeps the
++// largest DATA frame.
++type h2SentFrames struct {
++	net.Conn
++
++	mu       sync.Mutex
++	preface  int // bytes of the client preface still to pass
++	header   []byte
++	payload  uint32
++	largest  uint32
++	uploaded uint64
++}
++
++func (c *h2SentFrames) Write(p []byte) (int, error) {
++	c.mu.Lock()
++	for rest := p; len(rest) > 0; {
++		if c.preface > 0 {
++			n := min(c.preface, len(rest))
++			c.preface -= n
++			rest = rest[n:]
++			continue
++		}
++		if c.payload > 0 {
++			n := min(c.payload, uint32(len(rest)))
++			c.payload -= n
++			rest = rest[n:]
++			continue
++		}
++		n := min(9-len(c.header), len(rest))
++		c.header = append(c.header, rest[:n]...)
++		rest = rest[n:]
++		if len(c.header) < 9 {
++			continue
++		}
++		c.payload = binary.BigEndian.Uint32(append([]byte{0}, c.header[:3]...))
++		if c.header[3] == 0x0 { // DATA
++			c.largest = max(c.largest, c.payload)
++			c.uploaded += uint64(c.payload)
++		}
++		c.header = c.header[:0]
++	}
++	c.mu.Unlock()
++	return c.Conn.Write(p)
++}
++
++func TestProxysVPNH2SendFrameSize(t *testing.T) {
++	const (
++		streams = 6
++		upload  = 2 << 20
++		write   = 256 << 10 // one write of an app, far above the frame size
++	)
++	// What the stream-one mode does: the request body is the upload, the
++	// response body is the download, both open at once.
++	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		w.WriteHeader(http.StatusOK)
++		w.(http.Flusher).Flush()
++		chunk := make([]byte, 32<<10)
++		for {
++			n, err := r.Body.Read(chunk)
++			if n > 0 {
++				if _, werr := w.Write(chunk[:n]); werr != nil {
++					return
++				}
++				w.(http.Flusher).Flush()
++			}
++			if err != nil {
++				return
++			}
++		}
++	}))
++	server.EnableHTTP2 = true
++	server.StartTLS()
++	defer server.Close()
++
++	var sent *h2SentFrames
++	dials := 0
++	transport := newH2Transport(func(ctx context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error) {
++		conn, err := gotls.Dial("tcp", server.Listener.Addr().String(), &gotls.Config{InsecureSkipVerify: true, NextProtos: []string{"h2"}})
++		if err != nil {
++			return nil, err
++		}
++		dials++
++		sent = &h2SentFrames{Conn: conn, preface: len(http2.ClientPreface)}
++		return sent, nil
++	}, 45*time.Second)
++
++	pattern := make([]byte, upload)
++	for i := range pattern {
++		pattern[i] = byte(i*7 + i>>8)
++	}
++	// One after another: every stream but the first begins after the node's
++	// SETTINGS were read, which is when the client sizes its buffer.
++	for i := 0; i < streams; i++ {
++		body, feed := io.Pipe()
++		request, err := http.NewRequest(http.MethodPost, server.URL, body)
++		if err != nil {
++			t.Fatal(err)
++		}
++		response, err := transport.RoundTrip(request)
++		if err != nil {
++			t.Fatalf("stream %d: %v", i, err)
++		}
++		if response.ProtoMajor != 2 {
++			t.Fatalf("stream %d spoke %s, not HTTP/2", i, response.Proto)
++		}
++		fed := make(chan error, 1)
++		go func() {
++			for at := 0; at < len(pattern); at += write {
++				if _, err := feed.Write(pattern[at:min(at+write, len(pattern))]); err != nil {
++					fed <- err
++					return
++				}
++			}
++			fed <- nil
++		}()
++		back := make([]byte, upload)
++		if _, err := io.ReadFull(response.Body, back); err != nil {
++			t.Fatalf("stream %d: the download half: %v", i, err)
++		}
++		if err := <-fed; err != nil {
++			t.Fatalf("stream %d: the upload half: %v", i, err)
++		}
++		if !bytes.Equal(back, pattern) {
++			t.Fatalf("stream %d: %d bytes went up and came back changed", i, upload)
++		}
++		feed.Close()
++		response.Body.Close()
++	}
++	if dials != 1 {
++		t.Fatalf("%d streams took %d dials through the transport's dialer, want 1 connection", streams, dials)
++	}
++
++	sent.mu.Lock()
++	largest, uploaded := sent.largest, sent.uploaded
++	sent.mu.Unlock()
++	if uploaded != streams*upload {
++		t.Fatalf("the client sent %d bytes of DATA, want %d: this test no longer reads its frames", uploaded, streams*upload)
++	}
++	if largest > h2SendFrameSize {
++		t.Fatalf("the client sent a DATA frame of %d KiB, above %d KiB: it sizes its upload buffer by the node's frame size again, up to 512 KiB for every open connection", largest>>10, h2SendFrameSize>>10)
++	}
++	if largest < h2SendFrameSize {
++		t.Fatalf("the largest DATA frame was %d bytes: writes of %d KiB should fill frames of %d KiB", largest, write>>10, h2SendFrameSize>>10)
 +	}
 +}

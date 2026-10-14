@@ -129,8 +129,10 @@ not been run on a real Steam Deck yet.
 - **macOS and Linux: the Check screen does not test DNS yet.** The system
   resolver points into the tunnel there; the "No leaks" row checks IPv6 only
   and says so, which is why it is never green on these two systems.
-- **No code signing on Windows and Linux, and no automatic updates.** Install
-  new versions from the Releases page by hand.
+- **No code signing on Windows and Linux.** From 0.3.9 on the app installs a
+  new version itself after you press "Install", and only a file that matches
+  the release document signed with our key. Versions up to 0.3.9 itself are
+  installed from the Releases page by hand.
 - **macOS:** after a crash or Force Quit the engines may keep running until
   ProxysVPN is opened again; opening it cleans them up.
 - **macOS:** the whole app runs as root (the price of not having a signed
