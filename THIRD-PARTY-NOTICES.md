@@ -110,6 +110,18 @@ listed in its source tree. Permissively licensed libraries in the image
 (libxml2, libxslt, libwebp, libjpeg-turbo, libpng, pixman, libepoxy, WPE and
 others) are not yet listed one by one here or on the screen.
 
+## The client of our own protocol (Windows and Linux)
+
+Since 0.3.10 the Windows and Linux builds carry the client of our own
+protocol, WataFast, as a program beside the app. The client is ours; the Rust
+crates it is built from are listed one by one on the app's licences screen
+with their licences. It also contains BoringSSL (Apache-2.0,
+https://boringssl.googlesource.com/boringssl), the copy bundled with the
+`boring-sys` crate, built with two changes: the post-quantum key agreements
+that ship with that crate, and a GREASE value among the signature algorithms
+of the TLS ClientHello. The Windows clients also carry Microsoft's C runtime
+inside, under Microsoft's redistribution terms.
+
 ## Wintun
 
 Wintun is the kernel TUN driver that tun2socks uses on Windows. The prebuilt

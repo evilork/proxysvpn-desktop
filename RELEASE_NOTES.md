@@ -1,3 +1,81 @@
+# ProxysVPN Desktop v0.3.11-beta
+
+🇷🇺 Этот выпуск — для Mac, Windows, Linux и Steam Deck. Новый главный экран со стеклянными кнопками и их прозрачностью в настройках, карта стран, выбор страны из значка у часов и настройки по разделам.
+
+🇬🇧 This release is for the Mac, Windows, Linux and the Steam Deck. A new main screen with glass buttons and their transparency in the settings, a map of countries, choosing a country from the tray icon, and settings in sections.
+
+## 🇷🇺 Установка
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. Образ для macOS подписан сертификатом Apple Developer ID (Watafast LLC) и заверен Apple. У файлов для Windows и Linux подписи кода пока нет, поэтому Windows один раз предупреждает.
+- **macOS 12+ (Apple Silicon):** откройте `ProxysVPN_0.3.11_aarch64.dmg`, перетащите ProxysVPN на ярлык Applications, при первом запуске нажмите «Открыть». При запуске приложение спрашивает пароль администратора.
+- **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.11_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». При каждом запуске — запрос прав администратора (UAC).
+- **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.11_arm64-setup.exe`, шаги те же.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.11_amd64.deb`. Нужен сеанс с агентом polkit. Удаление: `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, Linux x86_64):** `ProxysVPN_0.3.11_amd64.AppImage`. Сделайте файл исполняемым (`chmod +x`), первый запуск и первое подключение — в режиме рабочего стола. Шаги, игровой режим и управление — в docs/STEAMDECK.md.
+- **Если стоит 0.3.10 или 0.3.9:** приложение само покажет внизу окна строку «Вышла версия 0.3.11» и кнопку «Скачать». 0.3.10 спрашивает о новой версии раз в шесть часов, 0.3.9 — раз в сутки, поэтому строка может появиться не сразу. Ждать не обязательно: новый файл можно поставить поверх.
+- **0.3.8 и старше** обновляться сами не умеют: поставьте файл вручную, поверх.
+
+## 🇷🇺 Что нового
+
+- **Новый главный экран.** Кольцо вокруг кнопки показывает, как идёт связь, а бусина на нём — задержку до сервера. Кнопки и нижняя панель — стеклянные капли над мягкой подсветкой. На Windows стекло ещё и преломляет фон, как линза; на Mac, Linux и Steam Deck капли матовые.
+- **Прозрачность кнопок.** «Ещё» → «Экран и вид» → «Прозрачность кнопок»: ползунок от плотных кнопок до прозрачных, рядом образец, кнопка «Как было» возвращает прежний вид. На Steam Deck ползунок двигается крестовиной влево и вправо.
+- **Страна из значка у часов.** В меню значка ProxysVPN (на Mac — правый щелчок по значку в строке меню, на Windows — по значку у часов, на Linux — значок на панели) есть «Страна»: выбор как в списке стран, без окна. Если защита выключена, она включится в выбранной стране. Галочка стоит на стране, которую выбрали вручную, или на автоматическом выборе.
+- **Карта стран.** В «Странах» над списком — карта, на ней отмечены страны из списка.
+- **Настройки по разделам.** «Ещё» разбито на разделы, переключатели защиты — сверху.
+- **Mac: строка меню.** «Ещё» → «Экран и вид»: «Пинг в строке меню» показывает флаг страны и задержку до сервера рядом со значком, пока VPN включён; «Горячая клавиша ⌃⌥⌘V» включает и выключает VPN из любой программы; «Значок в Dock» можно выключить — приложение останется в строке меню.
+- **Mac: «Блокировать интернет, если VPN оборвался».** «Ещё» → «Защита». Оборвётся VPN — программы на Маке не выйдут в интернет мимо него, пока он не вернётся; домашняя сеть (принтер, другие устройства дома) остаётся доступна. Сама macOS в это время может обращаться к сети напрямую, например спрашивать адреса сайтов. Если интернет пропал и не возвращается, выключите переключатель или закройте приложение.
+- **Новый экран входа.** Сверху наш знак, другие способы входа собраны в одну группу.
+- **Язык.** Приложение по-русски, если система на русском, на всех остальных языках — по-английски. Язык, выбранный вручную в «Ещё», остаётся.
+- **Задержка в «Странах»** считается точнее: повторная попытка соединения больше не засчитывается как задержка.
+- **Даты не из текущего года** показываются с годом.
+- **«Лицензии»** перечисляют и лицензии программы протокола WataFast.
+- **Наш сайт — через VPN.** Пока приложение не получило список маршрутизации, proxysvpn.com больше не открывается напрямую мимо VPN.
+- **Отчёт из «Проверки» подробнее:** причина последнего сбоя, сколько соединений шло через VPN и сколько напрямую, размер списка маршрутизации и выбранные настройки — только числа, без сайтов и адресов. На Windows отчёт ещё говорит, включён ли системный прокси и есть ли свой маршрут в интернет у других адаптеров (так бывает, когда стоит другой VPN). Одна и та же ошибка подряд — одной строкой с числом повторов.
+
+## 🇷🇺 Известные ограничения
+
+- **Steam Deck:** на настоящем Steam Deck выпуск не запускался.
+- **Стекло-линза** — только на Windows: на Mac, Linux и Steam Deck этого вида у системы нет, кнопки там матовые.
+- «Блокировать интернет, если VPN оборвался» на Windows и Linux пока нет.
+- Остальное — как в 0.3.10: список на странице выпуска v0.3.10-beta.
+
+## 🇬🇧 Install
+
+Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The macOS image is signed with an Apple Developer ID certificate (Watafast LLC) and notarized by Apple. The Windows and Linux files are not code-signed yet, so Windows warns once.
+- **macOS 12+ (Apple Silicon):** open `ProxysVPN_0.3.11_aarch64.dmg`, drag ProxysVPN onto the Applications shortcut, and press "Open" at the first launch. The app asks for the administrator password at launch.
+- **Windows 10/11 (x64):** download `ProxysVPN_0.3.11_x64-setup.exe`. Microsoft Edge may hold the download: the save button hides behind the arrow right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". Every start asks for administrator rights (UAC).
+- **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.11_arm64-setup.exe`, same steps.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.11_amd64.deb`. Needs a session with a polkit agent. Remove with `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, x86_64 Linux):** `ProxysVPN_0.3.11_amd64.AppImage`. Make the file executable (`chmod +x`); the first start and the first connect happen in Desktop Mode. The steps, Gaming Mode and the controller are in docs/STEAMDECK.md.
+- **If you have 0.3.10 or 0.3.9:** the app itself shows the line "Version 0.3.11 is out" and a Download button at the foot of the window. 0.3.10 asks about a new version every six hours and 0.3.9 once a day, so the line may take a while. You need not wait: install the new file over it.
+- **0.3.8 and older** cannot update themselves: install the file by hand, over the old one.
+
+## 🇬🇧 What's new
+
+- **A new main screen.** The ring around the button shows how the link is doing, and the bead on it the round trip to the server. The buttons and the bottom bar are glass drops over soft lights. On Windows the glass also bends the background like a lens; on the Mac, Linux and the Steam Deck the drops are frosted.
+- **Button transparency.** "More" → "Screen and look" → "Button transparency": a slider from solid buttons to clear ones, with a sample beside it; "Reset" brings the old look back. On the Steam Deck the D-pad moves the slider left and right.
+- **A country from the tray icon.** The ProxysVPN icon's menu (on the Mac a right click on the icon in the menu bar, on Windows on the icon by the clock, on Linux the icon on the panel) has "Country": the same choice as the country list, with no window. If protection is off, it turns on in the chosen country. The check is on the country chosen by hand, or on the automatic choice.
+- **A map of countries.** "Countries" has a map above the list, with the countries of the list marked on it.
+- **Settings in sections.** "More" is split into sections, with the protection switches first.
+- **Mac: the menu bar.** "More" → "Screen and look": "Ping in the menu bar" shows the country flag and the latency to the server next to the icon while the VPN is on; "Hotkey ⌃⌥⌘V" turns the VPN on and off from any app; "Dock icon" can be turned off, and the app stays in the menu bar.
+- **Mac: "Block the internet if the VPN drops".** "More" → "Protection". If the VPN drops, programs on the Mac do not reach the internet past it until it is back; the home network (a printer, other devices at home) stays reachable. macOS itself may still reach the network directly then, for example to look up site addresses. If the internet is gone and does not come back, turn the switch off or quit the app.
+- **A new sign-in screen.** Our mark on top, the other ways in gathered into one group.
+- **Language.** The app is in Russian when the system is in Russian, and in English for every other language. A language picked by hand in "More" stays.
+- **Latency in "Countries"** is counted more precisely: a repeated connection attempt no longer counts as latency.
+- **Dates not of the current year** show their year.
+- **"Licences"** also list the licences of the WataFast protocol program.
+- **Our site goes through the VPN.** Until the app has its routing list, proxysvpn.com no longer opens directly, past the VPN.
+- **The report from "Check" says more:** why the last connection failed, how many connections went through the VPN and how many directly, the size of the routing list and the chosen settings, as numbers only, with no sites or addresses. On Windows it also says whether a system proxy is on and whether other adapters have their own route to the internet (as another VPN sets up). The same error in a row is one line with its count.
+
+## 🇬🇧 Known limitations
+
+- **Steam Deck:** this release was not run on a real Steam Deck.
+- **The lens glass** is on Windows only: the Mac, Linux and the Steam Deck have no such look, so the buttons there are frosted.
+- "Block the internet if the VPN drops" is not on Windows and Linux yet.
+- Everything else is as in 0.3.10: see the v0.3.10-beta release page.
+
+---
+
 # ProxysVPN Desktop v0.3.10-beta
 
 🇷🇺 Этот выпуск — для Windows, Linux и Steam Deck. В списке стран появились строки «Протокол WataFast · тест»: это наш собственный протокол. Остальные страны работают как раньше. Mac остаётся на 0.3.9.
