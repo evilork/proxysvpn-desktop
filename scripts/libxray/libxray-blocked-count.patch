@@ -1,0 +1,275 @@
+diff --git a/invoke.go b/invoke.go
+--- a/invoke.go
++++ b/invoke.go
+@@ -57,6 +57,8 @@
+ 		return encodeInvokeResponse(&XrayVersionResponse{Version: xray.XrayVersion()}, nil)
+ 	case LibXrayMethodGetXrayState:
+ 		return encodeInvokeResponse(&GetXrayStateResponse{Running: xray.GetXrayState()}, nil)
++	case LibXrayMethodBlockedCount:
++		return invokeBlockedCount(request.Payload)
+ 	default:
+ 		return encodeInvokeResponse(nil, errors.New("unknown method"))
+ 	}
+diff --git a/invoke_blocked_count_proxysvpn.go b/invoke_blocked_count_proxysvpn.go
+new file mode 100644
+--- /dev/null
++++ b/invoke_blocked_count_proxysvpn.go
+@@ -0,0 +1,35 @@
++package libXray
++
++// ProxysVPN (scripts/libxray/libxray-blocked-count.patch): "blockedCount"
++// reads how many connections a blackhole outbound of the running engine has
++// received (Xray-core: xray-core-blocked-count.patch). The PacketTunnel
++// extension polls it in process for its count of blocked ads and trackers;
++// nothing listens anywhere for it.
++
++import (
++	"encoding/json"
++
++	"github.com/xtls/libxray/xray"
++)
++
++type BlockedCountRequest struct {
++	// The tag of a blackhole outbound in the running configuration.
++	Tag string `json:"tag,omitempty"`
++}
++
++type BlockedCountResponse struct {
++	// Connections received since the engine started; 0 is a count too.
++	Count int64 `json:"count"`
++}
++
++func invokeBlockedCount(payload json.RawMessage) string {
++	request, err := decodePayload[BlockedCountRequest](payload)
++	if err != nil {
++		return encodeInvokeResponse(nil, err)
++	}
++	count, err := xray.BlockedCount(request.Tag)
++	if err != nil {
++		return encodeInvokeResponse(nil, err)
++	}
++	return encodeInvokeResponse(&BlockedCountResponse{Count: count}, nil)
++}
+diff --git a/invoke_blocked_count_proxysvpn_test.go b/invoke_blocked_count_proxysvpn_test.go
+new file mode 100644
+--- /dev/null
++++ b/invoke_blocked_count_proxysvpn_test.go
+@@ -0,0 +1,51 @@
++package libXray
++
++// ProxysVPN (scripts/libxray/libxray-blocked-count.patch): the shape of
++// "blockedCount" as the PacketTunnel extension reads it.
++
++import (
++	"encoding/json"
++	"testing"
++
++	"github.com/xtls/libxray/xray"
++)
++
++const blockedCountInvokeConfig = `{
++  "log": {"loglevel": "none"},
++  "outbounds": [
++    {"protocol": "freedom", "tag": "direct"},
++    {"protocol": "blackhole", "tag": "ads"}
++  ]
++}`
++
++func TestProxysVPNInvokeBlockedCount(t *testing.T) {
++	if response := invokeForTest(t, LibXrayMethodBlockedCount, BlockedCountRequest{Tag: "ads"}); response.Success || response.Err != xray.ErrNotRunning.Error() {
++		t.Fatalf("no engine: %+v", response)
++	}
++	if err := xray.RunXray(blockedCountInvokeConfig); err != nil {
++		t.Fatal(err)
++	}
++	defer xrayStopForTest(t)
++
++	response := invokeForTest(t, LibXrayMethodBlockedCount, BlockedCountRequest{Tag: "ads"})
++	if !response.Success {
++		t.Fatalf("blockedCount failed: %s", response.Err)
++	}
++	// The count is always there, 0 included.
++	if string(response.Data) != `{"count":0}` {
++		t.Fatalf("data %s, want {\"count\":0}", response.Data)
++	}
++	var data BlockedCountResponse
++	if err := json.Unmarshal(response.Data, &data); err != nil || data.Count != 0 {
++		t.Fatalf("data %s: %v", response.Data, err)
++	}
++
++	for _, request := range []BlockedCountRequest{{}, {Tag: "direct"}, {Tag: "none"}} {
++		if response := invokeForTest(t, LibXrayMethodBlockedCount, request); response.Success || response.Err == "" {
++			t.Fatalf("tag %q: %+v, want an error", request.Tag, response)
++		}
++	}
++	if response := Invoke(`{"apiVersion":3,"method":"blockedCount","payload":{"tag":7}}`); response == "" || response[:17] != `{"success":false,` {
++		t.Fatalf("a tag that is not a string: %s", response)
++	}
++}
+diff --git a/invoke_model.go b/invoke_model.go
+--- a/invoke_model.go
++++ b/invoke_model.go
+@@ -21,6 +21,8 @@
+ 	LibXrayMethodStopXray                    LibXrayMethod = "stopXray"
+ 	LibXrayMethodXrayVersion                 LibXrayMethod = "xrayVersion"
+ 	LibXrayMethodGetXrayState                LibXrayMethod = "getXrayState"
++	// ProxysVPN: see invoke_blocked_count_proxysvpn.go.
++	LibXrayMethodBlockedCount LibXrayMethod = "blockedCount"
+ )
+ 
+ type LibXrayInvokeRequest struct {
+diff --git a/xray/blocked_count_proxysvpn.go b/xray/blocked_count_proxysvpn.go
+new file mode 100644
+--- /dev/null
++++ b/xray/blocked_count_proxysvpn.go
+@@ -0,0 +1,44 @@
++package xray
++
++// ProxysVPN (scripts/libxray/libxray-blocked-count.patch): the count of
++// connections a blackhole outbound of the running engine has received, for
++// the app's count of blocked ads and trackers. In process only.
++
++import (
++	"errors"
++
++	"github.com/xtls/xray-core/features/outbound"
++	"github.com/xtls/xray-core/proxy/blackhole"
++)
++
++// Longer than any tag the app writes; a bound on what a caller can pass in.
++const maxBlockedCountTagBytes = 256
++
++var (
++	ErrNotRunning     = errors.New("xray is not running")
++	ErrBadBlockedTag  = errors.New("tag must be 1 to 256 bytes")
++	ErrNoBlackholeTag = errors.New("no blackhole outbound has this tag")
++)
++
++// BlockedCount is how many connections (TCP streams and UDP flows) the
++// blackhole outbound tagged tag has received since the engine started. A
++// stopped and started engine counts from 0 again.
++func BlockedCount(tag string) (int64, error) {
++	if tag == "" || len(tag) > maxBlockedCountTagBytes {
++		return 0, ErrBadBlockedTag
++	}
++	coreServerMu.Lock()
++	defer coreServerMu.Unlock()
++	if coreServer == nil {
++		return 0, ErrNotRunning
++	}
++	manager, ok := coreServer.GetFeature(outbound.ManagerType()).(outbound.Manager)
++	if !ok {
++		return 0, ErrNoBlackholeTag
++	}
++	count, ok := blackhole.BlockedOf(manager, tag)
++	if !ok {
++		return 0, ErrNoBlackholeTag
++	}
++	return count, nil
++}
+diff --git a/xray/blocked_count_proxysvpn_test.go b/xray/blocked_count_proxysvpn_test.go
+new file mode 100644
+--- /dev/null
++++ b/xray/blocked_count_proxysvpn_test.go
+@@ -0,0 +1,101 @@
++package xray
++
++// ProxysVPN (scripts/libxray/libxray-blocked-count.patch): BlockedCount reads
++// the count of the running engine by tag, refuses what it cannot read, and
++// starts from 0 with a new engine.
++
++import (
++	"context"
++	"errors"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/xtls/xray-core/common/net"
++	"github.com/xtls/xray-core/core"
++)
++
++const blockedCountConfig = `{
++  "log": {"loglevel": "none"},
++  "outbounds": [
++    {"protocol": "freedom", "tag": "direct"},
++    {"protocol": "blackhole", "tag": "ads"},
++    {"protocol": "blackhole", "tag": "block"}
++  ],
++  "routing": {"rules": [
++    {"type": "field", "domain": ["full:ads.test"], "outboundTag": "ads"}
++  ]}
++}`
++
++func blockedCountDial(t *testing.T, ctx context.Context, dest net.Destination) {
++	t.Helper()
++	coreServerMu.Lock()
++	server := coreServer
++	coreServerMu.Unlock()
++	conn, err := core.Dial(ctx, server, dest)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { conn.Close() })
++}
++
++func blockedCountWait(t *testing.T, tag string, want int64) {
++	t.Helper()
++	deadline := time.Now().Add(5 * time.Second)
++	for {
++		got, err := BlockedCount(tag)
++		if err == nil && got == want {
++			return
++		}
++		if time.Now().After(deadline) {
++			t.Fatalf("%q: %d blocked (%v), want %d", tag, got, err, want)
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++}
++
++func TestProxysVPNBlockedCount(t *testing.T) {
++	if _, err := BlockedCount("ads"); !errors.Is(err, ErrNotRunning) {
++		t.Fatalf("no engine: %v, want %v", err, ErrNotRunning)
++	}
++	if err := RunXray(blockedCountConfig); err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { StopXray() })
++	ctx, cancel := context.WithCancel(context.Background())
++	t.Cleanup(cancel)
++
++	for _, c := range []struct {
++		tag  string
++		want error
++	}{
++		{"", ErrBadBlockedTag},
++		{strings.Repeat("a", maxBlockedCountTagBytes+1), ErrBadBlockedTag},
++		{"direct", ErrNoBlackholeTag},
++		{"none", ErrNoBlackholeTag},
++	} {
++		if _, err := BlockedCount(c.tag); !errors.Is(err, c.want) {
++			t.Fatalf("tag of %d bytes: %v, want %v", len(c.tag), err, c.want)
++		}
++	}
++	blockedCountWait(t, "ads", 0)
++	blockedCountWait(t, "block", 0)
++
++	blockedCountDial(t, ctx, net.TCPDestination(net.DomainAddress("ads.test"), 443))
++	blockedCountDial(t, ctx, net.TCPDestination(net.DomainAddress("ads.test"), 80))
++	blockedCountDial(t, ctx, net.UDPDestination(net.DomainAddress("ads.test"), 443))
++	blockedCountWait(t, "ads", 3)
++	blockedCountWait(t, "block", 0)
++
++	cancel()
++	if err := StopXray(); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := BlockedCount("ads"); !errors.Is(err, ErrNotRunning) {
++		t.Fatalf("stopped engine: %v, want %v", err, ErrNotRunning)
++	}
++	if err := RunXray(blockedCountConfig); err != nil {
++		t.Fatal(err)
++	}
++	blockedCountWait(t, "ads", 0)
++}

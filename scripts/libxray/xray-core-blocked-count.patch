@@ -1,0 +1,386 @@
+diff --git a/proxy/blackhole/blackhole.go b/proxy/blackhole/blackhole.go
+--- a/proxy/blackhole/blackhole.go
++++ b/proxy/blackhole/blackhole.go
+@@ -5,6 +5,7 @@
+ 	"bytes"
+ 	"context"
+ 	"net/http"
++	"sync/atomic"
+ 	"time"
+ 
+ 	"github.com/xtls/xray-core/common"
+@@ -21,6 +22,9 @@
+ // Handler is an outbound connection that silently swallow the entire payload.
+ type Handler struct {
+ 	response []byte
++	// ProxysVPN (scripts/libxray/xray-core-blocked-count.patch): the
++	// connections this handler has received, see blocked_count_proxysvpn.go.
++	blocked atomic.Int64
+ }
+ 
+ var http403response = http.Response{
+@@ -56,6 +60,7 @@
+ 
+ // Process implements OutboundHandler.Dispatch().
+ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer internet.Dialer) error {
++	h.blocked.Add(1)
+ 	outbounds := session.OutboundsFromContext(ctx)
+ 	ob := outbounds[len(outbounds)-1]
+ 	ob.Name = "blackhole"
+diff --git a/proxy/blackhole/blocked_count_proxysvpn.go b/proxy/blackhole/blocked_count_proxysvpn.go
+new file mode 100644
+--- /dev/null
++++ b/proxy/blackhole/blocked_count_proxysvpn.go
+@@ -0,0 +1,42 @@
++package blackhole
++
++// ProxysVPN (scripts/libxray/xray-core-blocked-count.patch). The app shows how
++// many ads and trackers it has blocked. Its rule for them sends their
++// connections to a blackhole outbound of their own, so every connection that
++// outbound is handed is one blocked: a TCP stream or a UDP flow. The count
++// lives in the handler - per outbound tag, per engine instance (a new one
++// starts at 0) - and costs one atomic add per connection and no memory per
++// connection. It holds a number only: no name, no address, no log line. It is
++// read in process (libXray's "blockedCount"), never through api, metrics or
++// any listener. What a blocked connection gets is unchanged.
++
++import (
++	"github.com/xtls/xray-core/features/outbound"
++	"github.com/xtls/xray-core/proxy"
++)
++
++// Blocked is how many connections this handler has received since it was made.
++func (h *Handler) Blocked() int64 {
++	return h.blocked.Load()
++}
++
++// BlockedOf is Blocked of the blackhole outbound tagged tag. ok is false when
++// no outbound has that tag or the outbound is not a blackhole.
++func BlockedOf(manager outbound.Manager, tag string) (count int64, ok bool) {
++	if manager == nil || tag == "" {
++		return 0, false
++	}
++	handler := manager.GetHandler(tag)
++	if handler == nil {
++		return 0, false
++	}
++	carrier, ok := handler.(proxy.GetOutbound)
++	if !ok {
++		return 0, false
++	}
++	blackhole, ok := carrier.GetOutbound().(*Handler)
++	if !ok {
++		return 0, false
++	}
++	return blackhole.Blocked(), true
++}
+diff --git a/proxy/blackhole/blocked_count_proxysvpn_test.go b/proxy/blackhole/blocked_count_proxysvpn_test.go
+new file mode 100644
+--- /dev/null
++++ b/proxy/blackhole/blocked_count_proxysvpn_test.go
+@@ -0,0 +1,178 @@
++package blackhole_test
++
++// ProxysVPN (scripts/libxray/xray-core-blocked-count.patch): a blackhole
++// outbound counts the connections it is handed, exactly, per tag and per
++// engine instance, and a blocked connection is refused as before. These fail
++// if a connection goes uncounted or is counted twice, if two tags share a
++// count, if a new instance starts from the old count, or if the count can be
++// read for an outbound that is not a blackhole.
++
++import (
++	"context"
++	"io"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/xtls/xray-core/common/buf"
++	"github.com/xtls/xray-core/common/net"
++	"github.com/xtls/xray-core/common/session"
++	"github.com/xtls/xray-core/core"
++	"github.com/xtls/xray-core/features/outbound"
++	_ "github.com/xtls/xray-core/main/distro/all"
++	"github.com/xtls/xray-core/proxy/blackhole"
++	"github.com/xtls/xray-core/transport"
++	"github.com/xtls/xray-core/transport/pipe"
++)
++
++// The app's shape: ads go to a blackhole of their own ("ads"), the other
++// refusals to "block", everything else out.
++const proxysvpnBlockedConfig = `{"log":{"loglevel":"none"},
++	"outbounds":[{"protocol":"freedom","tag":"direct"},
++		{"protocol":"blackhole","tag":"ads"},
++		{"protocol":"blackhole","tag":"block"}],
++	"routing":{"rules":[
++		{"type":"field","domain":["full:ads.test"],"outboundTag":"ads"},
++		{"type":"field","domain":["full:refused.test"],"outboundTag":"block"}]}}`
++
++func proxysvpnBlockedStart(t *testing.T) (*core.Instance, outbound.Manager) {
++	t.Helper()
++	config, err := core.LoadConfig("json", strings.NewReader(proxysvpnBlockedConfig))
++	if err != nil {
++		t.Fatal(err)
++	}
++	server, err := core.New(config)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := server.Start(); err != nil {
++		t.Fatal(err)
++	}
++	manager, ok := server.GetFeature(outbound.ManagerType()).(outbound.Manager)
++	if !ok {
++		t.Fatal("no outbound manager")
++	}
++	return server, manager
++}
++
++func proxysvpnBlockedWait(t *testing.T, manager outbound.Manager, want map[string]int64) {
++	t.Helper()
++	deadline := time.Now().Add(5 * time.Second)
++	for {
++		settled := true
++		for tag, n := range want {
++			if got, ok := blackhole.BlockedOf(manager, tag); !ok || got != n {
++				settled = false
++			}
++		}
++		if settled {
++			return
++		}
++		if time.Now().After(deadline) {
++			for tag, n := range want {
++				got, ok := blackhole.BlockedOf(manager, tag)
++				t.Errorf("%q: %d blocked (readable %v), want %d", tag, got, ok, n)
++			}
++			t.FailNow()
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++}
++
++func TestProxysVPNBlockedCountPerTag(t *testing.T) {
++	server, manager := proxysvpnBlockedStart(t)
++	ctx, cancel := context.WithCancel(context.Background())
++	// Ends the UDP flows the blackhole would otherwise drain for 30-90 s.
++	defer cancel()
++	defer server.Close()
++
++	for tag, want := range map[string]bool{"ads": true, "block": true, "direct": false, "none": false, "": false} {
++		if n, ok := blackhole.BlockedOf(manager, tag); ok != want || n != 0 {
++			t.Fatalf("%q before any connection: %d, readable %v; want 0, readable %v", tag, n, ok, want)
++		}
++	}
++	if _, ok := blackhole.BlockedOf(nil, "ads"); ok {
++		t.Fatal("read a count without an outbound manager")
++	}
++
++	dial := func(dest net.Destination) net.Conn {
++		t.Helper()
++		conn, err := core.Dial(ctx, server, dest)
++		if err != nil {
++			t.Fatal(err)
++		}
++		return conn
++	}
++	// Three TCP streams and two UDP flows to an ad host, one stream to a
++	// refused one. A blocked stream is refused as before: closed, no byte.
++	for i := 0; i < 3; i++ {
++		conn := dial(net.TCPDestination(net.DomainAddress("ads.test"), 443))
++		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
++		got, err := io.ReadAll(conn)
++		if len(got) != 0 {
++			t.Fatalf("a blocked stream got %d bytes", len(got))
++		}
++		if err != nil && !strings.Contains(err.Error(), "closed") {
++			t.Fatalf("a blocked stream was not closed: %v", err)
++		}
++		conn.Close()
++	}
++	for i := 0; i < 2; i++ {
++		conn := dial(net.UDPDestination(net.DomainAddress("ads.test"), 443))
++		conn.Write([]byte("quic"))
++		defer conn.Close()
++	}
++	conn := dial(net.TCPDestination(net.DomainAddress("refused.test"), 443))
++	defer conn.Close()
++
++	proxysvpnBlockedWait(t, manager, map[string]int64{"ads": 5, "block": 1})
++	// Counted once each: nothing more comes in on its own.
++	time.Sleep(200 * time.Millisecond)
++	proxysvpnBlockedWait(t, manager, map[string]int64{"ads": 5, "block": 1})
++
++	// A new instance of the same configuration starts from nothing.
++	cancel()
++	if err := server.Close(); err != nil {
++		t.Fatal(err)
++	}
++	again, manager := proxysvpnBlockedStart(t)
++	defer again.Close()
++	proxysvpnBlockedWait(t, manager, map[string]int64{"ads": 0, "block": 0})
++}
++
++// Many connections at once, as when a page loads: every one is counted.
++func TestProxysVPNBlockedCountConcurrent(t *testing.T) {
++	const workers, each = 32, 100
++	handler, err := blackhole.New(context.Background(), &blackhole.Config{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	var wg sync.WaitGroup
++	for w := 0; w < workers; w++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			for i := 0; i < each; i++ {
++				ctx := session.ContextWithOutbounds(context.Background(), []*session.Outbound{{
++					Target: net.TCPDestination(net.DomainAddress("ads.test"), 443),
++				}})
++				reader, writer := pipe.New(pipe.WithoutSizeLimit())
++				if err := handler.Process(ctx, &transport.Link{Reader: reader, Writer: writer}, nil); err != nil {
++					t.Error(err)
++					return
++				}
++				// Refused as before: the stream is ended without a byte.
++				if mb, err := reader.ReadMultiBuffer(); err == nil || !mb.IsEmpty() {
++					buf.ReleaseMulti(mb)
++					t.Error("a blocked stream was left open")
++					return
++				}
++			}
++		}()
++	}
++	wg.Wait()
++	if got := handler.Blocked(); got != workers*each {
++		t.Fatalf("%d connections counted, want %d", got, workers*each)
++	}
++}
+diff --git a/proxy/tun/blocked_count_proxysvpn_test.go b/proxy/tun/blocked_count_proxysvpn_test.go
+new file mode 100644
+--- /dev/null
++++ b/proxy/tun/blocked_count_proxysvpn_test.go
+@@ -0,0 +1,122 @@
++//go:build darwin
++
++package tun_test
++
++// ProxysVPN (scripts/libxray/xray-core-blocked-count.patch). The count of
++// blocked connections as the packet tunnel extension sees it: apps behind
++// the tunnel open TCP connections and send UDP datagrams to an address the
++// routing sends to the blackhole "ads". Each connection is counted once - a
++// retransmitted SYN is not a second one - and each UDP flow once, however
++// many datagrams it carries. It fails if the count follows packets rather
++// than connections.
++
++import (
++	"testing"
++	"time"
++
++	"github.com/xtls/xray-core/features/outbound"
++	"github.com/xtls/xray-core/proxy/blackhole"
++	"golang.org/x/sys/unix"
++	"gvisor.dev/gvisor/pkg/tcpip/checksum"
++	"gvisor.dev/gvisor/pkg/tcpip/header"
++)
++
++const proxysvpnBlockedRoutes = `"outbounds":[{"protocol":"freedom","tag":"direct"},{"protocol":"blackhole","tag":"ads"}],
++	"routing":{"rules":[{"type":"field","ip":["198.51.100.7/32"],"outboundTag":"ads"}]}`
++
++// The last packet of the app's handshake: the ACK of the engine's SYN-ACK.
++func proxysvpnAck(srcPort uint16, ack uint32) []byte {
++	const ipLen = header.IPv4MinimumSize + header.TCPMinimumSize
++	p := make([]byte, 4+ipLen)
++	p[3] = unix.AF_INET
++	ip := header.IPv4(p[4:])
++	ip.Encode(&header.IPv4Fields{
++		TotalLength: ipLen, TTL: 64, Protocol: uint8(header.TCPProtocolNumber),
++		SrcAddr: proxysvpnApp, DstAddr: proxysvpnSite,
++	})
++	ip.SetChecksum(^ip.CalculateChecksum())
++	tcp := header.TCP(p[4+header.IPv4MinimumSize:])
++	tcp.Encode(&header.TCPFields{
++		SrcPort: srcPort, DstPort: 443, SeqNum: 1001, AckNum: ack, DataOffset: header.TCPMinimumSize,
++		Flags: header.TCPFlagAck, WindowSize: 65535,
++	})
++	sum := header.PseudoHeaderChecksum(header.TCPProtocolNumber, proxysvpnApp, proxysvpnSite, header.TCPMinimumSize)
++	tcp.SetChecksum(^checksum.Checksum(tcp, sum))
++	return p
++}
++
++// The sequence number of the engine's SYN-ACK to srcPort, or false.
++func proxysvpnSynAckSeq(far int, srcPort uint16, wait time.Duration) (uint32, bool) {
++	deadline := time.Now().Add(wait)
++	buf := make([]byte, 2048)
++	for time.Now().Before(deadline) {
++		fds := []unix.PollFd{{Fd: int32(far), Events: unix.POLLIN}}
++		if n, _ := unix.Poll(fds, 50); n <= 0 {
++			continue
++		}
++		n, err := unix.Read(far, buf)
++		if err != nil || n < 4+header.IPv4MinimumSize+header.TCPMinimumSize {
++			continue
++		}
++		ip := header.IPv4(buf[4:n])
++		if ip.Protocol() != uint8(header.TCPProtocolNumber) {
++			continue
++		}
++		tcp := header.TCP(ip.Payload())
++		if tcp.DestinationPort() == srcPort && tcp.Flags() == header.TCPFlagSyn|header.TCPFlagAck {
++			return tcp.SequenceNumber(), true
++		}
++	}
++	return 0, false
++}
++
++func TestProxysVPNBlockedCountThroughTheTunnel(t *testing.T) {
++	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_DGRAM, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	own, far := pair[0], pair[1]
++	defer unix.Close(own)
++	defer unix.Close(far)
++
++	server := proxysvpnFlowStart(t, own, proxysvpnBlockedRoutes)
++	defer server.Close()
++	manager, ok := server.GetFeature(outbound.ManagerType()).(outbound.Manager)
++	if !ok {
++		t.Fatal("no outbound manager")
++	}
++	blocked := func() int64 {
++		n, ok := blackhole.BlockedOf(manager, "ads")
++		if !ok {
++			t.Fatal(`"ads" is not readable`)
++		}
++		return n
++	}
++
++	// Three TCP connections, each SYN sent twice as an app resends it.
++	for port := uint16(41000); port < 41003; port++ {
++		unix.Write(far, proxysvpnSyn(port))
++		unix.Write(far, proxysvpnSyn(port))
++		seq, ok := proxysvpnSynAckSeq(far, port, 5*time.Second)
++		if !ok {
++			t.Fatalf("no SYN-ACK to port %d", port)
++		}
++		unix.Write(far, proxysvpnAck(port, seq+1))
++	}
++	// Two UDP flows: three datagrams from one socket, one from another.
++	for _, port := range []uint16{42000, 42000, 42000, 42001} {
++		unix.Write(far, proxysvpnFlowDatagram(port, proxysvpnSite, 443, []byte("quic")))
++		time.Sleep(5 * time.Millisecond)
++	}
++
++	const want = 3 + 2
++	deadline := time.Now().Add(5 * time.Second)
++	for blocked() < want && time.Now().Before(deadline) {
++		time.Sleep(10 * time.Millisecond)
++	}
++	// Nothing more comes in on its own: a count of connections, not packets.
++	time.Sleep(300 * time.Millisecond)
++	if got := blocked(); got != want {
++		t.Fatalf("%d blocked through the tunnel, want %d (3 TCP connections, 2 UDP flows)", got, want)
++	}
++}
