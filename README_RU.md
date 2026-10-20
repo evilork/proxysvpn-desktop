@@ -23,6 +23,10 @@ VPN-клиент для компьютера под сервис [ProxysVPN](htt
   закрытие окна не разрывает VPN.
 - **Русский и английский** интерфейс.
 
+Выбираете клиент? В [docs/COMPARISON.md](docs/COMPARISON.md) (по-английски)
+ProxysVPN Desktop стоит рядом с Happ, v2RayTun, Hiddify и NekoBox — факт за
+фактом, источники — страницы самих разработчиков.
+
 ## Скачать и установить
 
 Установщики лежат на [странице релизов](https://github.com/evilork/proxysvpn-desktop/releases).

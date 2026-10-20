@@ -23,6 +23,10 @@ Russian sites and anything on your "always direct" list go straight out.
   VPN connected in the background.
 - **Russian and English** interface.
 
+Choosing a client? [docs/COMPARISON.md](docs/COMPARISON.md) sets ProxysVPN
+Desktop beside Happ, v2RayTun, Hiddify and NekoBox, fact by fact, with the
+makers' own pages as sources.
+
 ## Download and install
 
 Installers are on the [Releases page](https://github.com/evilork/proxysvpn-desktop/releases).
