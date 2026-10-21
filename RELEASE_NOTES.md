@@ -1,3 +1,64 @@
+# ProxysVPN Desktop v0.3.15-beta
+
+🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Сервер «Россия» пропускает через туннель весь трафик, а если наш протокол WataFast не проходит в вашей сети, приложение само переходит на VLESS.
+
+🇬🇧 This release is for the Mac (Apple Silicon and Intel), Windows, Linux and the Steam Deck. The Russia server sends all traffic through the tunnel, and when our own WataFast protocol does not get through on your network, the app moves to VLESS by itself.
+
+## 🇷🇺 Установка
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. Образы для macOS подписаны сертификатом Apple Developer ID (Watafast LLC) и заверены Apple. У файлов для Windows и Linux подписи кода пока нет, поэтому Windows один раз предупреждает.
+- **macOS 12+ (Apple Silicon):** откройте `ProxysVPN_0.3.15_aarch64.dmg`, перетащите ProxysVPN на ярлык Applications, при первом запуске нажмите «Открыть». При запуске приложение спрашивает пароль администратора.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.15_x64.dmg`, шаги те же.
+- **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.15_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». При каждом запуске — запрос прав администратора (UAC).
+- **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.15_arm64-setup.exe`, шаги те же.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.15_amd64.deb`. Нужен сеанс с агентом polkit. Удаление: `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, Linux x86_64):** `ProxysVPN_0.3.15_amd64.AppImage`. Сделайте файл исполняемым (`chmod +x`), первый запуск и первое подключение — в режиме рабочего стола. Шаги, игровой режим и управление — в docs/STEAMDECK.md.
+- **Если стоит 0.3.9–0.3.14:** приложение само покажет внизу окна строку «Вышла версия 0.3.15» и кнопку «Скачать». 0.3.10–0.3.14 спрашивают о новой версии раз в шесть часов, 0.3.9 — раз в сутки, поэтому строка может появиться не сразу. Ждать не обязательно: новый файл можно поставить поверх.
+- **0.3.8 и старше** обновляться сами не умеют: поставьте файл вручную, поверх.
+
+## 🇷🇺 Что нового
+
+- **Сервер «Россия».** Весь трафик идёт через туннель, мимо него — только домашняя сеть. Адреса сайтов приложение спрашивает у DNS Яндекса, если в настройках не выбран свой DNS. Российские сайты видят адрес сервера в Москве, а не ваш.
+- **Проверка связи на сервере «Россия».** Раньше там появлялась надпись «Подтвердить не удалось», хотя интернет работал. Теперь проверка засчитывает ответ сайта, который перенаправляет на другой адрес, и с первого раза спрашивает два сайта.
+- **Если WataFast не проходит в вашей сети.** Страна на нашем протоколе, выбранная вручную, ничего не пропускает — приложение само переходит на VLESS той же страны (если её нет — на страну, которую выбрало бы само) и пишет, куда перешло. Раньше оно снова и снова пробовало WataFast. Вернуться можно, выбрав страну в списке ещё раз.
+- **Выбор страны после ошибки** подключает сразу, а не ждёт следующей попытки по таймеру.
+- **Окно «Восстанавливаю соединение»** после ошибки больше не открывается заново при каждой повторной попытке.
+
+## 🇷🇺 Известные ограничения
+
+- **Переход с WataFast на VLESS** проверен на эмуляторе Android, где WataFast закрывали правилом сети; на компьютерах — тестами.
+- **Mac с Intel:** на настоящем Mac с Intel выпуск не запускался.
+- **Steam Deck:** на настоящем Steam Deck выпуск не запускался.
+- Остальное — как в 0.3.11: список на странице выпуска v0.3.11-beta.
+
+## 🇬🇧 Install
+
+Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The macOS images are signed with an Apple Developer ID certificate (Watafast LLC) and notarized by Apple. The Windows and Linux files are not code-signed yet, so Windows warns once.
+- **macOS 12+ (Apple Silicon):** open `ProxysVPN_0.3.15_aarch64.dmg`, drag ProxysVPN onto the Applications shortcut, and press "Open" at the first launch. The app asks for the administrator password at launch.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.15_x64.dmg`, same steps.
+- **Windows 10/11 (x64):** download `ProxysVPN_0.3.15_x64-setup.exe`. Microsoft Edge may hold the download: the save button hides behind the arrow right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". Every start asks for administrator rights (UAC).
+- **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.15_arm64-setup.exe`, same steps.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.15_amd64.deb`. Needs a session with a polkit agent. Remove with `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, x86_64 Linux):** `ProxysVPN_0.3.15_amd64.AppImage`. Make the file executable (`chmod +x`); the first start and the first connect happen in Desktop Mode. The steps, Gaming Mode and the controller are in docs/STEAMDECK.md.
+- **If you have 0.3.9 to 0.3.14:** the app itself shows the line "Version 0.3.15 is out" and a Download button at the foot of the window. 0.3.10 to 0.3.14 ask about a new version every six hours and 0.3.9 once a day, so the line may take a while. You need not wait: install the new file over it.
+- **0.3.8 and older** cannot update themselves: install the file by hand, over the old one.
+
+## 🇬🇧 What's new
+
+- **The Russia server.** All traffic goes through the tunnel; only the home network stays outside it. The app asks Yandex's DNS for site addresses unless you chose your own DNS in the settings. Russian sites see the server's address in Moscow, not yours.
+- **The connection check on the Russia server.** It used to say "Could not confirm" there while the internet worked. The check now counts a site's answer that redirects elsewhere, and asks two sites from the first try.
+- **When WataFast does not get through on your network.** If a country on our own protocol that you picked carries nothing, the app moves to VLESS in the same country by itself (or, if there is none, to the country it would pick itself) and says where it went. It used to try WataFast again and again. To go back, pick the country in the list once more.
+- **Picking a country after an error** connects at once instead of waiting for the next timed retry.
+- **The "Restoring the connection" sheet** no longer opens again with every retry after an error.
+
+## 🇬🇧 Known limitations
+
+- **The move from WataFast to VLESS** was checked on the Android emulator, with WataFast closed by a network rule; on the computers, by tests.
+- **Intel Macs:** this release was not run on a real Intel Mac.
+- **Steam Deck:** this release was not run on a real Steam Deck.
+- Everything else is as in 0.3.11: see the v0.3.11-beta release page.
+
+---
 # ProxysVPN Desktop v0.3.14-beta
 
 🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Над знаком на главном экране — стеклянная линза, как на iPhone, и обновлён клиент нашего протокола WataFast.
