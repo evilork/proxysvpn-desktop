@@ -1,3 +1,58 @@
+# ProxysVPN Desktop v0.3.16-beta
+
+🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Меньше ожидания при выборе страны и при подключении.
+
+🇬🇧 This release is for the Mac (Apple Silicon and Intel), Windows, Linux and the Steam Deck. Less waiting when you pick a country and when you connect.
+
+## 🇷🇺 Установка
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. Образы для macOS подписаны сертификатом Apple Developer ID (Watafast LLC) и заверены Apple. У файлов для Windows и Linux подписи кода пока нет, поэтому Windows один раз предупреждает.
+- **macOS 12+ (Apple Silicon):** откройте `ProxysVPN_0.3.16_aarch64.dmg`, перетащите ProxysVPN на ярлык Applications, при первом запуске нажмите «Открыть». При запуске приложение спрашивает пароль администратора.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.16_x64.dmg`, шаги те же.
+- **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.16_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». При каждом запуске — запрос прав администратора (UAC).
+- **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.16_arm64-setup.exe`, шаги те же.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.16_amd64.deb`. Нужен сеанс с агентом polkit. Удаление: `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, Linux x86_64):** `ProxysVPN_0.3.16_amd64.AppImage`. Сделайте файл исполняемым (`chmod +x`), первый запуск и первое подключение — в режиме рабочего стола. Шаги, игровой режим и управление — в docs/STEAMDECK.md.
+- **Если стоит 0.3.9–0.3.15:** приложение само покажет внизу окна строку «Вышла версия 0.3.16» и кнопку «Скачать». 0.3.10–0.3.15 спрашивают о новой версии раз в шесть часов, 0.3.9 — раз в сутки, поэтому строка может появиться не сразу. Ждать не обязательно: новый файл можно поставить поверх.
+- **0.3.8 и старше** обновляться сами не умеют: поставьте файл вручную, поверх.
+
+## 🇷🇺 Что нового
+
+- **Выбор страны.** «Защищено» появляется, как только новый сервер ответил через туннель: отдельная проверка после этого больше не задерживает окно. Если сервер за отведённое время не ответил, следующая проверка ждёт 2,5 с вместо 8.
+- **Подключение.** Если сервис списка серверов отвечает медленно, а сохранённый список ещё годится и до конца оплаченного срока больше суток, приложение ждёт сервис не дольше 1,5 с и подключается по сохранённому списку. Свежий список оно получает потом через туннель.
+- **Если WataFast не проходит в вашей сети,** переход на VLESS (из 0.3.15) обходится без одной долгой проверки.
+
+## 🇷🇺 Известные ограничения
+
+- **Mac с Intel:** на настоящем Mac с Intel выпуск не запускался.
+- **Steam Deck:** на настоящем Steam Deck выпуск не запускался.
+- Остальное — как в 0.3.11: список на странице выпуска v0.3.11-beta.
+
+## 🇬🇧 Install
+
+Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The macOS images are signed with an Apple Developer ID certificate (Watafast LLC) and notarized by Apple. The Windows and Linux files are not code-signed yet, so Windows warns once.
+- **macOS 12+ (Apple Silicon):** open `ProxysVPN_0.3.16_aarch64.dmg`, drag ProxysVPN onto the Applications shortcut, and press "Open" at the first launch. The app asks for the administrator password at launch.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.16_x64.dmg`, same steps.
+- **Windows 10/11 (x64):** download `ProxysVPN_0.3.16_x64-setup.exe`. Microsoft Edge may hold the download: the save button hides behind the arrow right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". Every start asks for administrator rights (UAC).
+- **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.16_arm64-setup.exe`, same steps.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.16_amd64.deb`. Needs a session with a polkit agent. Remove with `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, x86_64 Linux):** `ProxysVPN_0.3.16_amd64.AppImage`. Make the file executable (`chmod +x`); the first start and the first connect happen in Desktop Mode. The steps, Gaming Mode and the controller are in docs/STEAMDECK.md.
+- **If you have 0.3.9 to 0.3.15:** the app itself shows the line "Version 0.3.16 is out" and a Download button at the foot of the window. 0.3.10 to 0.3.15 ask about a new version every six hours and 0.3.9 once a day, so the line may take a while. You need not wait: install the new file over it.
+- **0.3.8 and older** cannot update themselves: install the file by hand, over the old one.
+
+## 🇬🇧 What's new
+
+- **Picking a country.** "Protected" shows as soon as the new server has answered through the tunnel: a separate check after that no longer holds the window. If the server does not answer in the time it is given, the next check waits 2.5 s instead of 8.
+- **Connecting.** When the server-list service answers slowly while the saved list still holds and the paid term runs more than a day ahead, the app waits for the service at most 1.5 s and connects on the saved list. It fetches the fresh list afterwards, through the tunnel.
+- **When WataFast does not get through on your network,** the move to VLESS (from 0.3.15) skips one long check.
+
+## 🇬🇧 Known limitations
+
+- **Intel Macs:** this release was not run on a real Intel Mac.
+- **Steam Deck:** this release was not run on a real Steam Deck.
+- Everything else is as in 0.3.11: see the v0.3.11-beta release page.
+
+---
 # ProxysVPN Desktop v0.3.15-beta
 
 🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Сервер «Россия» пропускает через туннель весь трафик, а если наш протокол WataFast не проходит в вашей сети, приложение само переходит на VLESS.
