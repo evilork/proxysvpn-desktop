@@ -5,12 +5,16 @@ Windows и Linux — в [README_RU.md](README_RU.md#скачать-и-устан
 ## Системные требования
 
 - macOS 12 (Monterey) или новее
-- Apple Silicon (M1/M2/M3/M4) — поддерживается
-- Intel Mac — не поддерживается
+- Apple Silicon (M1/M2/M3/M4) — образ `ProxysVPN_<версия>_aarch64.dmg`
+- Intel Mac — образ `ProxysVPN_<версия>_x64.dmg` (с версии 0.3.14; собран,
+  подписан и нотаризован так же, но на настоящем Mac с Intel ещё не запускался)
+
+Какой у вас Mac: меню Apple → «Об этом Mac». «Чип Apple M…» — Apple Silicon,
+«Процессор Intel…» — Intel.
 
 ## Шаг 1. Установка
 
-1. Скачайте `ProxysVPN_<версия>_aarch64.dmg` со [страницы релизов](https://github.com/evilork/proxysvpn-desktop/releases)
+1. Скачайте образ для своего Mac со [страницы релизов](https://github.com/evilork/proxysvpn-desktop/releases)
    и сверьте сумму: `shasum -a 256 ~/Downloads/ProxysVPN_*.dmg` — она должна
    совпасть со строкой в `SHA256SUMS.txt` того же релиза.
 2. Откройте `.dmg`.

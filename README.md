@@ -42,10 +42,13 @@ sha256sum ProxysVPN_*                # Linux
 certutil -hashfile ProxysVPN_<version>_x64-setup.exe SHA256   # Windows
 ```
 
-### macOS (Apple Silicon)
+### macOS (Apple Silicon and Intel)
 
-1. Open `ProxysVPN_<version>_aarch64.dmg` and drag **ProxysVPN** onto the
-   **Applications** shortcut.
+1. Open `ProxysVPN_<version>_aarch64.dmg` (Apple Silicon: M1 and newer) or
+   `ProxysVPN_<version>_x64.dmg` (Intel) and drag **ProxysVPN** onto the
+   **Applications** shortcut. Not sure which Mac you have: Apple menu →
+   **About This Mac**; "Chip Apple M…" means Apple Silicon, "Processor Intel…"
+   means Intel.
 2. Launch ProxysVPN. macOS asks once whether to open an app downloaded from
    the internet: press **Open**. Then enter your administrator password: the
    tunnel needs it.
@@ -56,9 +59,12 @@ Versions 0.3.6 and older are not signed by Apple's rules and need one more
 step before the first launch, in Terminal:
 `xattr -dr com.apple.quarantine /Applications/ProxysVPN.app`
 
+The Intel image is new in 0.3.14 and is built, signed and notarized the same
+way as the Apple Silicon one; it has not been run on a real Intel Mac yet.
+
 Details and troubleshooting: [INSTALL.md](INSTALL.md) (Russian).
 
-### Windows 10 / 11 (x64)
+### Windows 10 / 11 (x64 and ARM64)
 
 The installer is not signed with a publisher certificate yet, so Windows
 warns twice: at the download and at the launch. Compare the file's SHA-256
@@ -77,8 +83,9 @@ with `SHA256SUMS.txt` on the release page if you want to be sure it is ours.
 
 **Windows on ARM** (Snapdragon, Surface Pro X): take
 `ProxysVPN_<version>_arm64-setup.exe`, the steps are the same. The x64 file
-works there too, under emulation. This build has not been run on a real ARM
-PC yet: it is built and checked on the build server's ARM machine.
+works there too, under emulation. The ARM64 build has not been run on a real
+ARM PC yet: it is built on the build server's ARM machine and checked in a
+Windows 11 ARM virtual machine.
 
 ### Linux (x86_64, .deb)
 
@@ -101,9 +108,11 @@ not been run on a real Steam Deck yet.
 
 ## System requirements
 
-- **macOS** 12 Monterey or newer, Apple Silicon (Intel Macs are not supported).
-- **Windows** 10 or 11, x64 (tested on Windows 11). WebView2 is installed by
-  the setup if missing.
+- **macOS** 12 Monterey or newer, Apple Silicon or Intel (two images; the
+  Intel one has not been run on a real Intel Mac yet).
+- **Windows** 10 or 11, x64 or ARM64 (tested on Windows 11; the ARM64 build
+  in a Windows 11 ARM virtual machine). WebView2 is installed by the setup if
+  missing.
 - **Linux** x86_64 with glibc 2.35+ (Debian 12+, Ubuntu 22.04+; tested on
   Debian 13), a desktop session with a polkit agent, `iproute2`.
 

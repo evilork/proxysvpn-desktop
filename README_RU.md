@@ -42,10 +42,12 @@ sha256sum ProxysVPN_*                # Linux
 certutil -hashfile ProxysVPN_<версия>_x64-setup.exe SHA256   # Windows
 ```
 
-### macOS (Apple Silicon)
+### macOS (Apple Silicon и Intel)
 
-1. Откройте `ProxysVPN_<версия>_aarch64.dmg` и перетащите **ProxysVPN** на
-   ярлык **Applications**.
+1. Откройте `ProxysVPN_<версия>_aarch64.dmg` (Apple Silicon: M1 и новее) или
+   `ProxysVPN_<версия>_x64.dmg` (Intel) и перетащите **ProxysVPN** на ярлык
+   **Applications**. Не знаете, какой у вас Mac: меню Apple → **«Об этом
+   Mac»**; «Чип Apple M…» — это Apple Silicon, «Процессор Intel…» — Intel.
 2. Запустите ProxysVPN. macOS один раз спросит, открыть ли приложение,
    загруженное из интернета, — нажмите **«Открыть»**. Затем введите пароль
    администратора — он нужен туннелю.
@@ -56,9 +58,12 @@ certutil -hashfile ProxysVPN_<версия>_x64-setup.exe SHA256   # Windows
 им нужен ещё один шаг, в Терминале:
 `xattr -dr com.apple.quarantine /Applications/ProxysVPN.app`
 
+Образ для Intel появился в 0.3.14; он собран, подписан и нотаризован так же,
+как образ для Apple Silicon, но на настоящем Mac с Intel ещё не запускался.
+
 Подробности и решение проблем: [INSTALL.md](INSTALL.md).
 
-### Windows 10 / 11 (x64)
+### Windows 10 / 11 (x64 и ARM64)
 
 Установщик пока не подписан сертификатом издателя, поэтому Windows
 предупредит дважды: при скачивании и при запуске. Сверьте SHA-256 файла с
@@ -77,8 +82,9 @@ certutil -hashfile ProxysVPN_<версия>_x64-setup.exe SHA256   # Windows
 
 **Windows на ARM** (Snapdragon, Surface Pro X): берите
 `ProxysVPN_<версия>_arm64-setup.exe`, шаги те же. Файл x64 там тоже
-работает, но через эмуляцию. На настоящем ARM-компьютере эта сборка ещё не
-запускалась: она собрана и проверена на ARM-машине сборочного сервера.
+работает, но через эмуляцию. На настоящем ARM-компьютере сборка ARM64 ещё не
+запускалась: она собрана на ARM-машине сборочного сервера и проверена в
+виртуальной машине с Windows 11 ARM.
 
 ### Linux (x86_64, .deb)
 
@@ -101,9 +107,11 @@ Cinnamon и MATE). Удаление: `sudo apt remove proxys-vpn`.
 
 ## Системные требования
 
-- **macOS** 12 Monterey или новее, Apple Silicon (Mac на Intel не поддерживаются).
-- **Windows** 10 или 11, x64 (проверено на Windows 11). WebView2 установщик
-  поставит сам, если его нет.
+- **macOS** 12 Monterey или новее, Apple Silicon или Intel (два образа; образ
+  для Intel на настоящем Mac с Intel ещё не запускался).
+- **Windows** 10 или 11, x64 или ARM64 (проверено на Windows 11; сборка ARM64 —
+  в виртуальной машине с Windows 11 ARM). WebView2 установщик поставит сам,
+  если его нет.
 - **Linux** x86_64 с glibc 2.35+ (Debian 12+, Ubuntu 22.04+; проверено на
   Debian 13), сеанс рабочего стола с агентом polkit, `iproute2`.
 
