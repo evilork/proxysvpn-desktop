@@ -1,3 +1,64 @@
+# ProxysVPN Desktop v0.3.17-beta
+
+🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Подключение быстрее на всех системах, а если DNS через VPN не отвечает, приложение замечает это само.
+
+🇬🇧 This release is for the Mac (Apple Silicon and Intel), Windows, Linux and the Steam Deck. Connecting is faster on every system, and the app notices by itself when DNS through the VPN does not answer.
+
+## 🇷🇺 Установка
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. Образы для macOS подписаны сертификатом Apple Developer ID (Watafast LLC) и заверены Apple. У файлов для Windows и Linux подписи кода пока нет, поэтому Windows один раз предупреждает.
+- **macOS 12+ (Apple Silicon):** откройте `ProxysVPN_0.3.17_aarch64.dmg`, перетащите ProxysVPN на ярлык Applications, при первом запуске нажмите «Открыть». При запуске приложение спрашивает пароль администратора.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.17_x64.dmg`, шаги те же.
+- **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.17_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». При каждом запуске — запрос прав администратора (UAC).
+- **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.17_arm64-setup.exe`, шаги те же.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.17_amd64.deb`. Нужен сеанс с агентом polkit. Удаление: `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, Linux x86_64):** `ProxysVPN_0.3.17_amd64.AppImage`. Сделайте файл исполняемым (`chmod +x`), первый запуск и первое подключение — в режиме рабочего стола. Шаги, игровой режим и управление — в docs/STEAMDECK.md.
+- **Если стоит 0.3.9–0.3.16:** приложение само покажет внизу окна строку «Вышла версия 0.3.17» и кнопку «Скачать». 0.3.10–0.3.16 спрашивают о новой версии раз в шесть часов, 0.3.9 — раз в сутки, поэтому строка может появиться не сразу. Ждать не обязательно: новый файл можно поставить поверх.
+- **0.3.8 и старше** обновляться сами не умеют: поставьте файл вручную, поверх.
+
+## 🇷🇺 Что нового
+
+- **Подключение.** Программы подключения запускаются рядом, а не друг за другом, и проверка связи начинается, пока поднимается туннель. Адреса для этой проверки ищутся с момента нажатия кнопки.
+- **Windows.** Адрес, маршруты и DNS туннеля задаются напрямую через систему, без долгих команд, и адрес туннеля готов к работе сразу.
+- **Linux.** Окно пароля появляется сразу после нажатия кнопки, пока запускаются программы подключения, а не после них.
+- **Если DNS через VPN не отвечает.** Через секунду после подключения приложение проверяет, отвечают ли запросы имён сайтов. На Windows с DNS «Cloudflare и Google» оно само переводит запросы на DNS вашей сети, если так имена отвечают, говорит об этом и проверяет снова через неделю. В этом случае запросы имён могут идти мимо VPN, это видно в «Проверке». Если DNS вы выбрали сами, а также на macOS и Linux приложение только пишет об этом в журнал и в отчёт.
+- **Журнал.** В техническом журнале видно, сколько занял каждый шаг подключения.
+
+## 🇷🇺 Известные ограничения
+
+- **DNS на Windows:** автоматический переход на DNS сети не проверялся на компьютере, где DNS через VPN действительно не отвечает.
+- **Mac с Intel:** на настоящем Mac с Intel выпуск не запускался.
+- **Steam Deck:** на настоящем Steam Deck выпуск не запускался.
+- Остальное — как в 0.3.11: список на странице выпуска v0.3.11-beta.
+
+## 🇬🇧 Install
+
+Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The macOS images are signed with an Apple Developer ID certificate (Watafast LLC) and notarized by Apple. The Windows and Linux files are not code-signed yet, so Windows warns once.
+- **macOS 12+ (Apple Silicon):** open `ProxysVPN_0.3.17_aarch64.dmg`, drag ProxysVPN onto the Applications shortcut, and press "Open" at the first launch. The app asks for the administrator password at launch.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.17_x64.dmg`, same steps.
+- **Windows 10/11 (x64):** download `ProxysVPN_0.3.17_x64-setup.exe`. Microsoft Edge may hold the download: the save button hides behind the arrow right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". Every start asks for administrator rights (UAC).
+- **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.17_arm64-setup.exe`, same steps.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.17_amd64.deb`. Needs a session with a polkit agent. Remove with `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, x86_64 Linux):** `ProxysVPN_0.3.17_amd64.AppImage`. Make the file executable (`chmod +x`); the first start and the first connect happen in Desktop Mode. The steps, Gaming Mode and the controller are in docs/STEAMDECK.md.
+- **If you have 0.3.9 to 0.3.16:** the app itself shows the line "Version 0.3.17 is out" and a Download button at the foot of the window. 0.3.10 to 0.3.16 ask about a new version every six hours and 0.3.9 once a day, so the line may take a while. You need not wait: install the new file over it.
+- **0.3.8 and older** cannot update themselves: install the file by hand, over the old one.
+
+## 🇬🇧 What's new
+
+- **Connecting.** The connection programs start side by side instead of one after another, and the link check begins while the tunnel is raised. The addresses for that check are looked up from the moment you press the button.
+- **Windows.** The tunnel's address, routes and DNS are set directly through the system, without slow commands, and the tunnel's address is usable at once.
+- **Linux.** The password window shows right after you press the button, while the connection programs start, not after them.
+- **When DNS through the VPN does not answer.** A second after connecting, the app checks that lookups of site names answer. On Windows with the "Cloudflare and Google" DNS, it moves the lookups to your network's DNS by itself if names answer that way, says so, and checks again in a week. Name lookups may then go past the VPN; "Check" shows it. If you chose the DNS yourself, and on macOS and Linux, the app only notes it in the log and the report.
+- **Log.** The technical log shows how long each step of a connection took.
+
+## 🇬🇧 Known limitations
+
+- **DNS on Windows:** the automatic move to the network's DNS was not tried on a computer where DNS through the VPN really does not answer.
+- **Intel Macs:** this release was not run on a real Intel Mac.
+- **Steam Deck:** this release was not run on a real Steam Deck.
+- Everything else is as in 0.3.11: see the v0.3.11-beta release page.
+
+---
 # ProxysVPN Desktop v0.3.16-beta
 
 🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Меньше ожидания при выборе страны и при подключении.
