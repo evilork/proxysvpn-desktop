@@ -1,3 +1,76 @@
+# ProxysVPN Desktop v0.3.18-beta
+
+🇷🇺 Этот выпуск — для Windows, Linux и Steam Deck. Для Mac пока остаётся 0.3.17. На Windows приложение больше не спрашивает права администратора при каждом запуске, а на Windows и Linux появился блок интернета на случай обрыва VPN.
+
+🇬🇧 This release is for Windows, Linux and the Steam Deck. The Mac stays on 0.3.17 for now. On Windows the app no longer asks for administrator rights at every start, and Windows and Linux get a block of the internet for when the VPN drops.
+
+## 🇷🇺 Установка
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. У файлов для Windows и Linux подписи кода пока нет, поэтому Windows один раз предупреждает.
+- **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.18_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». Установщик один раз спрашивает права администратора и ставит фоновую службу ProxysVPN Service: дальше приложение запускается без запроса прав. Если поставить приложение не в Program Files, службы нет и права спрашиваются при каждом запуске, как раньше.
+- **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.18_arm64-setup.exe`, шаги те же.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.18_amd64.deb`. Пакет ставит системную службу, и подключение больше не спрашивает пароль у того, кто сидит за этим компьютером. Удаление: `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, Linux x86_64):** `ProxysVPN_0.3.18_amd64.AppImage`. Сделайте файл исполняемым (`chmod +x`), первый запуск и первое подключение — в режиме рабочего стола. AppImage, как и раньше, спрашивает пароль системы. Шаги, игровой режим и управление — в docs/STEAMDECK.md.
+- **Если стоит 0.3.9–0.3.17:** приложение само покажет внизу окна строку «Вышла версия 0.3.18». 0.3.10–0.3.17 спрашивают о новой версии раз в шесть часов, 0.3.9 — раз в сутки, поэтому строка может появиться не сразу. Ждать не обязательно: новый файл можно поставить поверх.
+- **0.3.8 и старше** обновляться сами не умеют: поставьте файл вручную, поверх.
+
+## 🇷🇺 Что нового
+
+- **Блок интернета при обрыве VPN (Windows и Linux).** «Ещё» → «Туннель» → «Блокировать интернет, если VPN оборвался». Пока VPN включён, программы не выходят в интернет мимо него. Если VPN оборвётся, их соединения останавливаются, пока он не вернётся. Кнопка «Выключить» в приложении снимает блок. Если блок не включился, приложение так и говорит: «Блок не включился. VPN работает без него.»
+- **Windows без запроса прав при каждом запуске.** Туннель, маршруты и DNS настраивает фоновая служба. Если служба остановилась, приложение запускает её само.
+- **Linux без пароля при подключении (.deb).** Подключением занимается системная служба из пакета. Она отвечает только приложению из пакета и только тому, кто вошёл за этим компьютером.
+- **«Программы мимо VPN» (Linux).** «Ещё» → «Программы мимо VPN»: выбранные программы, запущенные из этого экрана, выходят в интернет напрямую, остальные — через VPN.
+- **Горячая клавиша (Windows и Linux).** Ctrl+Alt+Shift+V включает и выключает VPN из любой программы, сочетание можно сменить. В Linux — только в сеансе X11: Wayland не даёт программам общих клавиш.
+- **Пинг у значка.** На Windows страна и задержка видны в подсказке значка в области уведомлений, на Linux — рядом со значком на панели (не каждая панель это рисует).
+- **VPN в незнакомом Wi-Fi (Windows и Linux).** Приложение само включит VPN, когда компьютер войдёт в сеть Wi-Fi, которой нет среди знакомых. В Linux нужен NetworkManager.
+- **«Сайт не открывается?»** в «Проверке»: впишите адрес, и приложение проверит, открывается ли сайт мимо VPN и через VPN. Если одним путём он не открывается, одна кнопка добавит его в «Свои правила».
+- **Что мешает VPN.** «Проверка» называет возможную причину: другой VPN, включённый системный прокси или программу безопасности, которая фильтрует сеть.
+- **Обрывы.** Приложение точнее отличает узел, который перестал пропускать трафик, от сети, которая пропала, и в первом случае переходит на другой узел. После сна и смены сети маршруты туннеля проверяются и ставятся заново.
+
+## 🇷🇺 Известные ограничения
+
+- **Mac:** этот выпуск не для Mac, там остаётся 0.3.17.
+- **«Программы мимо VPN»** есть только в Linux, и только там, где система использует cgroup v2 (Debian 12+, Ubuntu 22.04+, Fedora). На Windows этой функции пока нет.
+- **Если поставить .deb вручную поверх запущенного приложения,** старое окно не может снять блок без пароля: перезапустите приложение. Обновление из самого приложения перезапускает его само.
+- **VPN в незнакомом Wi-Fi** не проверялся на настоящем Wi-Fi (проверочные машины подключены по кабелю).
+- **Переход на другой узел** не проверялся на узле, который действительно перестал пропускать трафик.
+- **Steam Deck:** на настоящем Steam Deck выпуск не запускался.
+- Остальное — как в 0.3.11: список на странице выпуска v0.3.11-beta.
+
+## 🇬🇧 Install
+
+Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The Windows and Linux files are not code-signed yet, so Windows warns once.
+- **Windows 10/11 (x64):** download `ProxysVPN_0.3.18_x64-setup.exe`. Microsoft Edge may hold the download: the save button hides behind the arrow right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". The installer asks for administrator rights once and installs the background service ProxysVPN Service: after that the app starts with no prompt. Installed outside Program Files, there is no service and every start asks for the rights, as before.
+- **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.18_arm64-setup.exe`, same steps.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.18_amd64.deb`. The package installs a system service, and connecting no longer asks the person at this computer for a password. Remove with `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, x86_64 Linux):** `ProxysVPN_0.3.18_amd64.AppImage`. Make the file executable (`chmod +x`); the first start and the first connect happen in Desktop Mode. The AppImage asks for the system password, as before. The steps, Gaming Mode and the controller are in docs/STEAMDECK.md.
+- **If you have 0.3.9 to 0.3.17:** the app itself shows the line "Version 0.3.18 is out" at the foot of the window. 0.3.10 to 0.3.17 ask about a new version every six hours and 0.3.9 once a day, so the line may take a while. You need not wait: install the new file over it.
+- **0.3.8 and older** cannot update themselves: install the file by hand, over the old one.
+
+## 🇬🇧 What's new
+
+- **Block the internet when the VPN drops (Windows and Linux).** "More" → "Tunnel" → "Block the internet if the VPN drops". While the VPN is on, programs do not reach the internet past it. If the VPN drops, their connections stop until it is back. "Turn off" in the app lifts the block. If the block could not be put in, the app says so: "The block could not be turned on. The VPN works without it."
+- **Windows without a prompt at every start.** A background service sets up the tunnel, routes and DNS. If the service stops, the app starts it again by itself.
+- **Linux without a password to connect (.deb).** A system service from the package does the connecting. It answers only the packaged app and only the person signed in at this computer.
+- **"Programs outside the VPN" (Linux).** "More" → "Programs outside the VPN": the programs you choose, started from that screen, reach the internet directly; everything else goes through the VPN.
+- **Hotkey (Windows and Linux).** Ctrl+Alt+Shift+V turns the VPN on and off from any program; the combination can be changed. On Linux only in an X11 session: Wayland gives programs no global keys.
+- **Ping by the icon.** On Windows the country and latency show in the tooltip of the notification-area icon; on Linux next to the panel icon (not every panel draws it).
+- **VPN on an unknown Wi-Fi (Windows and Linux).** The app turns the VPN on by itself when the computer joins a Wi-Fi network that is not among the known ones. Linux needs NetworkManager.
+- **"A site does not open?"** in "Check": type an address and the app checks whether the site opens past the VPN and through it. If one way fails, one button adds it to "Your own rules".
+- **What gets in the VPN's way.** "Check" names a possible cause: another VPN, a system proxy that is on, or a security program that filters the network.
+- **Drops.** The app tells a node that stopped passing traffic from a network that is gone more reliably, and in the first case moves to another node. After sleep and a network change the tunnel's routes are checked and put back.
+
+## 🇬🇧 Known limitations
+
+- **Mac:** this release is not for the Mac, which stays on 0.3.17.
+- **"Programs outside the VPN"** is on Linux only, and only where the system uses cgroup v2 (Debian 12+, Ubuntu 22.04+, Fedora). Windows does not have it yet.
+- **If you install the .deb by hand over a running app,** the old window cannot lift the block without a password: restart the app. An update from inside the app restarts it by itself.
+- **VPN on an unknown Wi-Fi** was not tried on a real Wi-Fi (the test machines are wired).
+- **The move to another node** was not tried on a node that really stopped passing traffic.
+- **Steam Deck:** this release was not run on a real Steam Deck.
+- Everything else is as in 0.3.11: see the v0.3.11-beta release page.
+
+---
 # ProxysVPN Desktop v0.3.17-beta
 
 🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Подключение быстрее на всех системах, а если DNS через VPN не отвечает, приложение замечает это само.

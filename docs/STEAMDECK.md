@@ -126,6 +126,15 @@ app was updated since: Gaming Mode runs no polkit agent, so no password window
 can appear there, and the copy needs one. Do step 4 above in Desktop Mode, then
 come back.
 
+Two of the desktop's rows are not offered in Gaming Mode: the key that
+turns the VPN on and off (a global key in gamescope is not the app's to ask
+for) and the flag and round trip beside the tray icon (there is no panel). The
+Wi-Fi rule ("Turn the VPN on in an unfamiliar Wi-Fi") is offered when
+NetworkManager reports a Wi-Fi adapter, which it does on SteamOS; it starts the
+VPN the same way a press does, so in Gaming Mode it needs the one-time setup
+below just as a press does, and without it the app logs that the VPN did not
+turn on. None of this has run on a Deck.
+
 ## Controller
 
 On SteamOS, and only there, the window can be driven with no mouse and no
@@ -421,6 +430,10 @@ the second only in part, as each item says:
   usually run from, so it should);
 * SteamOS's DNS backend (resolved, from public reports), and DNS after killing
   the helper;
+* the Wi-Fi rule on SteamOS (NetworkManager with the iwd backend: that the
+  active connection's SSID is read, that a join is noticed in Desktop Mode and
+  in Gaming Mode, and that the connect then goes through without a prompt where
+  the one-time setup was made);
 * running ProxysVPN beside a game.
 
 The controller. What the simulation settled is above; the rest is assumption

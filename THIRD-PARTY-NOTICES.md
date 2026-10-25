@@ -122,6 +122,26 @@ that ship with that crate, and a GREASE value among the signature algorithms
 of the TLS ClientHello. The Windows clients also carry Microsoft's C runtime
 inside, under Microsoft's redistribution terms.
 
+## The client of our own protocol (iPhone and iPad)
+
+The iOS tunnel extension links the client of our own protocol, WataFast. The
+client is ours; the Rust crates it is built from are listed one by one on the
+app's licences screen with their licences. It also contains BoringSSL
+(Apache-2.0, https://boringssl.googlesource.com/boringssl), the copy bundled
+with the `boring-sys` crate, built with two changes: the post-quantum key
+agreements that ship with that crate, and a GREASE value among the signature
+algorithms of the TLS ClientHello.
+
+## Filter lists in Safari's content blocker (iPhone and iPad)
+
+Safari's content blocker in the iOS app carries EasyList and EasyPrivacy by
+The EasyList authors (https://easylist.to/), converted into Safari's rule
+format at build time. The lists are
+dual licensed under GPL-3.0-or-later and CC BY-SA 3.0 Unported or any later
+version; the app takes them, and offers the converted rules, under
+CC BY-SA 3.0 (https://creativecommons.org/licenses/by-sa/3.0/). The pinned
+version is https://github.com/easylist/easylist/tree/bde21d97d8026e0f047adfec13e5ae0153f7fa5d.
+
 ## Wintun
 
 Wintun is the kernel TUN driver that tun2socks uses on Windows. The prebuilt

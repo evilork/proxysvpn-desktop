@@ -76,8 +76,11 @@ with `SHA256SUMS.txt` on the release page if you want to be sure it is ours.
    **the arrow to the right of "Delete" → "Keep anyway"**.
 2. Run the file. SmartScreen says the publisher is unknown:
    **More info → Run anyway**.
-3. Allow the administrator prompt (UAC). The app asks for it at every launch:
-   it creates the tunnel adapter and routes.
+3. Allow the administrator prompt (UAC) of the installer. Installed under
+   `Program Files` (the default folder), the app gets a background service that
+   creates the tunnel adapter and routes, and the app itself starts without a
+   prompt. If you choose your own install folder, there is no service and the
+   app asks for the administrator prompt at every launch.
 4. Pair with a code, scan the round code on the app's screen from your
    account on a phone, or paste your link.
 
