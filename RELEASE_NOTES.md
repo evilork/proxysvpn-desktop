@@ -1,3 +1,64 @@
+# ProxysVPN Desktop v0.3.19-beta
+
+🇷🇺 Этот выпуск — для Windows, Linux и Steam Deck. Для Mac пока остаётся 0.3.17. Появился файл подключения: если все наши адреса в вашей сети закрыты, а Telegram работает, в приложение можно войти по файлу из бота.
+
+🇬🇧 This release is for Windows, Linux and the Steam Deck. The Mac stays on 0.3.17 for now. There is a connection file: if every address of ours is blocked in your network but Telegram works, you can sign in to the app with a file from the bot.
+
+## 🇷🇺 Установка
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. У файлов для Windows и Linux подписи кода пока нет, поэтому Windows один раз предупреждает.
+- **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.19_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». Установщик один раз спрашивает права администратора и ставит фоновую службу ProxysVPN Service: дальше приложение запускается без запроса прав. Если поставить приложение не в Program Files, службы нет и права спрашиваются при каждом запуске, как раньше.
+- **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.19_arm64-setup.exe`, шаги те же.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.19_amd64.deb`. Пакет ставит системную службу, и подключение больше не спрашивает пароль у того, кто сидит за этим компьютером. Удаление: `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, Linux x86_64):** `ProxysVPN_0.3.19_amd64.AppImage`. Сделайте файл исполняемым (`chmod +x`), первый запуск и первое подключение — в режиме рабочего стола. AppImage, как и раньше, спрашивает пароль системы. Шаги, игровой режим и управление — в docs/STEAMDECK.md.
+- **Если стоит 0.3.9–0.3.18:** приложение само покажет внизу окна строку «Вышла версия 0.3.19». 0.3.10–0.3.18 спрашивают о новой версии раз в шесть часов, 0.3.9 — раз в сутки, поэтому строка может появиться не сразу. Ждать не обязательно: новый файл можно поставить поверх.
+- **0.3.8 и старше** обновляться сами не умеют: поставьте файл вручную, поверх.
+
+## 🇷🇺 Что нового
+
+- **Файл подключения.** Если все наши адреса в вашей сети закрыты, а Telegram работает, бот @proxysvpn_bot пришлёт файл `.pvpn`: «📡 Мои устройства» → устройство → «📄 Файл подключения».
+- **Как открыть файл.** Двойным щелчком (установщик Windows и пакет .deb записывают тип `.pvpn` в систему), перетаскиванием на окно приложения или кнопкой «Открыть файл подключения» на экране входа.
+- **Приложение сначала спросит.** «Войти по файлу подключения?» — с названием устройства и строкой «Файл действует до …». Пока вы не нажмёте «Войти», ничего не сохраняется. После этого приложение входит и включает защиту, не обращаясь к сайту.
+- **Подписка без ответа сервиса.** Пока сервис не ответил, на экране подписки видно «Оплачено до … · по данным файла подключения от …».
+- **Файл того же аккаунта.** Если вы уже вошли по этому файлу, приложение скажет «Вы уже вошли по этому файлу» и возьмёт из него свежий список серверов и дату оплаты. Подключение при этом не прерывается.
+- **Срок и осторожность.** Файл действует 30 дней. В нём ссылка подписки этого устройства, поэтому храните его как пароль и никому не пересылайте.
+
+## 🇷🇺 Известные ограничения
+
+- **Mac:** этот выпуск не для Mac, там остаётся 0.3.17.
+- **Файл подключения** работает только в приложении 0.3.19 и новее. Старые версии его не откроют.
+- **Перетаскивание файла на окно** проверено в тестах, вживую — ещё нет. Если не сработает, откройте файл двойным щелчком или кнопкой на экране входа.
+- **Steam Deck (AppImage):** AppImage ничего не записывает в систему, поэтому двойной щелчок по `.pvpn` не работает. Используйте «Открыть с помощью», перетаскивание или кнопку на экране входа.
+- Остальное — как в 0.3.18 и 0.3.11: список на странице выпуска v0.3.11-beta.
+
+## 🇬🇧 Install
+
+Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The Windows and Linux files are not code-signed yet, so Windows warns once.
+- **Windows 10/11 (x64):** download `ProxysVPN_0.3.19_x64-setup.exe`. Microsoft Edge may hold the download: the save button hides behind the arrow right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". The installer asks for administrator rights once and installs the background service ProxysVPN Service: after that the app starts with no prompt. Installed outside Program Files, there is no service and every start asks for the rights, as before.
+- **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.19_arm64-setup.exe`, same steps.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.19_amd64.deb`. The package installs a system service, and connecting no longer asks the person at this computer for a password. Remove with `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, x86_64 Linux):** `ProxysVPN_0.3.19_amd64.AppImage`. Make the file executable (`chmod +x`); the first start and the first connect happen in Desktop Mode. The AppImage asks for the system password, as before. The steps, Gaming Mode and the controller are in docs/STEAMDECK.md.
+- **If you have 0.3.9 to 0.3.18:** the app itself shows the line "Version 0.3.19 is out" at the foot of the window. 0.3.10 to 0.3.18 ask about a new version every six hours and 0.3.9 once a day, so the line may take a while. You need not wait: install the new file over it.
+- **0.3.8 and older** cannot update themselves: install the file by hand, over the old one.
+
+## 🇬🇧 What's new
+
+- **Connection file.** If every address of ours is blocked in your network but Telegram works, the bot @proxysvpn_bot sends a `.pvpn` file: "📡 My devices" → the device → "📄 Connection file".
+- **How to open it.** Double-click (the Windows installer and the .deb package register the `.pvpn` type), drag it onto the app window, or press "Open connection file" on the sign-in screen.
+- **The app asks first.** "Sign in with a connection file?" with the device name and "The file is valid until …". Nothing is stored until you press "Sign in". Then the app signs in and turns protection on without reaching the site.
+- **Subscription while the service is silent.** Until the service answers, the subscription screen shows "Paid until … · according to the connect file of …".
+- **A file of the same account.** If you are already signed in with this file, the app says "You are already signed in with this file" and takes the fresh server list and the paid date from it. The connection is not interrupted.
+- **Term and care.** The file is valid for 30 days. It holds this device's subscription link, so keep it like a password and do not forward it.
+
+## 🇬🇧 Known limitations
+
+- **Mac:** this release is not for the Mac, which stays on 0.3.17.
+- **The connection file** works only in app 0.3.19 or newer. Older versions cannot open it.
+- **Drag and drop onto the window** is checked in tests but not live yet. If it does not work, double-click the file or use the button on the sign-in screen.
+- **Steam Deck (AppImage):** an AppImage registers nothing with the system, so a double-click on `.pvpn` does not work. Use "Open with", drag and drop, or the button on the sign-in screen.
+- Everything else is as in 0.3.18 and 0.3.11: see the v0.3.11-beta release page.
+
+---
 # ProxysVPN Desktop v0.3.18-beta
 
 🇷🇺 Этот выпуск — для Windows, Linux и Steam Deck. Для Mac пока остаётся 0.3.17. На Windows приложение больше не спрашивает права администратора при каждом запуске, а на Windows и Linux появился блок интернета на случай обрыва VPN.
