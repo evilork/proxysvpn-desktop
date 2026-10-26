@@ -1,3 +1,56 @@
+# ProxysVPN Desktop v0.3.20-beta
+
+🇷🇺 Этот выпуск — для Windows, Linux и Steam Deck. Для Mac пока остаётся 0.3.17. Строка нашего протокола, которую приложение не может подтвердить, больше не держит вас на месте.
+
+🇬🇧 This release is for Windows, Linux and the Steam Deck. The Mac stays on 0.3.17 for now. A row of our own protocol that the app cannot confirm no longer keeps you on it.
+
+## 🇷🇺 Установка
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. У файлов для Windows и Linux подписи кода пока нет, поэтому Windows один раз предупреждает.
+- **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.20_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». Установщик один раз спрашивает права администратора и ставит фоновую службу ProxysVPN Service: дальше приложение запускается без запроса прав. Если поставить приложение не в Program Files, службы нет и права спрашиваются при каждом запуске, как раньше.
+- **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.20_arm64-setup.exe`, шаги те же.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.20_amd64.deb`. Пакет ставит системную службу, и подключение больше не спрашивает пароль у того, кто сидит за этим компьютером. Удаление: `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, Linux x86_64):** `ProxysVPN_0.3.20_amd64.AppImage`. Сделайте файл исполняемым (`chmod +x`), первый запуск и первое подключение — в режиме рабочего стола. AppImage, как и раньше, спрашивает пароль системы. Шаги, игровой режим и управление — в docs/STEAMDECK.md.
+- **Если стоит 0.3.9–0.3.19:** приложение само покажет внизу окна строку «Вышла версия 0.3.20». 0.3.10–0.3.19 спрашивают о новой версии раз в шесть часов, 0.3.9 — раз в сутки, поэтому строка может появиться не сразу. Ждать не обязательно: новый файл можно поставить поверх.
+- **0.3.8 и старше** обновляться сами не умеют: поставьте файл вручную, поверх.
+
+## 🇷🇺 Что нового
+
+- **Наш протокол, который не подтверждается.** Если на строке нашего протокола («Буффало», «Франкфурт», «Австрия» и др.) приложение больше минуты не может подтвердить связь, оно само переходит на обычный сервер той же страны, а если такого нет — на тот, с которого начало бы подключение. Раньше оно оставалось на строке с надписью «Подтвердить не удалось».
+- Всё из 0.3.19 (файл подключения) и 0.3.18 на месте.
+
+## 🇷🇺 Известные ограничения
+
+- **Mac:** этот выпуск не для Mac, там остаётся 0.3.17.
+- **Файл подключения** работает только в приложении 0.3.19 и новее. Старые версии его не откроют.
+- **Перетаскивание файла на окно** проверено в тестах, вживую — ещё нет. Если не сработает, откройте файл двойным щелчком или кнопкой на экране входа.
+- **Steam Deck (AppImage):** AppImage ничего не записывает в систему, поэтому двойной щелчок по `.pvpn` не работает. Используйте «Открыть с помощью», перетаскивание или кнопку на экране входа.
+- Остальное — как в 0.3.19, 0.3.18 и 0.3.11: список на странице выпуска v0.3.11-beta.
+
+## 🇬🇧 Install
+
+Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The Windows and Linux files are not code-signed yet, so Windows warns once.
+- **Windows 10/11 (x64):** download `ProxysVPN_0.3.20_x64-setup.exe`. Microsoft Edge may hold the download: the save button hides behind the arrow right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". The installer asks for administrator rights once and installs the background service ProxysVPN Service: after that the app starts with no prompt. Installed outside Program Files, there is no service and every start asks for the rights, as before.
+- **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.20_arm64-setup.exe`, same steps.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.20_amd64.deb`. The package installs a system service, and connecting no longer asks the person at this computer for a password. Remove with `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, x86_64 Linux):** `ProxysVPN_0.3.20_amd64.AppImage`. Make the file executable (`chmod +x`); the first start and the first connect happen in Desktop Mode. The AppImage asks for the system password, as before. The steps, Gaming Mode and the controller are in docs/STEAMDECK.md.
+- **If you have 0.3.9 to 0.3.19:** the app itself shows the line "Version 0.3.20 is out" at the foot of the window. 0.3.10 to 0.3.19 ask about a new version every six hours and 0.3.9 once a day, so the line may take a while. You need not wait: install the new file over it.
+- **0.3.8 and older** cannot update themselves: install the file by hand, over the old one.
+
+## 🇬🇧 What's new
+
+- **Our own protocol when it cannot be confirmed.** If the app cannot confirm the connection on a row of our own protocol ("Buffalo", "Frankfurt", "Austria" and others) for more than a minute, it moves by itself to an ordinary server of the same country, or, when there is none, to the one a connect would start on. Before, it stayed on the row with "Could not confirm".
+- Everything from 0.3.19 (the connection file) and 0.3.18 is still there.
+
+## 🇬🇧 Known limitations
+
+- **Mac:** this release is not for the Mac, which stays on 0.3.17.
+- **The connection file** works only in app 0.3.19 or newer. Older versions cannot open it.
+- **Drag and drop onto the window** is checked in tests but not live yet. If it does not work, double-click the file or use the button on the sign-in screen.
+- **Steam Deck (AppImage):** an AppImage registers nothing with the system, so a double-click on `.pvpn` does not work. Use "Open with", drag and drop, or the button on the sign-in screen.
+- Everything else is as in 0.3.19, 0.3.18 and 0.3.11: see the v0.3.11-beta release page.
+
+---
 # ProxysVPN Desktop v0.3.19-beta
 
 🇷🇺 Этот выпуск — для Windows, Linux и Steam Deck. Для Mac пока остаётся 0.3.17. Появился файл подключения: если все наши адреса в вашей сети закрыты, а Telegram работает, в приложение можно войти по файлу из бота.
