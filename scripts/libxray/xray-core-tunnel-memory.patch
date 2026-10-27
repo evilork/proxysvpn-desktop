@@ -1,32 +1,83 @@
 diff --git a/proxy/tun/stack_gvisor.go b/proxy/tun/stack_gvisor.go
 --- a/proxy/tun/stack_gvisor.go
 +++ b/proxy/tun/stack_gvisor.go
-@@ -23,13 +23,21 @@
- const (
- 	defaultNIC tcpip.NICID = 1
+@@ -2,6 +2,7 @@
  
-+	// ProxysVPN (scripts/libxray/xray-core-tunnel-memory.patch): this build
-+	// runs inside an Apple packet tunnel extension, which the system ends at
-+	// about 50 MiB for the whole process. Upstream sizes these buffers for a
-+	// router: 1 MiB per connection and direction to begin with, and gVisor
-+	// then grows them with the flow to 8 MiB and 6 MiB and never shrinks
-+	// them. The link they serve here is the device's own utun, a fraction of
-+	// a millisecond away, where 512 KiB of window still carries far more
-+	// than any uplink delivers.
- 	tcpRXBufMinSize = tcp.MinBufferSize
--	tcpRXBufDefSize = tcp.DefaultSendBufferSize
--	tcpRXBufMaxSize = 8 << 20 // 8MiB
-+	tcpRXBufDefSize = 128 << 10 // 128KiB
-+	tcpRXBufMaxSize = 512 << 10 // 512KiB
+ import (
+ 	"context"
++	"runtime"
+ 	"time"
  
+ 	"github.com/xtls/xray-core/common/errors"
+@@ -30,8 +31,45 @@
  	tcpTXBufMinSize = tcp.MinBufferSize
--	tcpTXBufDefSize = tcp.DefaultReceiveBufferSize
--	tcpTXBufMaxSize = 6 << 20 // 6MiB
-+	tcpTXBufDefSize = 128 << 10 // 128KiB
-+	tcpTXBufMaxSize = 512 << 10 // 512KiB
+ 	tcpTXBufDefSize = tcp.DefaultReceiveBufferSize
+ 	tcpTXBufMaxSize = 6 << 20 // 6MiB
++
++	// ProxysVPN (scripts/libxray/xray-core-tunnel-memory.patch): on an iPhone
++	// or an Apple TV this build runs inside a packet tunnel extension, which
++	// the system ends at about 50 MiB for the whole process. Upstream sizes
++	// these buffers for a router: 1 MiB per connection and direction to begin
++	// with, and gVisor then grows them with the flow to 8 MiB and 6 MiB and
++	// never shrinks them. The link they serve here is the device's own utun, a
++	// fraction of a millisecond away, where 512 KiB of window still carries
++	// far more than any uplink delivers. These sizes hold everywhere but
++	// macOS, whose extension has no such limit and keeps upstream's sizes
++	// above (tunnelMemoryCapped).
++	tcpRXBufDefSizeCapped = 128 << 10 // 128KiB
++	tcpRXBufMaxSizeCapped = 512 << 10 // 512KiB
++
++	tcpTXBufDefSizeCapped = 128 << 10 // 128KiB
++	tcpTXBufMaxSizeCapped = 512 << 10 // 512KiB
  )
  
++// tunnelMemoryCapped reports whether the engine built for goos keeps to the
++// memory caps of the ProxysVPN patches. "darwin" is macOS alone: libXray
++// builds its iOS and tvOS slices with GOOS=ios, and Android's is "android" -
++// every one of those keeps the caps exactly as they were before macOS was
++// told apart (26.10.2026).
++func tunnelMemoryCapped(goos string) bool {
++	return goos != "darwin"
++}
++
++// tcpBufferSizes is what createStack lets each TCP connection of the stack
++// hold, in the direction of the apps and in the direction of Xray: the
++// capped sizes above where tunnelMemoryCapped, upstream's elsewhere.
++func tcpBufferSizes(goos string) (tcpip.TCPReceiveBufferSizeRangeOption, tcpip.TCPSendBufferSizeRangeOption) {
++	if !tunnelMemoryCapped(goos) {
++		return tcpip.TCPReceiveBufferSizeRangeOption{Min: tcpRXBufMinSize, Default: tcpRXBufDefSize, Max: tcpRXBufMaxSize},
++			tcpip.TCPSendBufferSizeRangeOption{Min: tcpTXBufMinSize, Default: tcpTXBufDefSize, Max: tcpTXBufMaxSize}
++	}
++	return tcpip.TCPReceiveBufferSizeRangeOption{Min: tcpRXBufMinSize, Default: tcpRXBufDefSizeCapped, Max: tcpRXBufMaxSizeCapped},
++		tcpip.TCPSendBufferSizeRangeOption{Min: tcpTXBufMinSize, Default: tcpTXBufDefSizeCapped, Max: tcpTXBufMaxSizeCapped}
++}
++
  // stackGVisor is ip stack implemented by gVisor package
+ type stackGVisor struct {
+ 	ctx         context.Context
+@@ -243,21 +281,12 @@
+ 	rOpt := tcpip.TCPRecovery(0)
+ 	gStack.SetTransportProtocolOption(tcp.ProtocolNumber, &rOpt)
+ 
+-	tcpRXBufOpt := tcpip.TCPReceiveBufferSizeRangeOption{
+-		Min:     tcpRXBufMinSize,
+-		Default: tcpRXBufDefSize,
+-		Max:     tcpRXBufMaxSize,
+-	}
++	tcpRXBufOpt, tcpTXBufOpt := tcpBufferSizes(runtime.GOOS)
+ 	err = gStack.SetTransportProtocolOption(tcp.ProtocolNumber, &tcpRXBufOpt)
+ 	if err != nil {
+ 		return nil, errors.New(err.String())
+ 	}
+ 
+-	tcpTXBufOpt := tcpip.TCPSendBufferSizeRangeOption{
+-		Min:     tcpTXBufMinSize,
+-		Default: tcpTXBufDefSize,
+-		Max:     tcpTXBufMaxSize,
+-	}
+ 	err = gStack.SetTransportProtocolOption(tcp.ProtocolNumber, &tcpTXBufOpt)
+ 	if err != nil {
+ 		return nil, errors.New(err.String())
 diff --git a/proxy/tun/restart_proxysvpn_test.go b/proxy/tun/restart_proxysvpn_test.go
 new file mode 100644
 --- /dev/null
@@ -217,39 +268,148 @@ new file mode 100644
 +	}
 +	t.Fatal("the restarted engine does not answer a SYN from the tunnel")
 +}
+diff --git a/proxy/tun/tcp_buffers_proxysvpn_test.go b/proxy/tun/tcp_buffers_proxysvpn_test.go
+new file mode 100644
+--- /dev/null
++++ b/proxy/tun/tcp_buffers_proxysvpn_test.go
+@@ -0,0 +1,78 @@
++package tun
++
++// ProxysVPN (scripts/libxray/xray-core-tunnel-memory.patch): what each TCP
++// connection of the tun stack may hold. The build runs these after patching:
++// an engine for a phone or a TV whose sizes are not the capped ones, or a
++// macOS engine still held to them, does not get built.
++
++import (
++	"runtime"
++	"testing"
++
++	"gvisor.dev/gvisor/pkg/tcpip"
++	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
++	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
++)
++
++var (
++	tcpBuffersTestCappedRX = tcpip.TCPReceiveBufferSizeRangeOption{Min: tcp.MinBufferSize, Default: 128 << 10, Max: 512 << 10}
++	tcpBuffersTestCappedTX = tcpip.TCPSendBufferSizeRangeOption{Min: tcp.MinBufferSize, Default: 128 << 10, Max: 512 << 10}
++	// Upstream's own sizes, as Xray-core v26.9.9 sets them.
++	tcpBuffersTestUpstreamRX = tcpip.TCPReceiveBufferSizeRangeOption{Min: tcp.MinBufferSize, Default: tcp.DefaultSendBufferSize, Max: 8 << 20}
++	tcpBuffersTestUpstreamTX = tcpip.TCPSendBufferSizeRangeOption{Min: tcp.MinBufferSize, Default: tcp.DefaultReceiveBufferSize, Max: 6 << 20}
++)
++
++// Every build but macOS's keeps the capped sizes, and an unknown or
++// misspelled GOOS too: a cap that is wrongly on costs speed, one that is
++// wrongly off ends the tunnel.
++func TestProxysVPNTCPBuffersByGOOS(t *testing.T) {
++	for _, c := range []struct {
++		goos   string
++		capped bool
++	}{
++		{"darwin", false},
++		{"ios", true},     // iPhone, iPad, and libXray's tvOS slices
++		{"android", true}, // Android
++		{"linux", true},
++		{"windows", true},
++		{"", true},
++		{"Darwin", true},
++		{"darwin ", true},
++	} {
++		if got := tunnelMemoryCapped(c.goos); got != c.capped {
++			t.Errorf("GOOS %q: capped %v, want %v", c.goos, got, c.capped)
++		}
++		wantRX, wantTX := tcpBuffersTestUpstreamRX, tcpBuffersTestUpstreamTX
++		if c.capped {
++			wantRX, wantTX = tcpBuffersTestCappedRX, tcpBuffersTestCappedTX
++		}
++		rx, tx := tcpBufferSizes(c.goos)
++		if rx != wantRX {
++			t.Errorf("GOOS %q: receive buffers %+v, want %+v", c.goos, rx, wantRX)
++		}
++		if tx != wantTX {
++			t.Errorf("GOOS %q: send buffers %+v, want %+v", c.goos, tx, wantTX)
++		}
++	}
++}
++
++// The stack this engine builds carries the sizes of its own GOOS.
++func TestProxysVPNTCPBuffersOfTheStack(t *testing.T) {
++	ipStack, err := createStack(channel.New(16, 1500, ""))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer ipStack.Close()
++	var rx tcpip.TCPReceiveBufferSizeRangeOption
++	if err := ipStack.TransportProtocolOption(tcp.ProtocolNumber, &rx); err != nil {
++		t.Fatalf("read the receive buffer sizes: %v", err)
++	}
++	var tx tcpip.TCPSendBufferSizeRangeOption
++	if err := ipStack.TransportProtocolOption(tcp.ProtocolNumber, &tx); err != nil {
++		t.Fatalf("read the send buffer sizes: %v", err)
++	}
++	wantRX, wantTX := tcpBufferSizes(runtime.GOOS)
++	if rx != wantRX || tx != wantTX {
++		t.Fatalf("GOOS %s: the stack receives with %+v and sends with %+v, want %+v and %+v", runtime.GOOS, rx, tx, wantRX, wantTX)
++	}
++}
 diff --git a/transport/internet/splithttp/dialer.go b/transport/internet/splithttp/dialer.go
 --- a/transport/internet/splithttp/dialer.go
 +++ b/transport/internet/splithttp/dialer.go
-@@ -98,6 +98,45 @@
+@@ -98,6 +98,71 @@
  	return "2"
  }
  
 +// h2StreamReceiveBuffer is how much one HTTP/2 stream may hold for a reader
-+// that is slower than the network.
++// that is slower than the network, where the memory of the tunnel is capped.
 +//
-+// ProxysVPN (scripts/libxray/xray-core-tunnel-memory.patch): this build runs
-+// inside an Apple packet tunnel extension, which the system ends at about
-+// 50 MiB for the whole process. Go's HTTP/2 client lets the server send 4 MiB
-+// per stream before the reader has taken a byte, so eight downloads whose app
-+// reads slower than the network (a game unpacking what it fetches) hold
-+// 32 MiB here, and the tunnel is gone. 512 KiB per stream still carries
-+// 40 Mbit/s per stream at 100 ms to the node, and more on a nearer one. The
-+// connection's own window stays as it is: a small one would let a few stalled
-+// streams stop every other stream that shares the connection.
++// ProxysVPN (scripts/libxray/xray-core-tunnel-memory.patch): on an iPhone or
++// an Apple TV this build runs inside a packet tunnel extension, which the
++// system ends at about 50 MiB for the whole process. Go's HTTP/2 client lets
++// the server send 4 MiB per stream before the reader has taken a byte, so
++// eight downloads whose app reads slower than the network (a game unpacking
++// what it fetches) hold 32 MiB here, and the tunnel is gone. 512 KiB per
++// stream still carries 40 Mbit/s per stream at 100 ms to the node, and more
++// on a nearer one. The connection's own window stays as it is: a small one
++// would let a few stalled streams stop every other stream that shares the
++// connection.
 +const h2StreamReceiveBuffer = 512 << 10
 +
++// h2StreamReceiveBufferFor is the stream window of the engine built for
++// goos: h2StreamReceiveBuffer everywhere but macOS, and on macOS 0, the
++// library's own window, as upstream has it. "darwin" is macOS alone: libXray
++// builds its iOS and tvOS slices with GOOS=ios, and Android's is "android" -
++// every one of those keeps 512 KiB exactly as before macOS was told apart
++// (26.10.2026). A Mac's extension has no 50 MiB limit, and there the small
++// window was only a ceiling on one download: a stream carries at most a
++// window per round trip, 512 KiB in 150 ms to the node is about 28 Mbit/s.
++func h2StreamReceiveBufferFor(goos string) int {
++	if goos == "darwin" {
++		return 0
++	}
++	return h2StreamReceiveBuffer
++}
++
 +// newH2Transport is the HTTP/2 client of this transport, with the stream
-+// window above and the frame size of h2_frame_size_proxysvpn.go. The window
-+// is a setting of net/http's Transport, which the HTTP/2 one is attached to;
-+// requests still go out through dialTLS.
++// window of this build (h2StreamReceiveBufferFor) and the frame size of
++// h2_frame_size_proxysvpn.go.
 +func newH2Transport(dialTLS func(ctx context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error), keepAlivePeriod time.Duration) *http2.Transport {
-+	h2, err := http2.ConfigureTransports(&http.Transport{
-+		HTTP2: &http.HTTP2Config{MaxReceiveBufferPerStream: h2StreamReceiveBuffer},
-+	})
-+	if err != nil {
-+		// Never with the toolchain this build pins; the window is then the
-+		// library's own.
-+		h2 = &http2.Transport{}
++	return newH2TransportWithWindow(dialTLS, keepAlivePeriod, h2StreamReceiveBufferFor(runtime.GOOS))
++}
++
++// newH2TransportWithWindow is newH2Transport with the stream window given:
++// 0 leaves the library's own, as upstream's transport does. The window is a
++// setting of net/http's Transport, which the HTTP/2 one is then attached to;
++// requests still go out through dialTLS.
++func newH2TransportWithWindow(dialTLS func(ctx context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error), keepAlivePeriod time.Duration, window int) *http2.Transport {
++	h2 := &http2.Transport{}
++	if window > 0 {
++		configured, err := http2.ConfigureTransports(&http.Transport{
++			HTTP2: &http.HTTP2Config{MaxReceiveBufferPerStream: window},
++		})
++		// An error never comes with the toolchain this build pins; the window
++		// is then the library's own.
++		if err == nil {
++			h2 = configured
++		}
 +	}
 +	h2.DialTLSContext = func(ctx context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error) {
 +		conn, err := dialTLS(ctx, network, addr, cfg)
@@ -266,7 +426,7 @@ diff --git a/transport/internet/splithttp/dialer.go b/transport/internet/splitht
  func createHTTPClient(dest net.Destination, streamSettings *internet.MemoryStreamConfig) DialerClient {
  	tlsConfig := tls.ConfigFromStreamSettings(streamSettings)
  	realityConfig := reality.ConfigFromStreamSettings(streamSettings)
-@@ -255,13 +294,9 @@
+@@ -255,13 +320,9 @@
  		if keepAlivePeriod < 0 {
  			keepAlivePeriod = 0
  		}
@@ -287,13 +447,15 @@ diff --git a/transport/internet/splithttp/h2_window_proxysvpn_test.go b/transpor
 new file mode 100644
 --- /dev/null
 +++ b/transport/internet/splithttp/h2_window_proxysvpn_test.go
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,140 @@
 +package splithttp
 +
 +// ProxysVPN (scripts/libxray/xray-core-tunnel-memory.patch). The build runs
-+// this test after patching: a toolchain or library bump that silently puts the
-+// 4 MiB window back, or stops dialing through the transport's own dialer,
-+// fails the build instead of ending tunnels on people's phones.
++// these tests after patching: a toolchain or library bump that silently puts
++// the 4 MiB window back where memory is capped, or stops dialing through the
++// transport's own dialer, fails the build instead of ending tunnels on
++// people's phones; and the macOS engine must not be held to the phone's
++// window.
 +
 +import (
 +	"context"
@@ -307,8 +469,14 @@ new file mode 100644
 +	"time"
 +)
 +
-+func TestProxysVPNH2StreamWindow(t *testing.T) {
-+	const streams = 8
++const h2WindowTestStreams = 8
++
++// h2UnreadStreams opens h2WindowTestStreams downloads of 32 MiB each over
++// one connection of newH2TransportWithWindow(window), reads none of them,
++// and returns what the server got to send once it stopped, with the open
++// responses (closed when the test ends).
++func h2UnreadStreams(t *testing.T, window int) (int64, []*http.Response) {
++	t.Helper()
 +	var sent atomic.Int64
 +	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 +		chunk := make([]byte, 32<<10)
@@ -323,21 +491,21 @@ new file mode 100644
 +	}))
 +	server.EnableHTTP2 = true
 +	server.StartTLS()
-+	defer server.Close()
++	t.Cleanup(server.Close)
 +
 +	var dials atomic.Int32
-+	transport := newH2Transport(func(ctx context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error) {
++	transport := newH2TransportWithWindow(func(ctx context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error) {
 +		dials.Add(1)
 +		return gotls.Dial("tcp", server.Listener.Addr().String(), &gotls.Config{InsecureSkipVerify: true, NextProtos: []string{"h2"}})
-+	}, 45*time.Second)
++	}, 45*time.Second, window)
 +
 +	var responses []*http.Response
-+	defer func() {
++	t.Cleanup(func() {
 +		for _, response := range responses {
 +			response.Body.Close()
 +		}
-+	}()
-+	for i := 0; i < streams; i++ {
++	})
++	for i := 0; i < h2WindowTestStreams; i++ {
 +		request, err := http.NewRequest(http.MethodGet, server.URL, nil)
 +		if err != nil {
 +			t.Fatal(err)
@@ -352,7 +520,7 @@ new file mode 100644
 +		responses = append(responses, response)
 +	}
 +	if got := dials.Load(); got != 1 {
-+		t.Fatalf("%d streams took %d dials through the transport's dialer, want 1 connection", streams, got)
++		t.Fatalf("%d streams took %d dials through the transport's dialer, want 1 connection", h2WindowTestStreams, got)
 +	}
 +
 +	// Nobody reads. The server stops once every stream's window is full.
@@ -365,17 +533,58 @@ new file mode 100644
 +			held, settled = now, 0
 +		}
 +	}
++	return held, responses
++}
++
++func TestProxysVPNH2StreamWindow(t *testing.T) {
++	held, responses := h2UnreadStreams(t, h2StreamReceiveBuffer)
 +	// A write that had begun when the window closed is counted whole.
-+	limit := int64(streams) * (h2StreamReceiveBuffer + 64<<10)
++	limit := int64(h2WindowTestStreams) * (h2StreamReceiveBuffer + 64<<10)
 +	if held > limit {
-+		t.Fatalf("%d unread streams hold %d KiB, want at most %d KiB (%d KiB per stream)", streams, held>>10, limit>>10, h2StreamReceiveBuffer>>10)
++		t.Fatalf("%d unread streams hold %d KiB, want at most %d KiB (%d KiB per stream)", h2WindowTestStreams, held>>10, limit>>10, h2StreamReceiveBuffer>>10)
 +	}
-+	if floor := int64(streams) * h2StreamReceiveBuffer / 2; held < floor {
-+		t.Fatalf("%d unread streams hold only %d KiB: the window is smaller than the %d KiB asked for", streams, held>>10, h2StreamReceiveBuffer>>10)
++	if floor := int64(h2WindowTestStreams) * h2StreamReceiveBuffer / 2; held < floor {
++		t.Fatalf("%d unread streams hold only %d KiB: the window is smaller than the %d KiB asked for", h2WindowTestStreams, held>>10, h2StreamReceiveBuffer>>10)
 +	}
 +
 +	// A stream that is read again goes on past its window.
 +	if n, err := io.CopyN(io.Discard, responses[0].Body, 2*h2StreamReceiveBuffer); err != nil {
++		t.Fatalf("read %d bytes of a stream that had been waiting: %v", n, err)
++	}
++}
++
++// Which engine gets the small window: every build but macOS's, and an
++// unknown or misspelled GOOS too, since a cap that is wrongly on costs speed
++// while one that is wrongly off ends the tunnel.
++func TestProxysVPNH2StreamWindowByGOOS(t *testing.T) {
++	for _, c := range []struct {
++		goos string
++		want int
++	}{
++		{"darwin", 0},
++		{"ios", h2StreamReceiveBuffer},     // iPhone, iPad, and libXray's tvOS slices
++		{"android", h2StreamReceiveBuffer}, // Android
++		{"linux", h2StreamReceiveBuffer},
++		{"windows", h2StreamReceiveBuffer},
++		{"", h2StreamReceiveBuffer},
++		{"Darwin", h2StreamReceiveBuffer},
++		{"darwin ", h2StreamReceiveBuffer},
++	} {
++		if got := h2StreamReceiveBufferFor(c.goos); got != c.want {
++			t.Errorf("GOOS %q: a stream window of %d, want %d", c.goos, got, c.want)
++		}
++	}
++}
++
++// On macOS the window is the library's own, as upstream has it: unread
++// streams there hold well over the phone's 512 KiB each, and a stream read
++// again goes on.
++func TestProxysVPNH2StreamWindowMacOS(t *testing.T) {
++	held, responses := h2UnreadStreams(t, h2StreamReceiveBufferFor("darwin"))
++	if floor := int64(h2WindowTestStreams) * 2 * h2StreamReceiveBuffer; held <= floor {
++		t.Fatalf("%d unread streams hold %d KiB on macOS, want more than %d KiB: the phone's window of %d KiB is still on", h2WindowTestStreams, held>>10, floor>>10, h2StreamReceiveBuffer>>10)
++	}
++	if n, err := io.CopyN(io.Discard, responses[0].Body, 8*h2StreamReceiveBuffer); err != nil {
 +		t.Fatalf("read %d bytes of a stream that had been waiting: %v", n, err)
 +	}
 +}

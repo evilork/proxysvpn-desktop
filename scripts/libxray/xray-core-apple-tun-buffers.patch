@@ -1,0 +1,40 @@
+Memory cap for the Apple packet tunnel: the tun path's TCP buffers.
+
+Xray-core's gVisor stack lets every tunnelled TCP connection buffer up to
+8 MiB in and 6 MiB out. A packet tunnel extension gets ~50 MiB on iOS (Apple
+publishes no tvOS figure); a video app reading slowly over a few connections
+fills that in seconds and the system kills the extension (docs/TVOS.md,
+"Memory of the tunnel extension": 70-125 MiB measured without this patch,
+22-25 MiB with it). The link between the app and the stack is local (RTT
+under 1 ms), so 256 KiB per direction costs no throughput.
+
+NOT applied by default: it changes the engine of the iPhone build too, which
+is the owner's decision. For a device test:
+
+  bash scripts/build-libxray-tvos.sh \
+      --extra-patch scripts/libxray/xray-core-apple-tun-buffers.patch
+
+LibXray.version then names it. If it ships, add it to build-libxray.sh and to
+the `modifications` of Xray-core in scripts/libxray-notices.json (MPL-2.0).
+
+diff --git a/proxy/tun/stack_gvisor.go b/proxy/tun/stack_gvisor.go
+index 8584616..8055849 100644
+--- a/proxy/tun/stack_gvisor.go
++++ b/proxy/tun/stack_gvisor.go
+@@ -24,12 +24,12 @@ const (
+ 	defaultNIC tcpip.NICID = 1
+ 
+ 	tcpRXBufMinSize = tcp.MinBufferSize
+-	tcpRXBufDefSize = tcp.DefaultSendBufferSize
+-	tcpRXBufMaxSize = 8 << 20 // 8MiB
++	tcpRXBufDefSize = 64 << 10  // 64KiB
++	tcpRXBufMaxSize = 256 << 10 // 256KiB
+ 
+ 	tcpTXBufMinSize = tcp.MinBufferSize
+-	tcpTXBufDefSize = tcp.DefaultReceiveBufferSize
+-	tcpTXBufMaxSize = 6 << 20 // 6MiB
++	tcpTXBufDefSize = 64 << 10  // 64KiB
++	tcpTXBufMaxSize = 256 << 10 // 256KiB
+ )
+ 
+ // stackGVisor is ip stack implemented by gVisor package

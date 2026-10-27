@@ -1,3 +1,63 @@
+# ProxysVPN Desktop v0.3.21-beta
+
+🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Новое: «Игры и звонки», «Итог месяца» и «Мои прокси».
+
+🇬🇧 This release is for the Mac (Apple Silicon and Intel), Windows, Linux and the Steam Deck. New: "Games and calls", "Month recap" and "My proxies".
+
+## 🇷🇺 Установка
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. Образы для macOS подписаны сертификатом Apple Developer ID (Watafast LLC) и заверены Apple. У файлов для Windows и Linux подписи кода пока нет, поэтому Windows один раз предупреждает.
+- **macOS 12+ (Apple Silicon):** откройте `ProxysVPN_0.3.21_aarch64.dmg`, перетащите ProxysVPN на ярлык Applications, при первом запуске нажмите «Открыть». При запуске приложение спрашивает пароль администратора.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.21_x64.dmg`, шаги те же.
+- **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.21_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». Установщик один раз спрашивает права администратора и ставит фоновую службу ProxysVPN Service: дальше приложение запускается без запроса прав. Если поставить приложение не в Program Files, службы нет и права спрашиваются при каждом запуске, как раньше.
+- **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.21_arm64-setup.exe`, шаги те же.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.21_amd64.deb`. Пакет ставит системную службу, и подключение не спрашивает пароль у того, кто сидит за этим компьютером. Удаление: `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, Linux x86_64):** `ProxysVPN_0.3.21_amd64.AppImage`. Сделайте файл исполняемым (`chmod +x`), первый запуск и первое подключение — в режиме рабочего стола. AppImage, как и раньше, спрашивает пароль системы. Шаги, игровой режим и управление — в docs/STEAMDECK.md.
+- **Если стоит 0.3.9–0.3.20:** приложение само покажет внизу окна строку «Вышла версия 0.3.21». 0.3.10–0.3.20 спрашивают о новой версии раз в шесть часов, 0.3.9 — раз в сутки, поэтому строка может появиться не сразу. Ждать не обязательно: новый файл можно поставить поверх.
+- **0.3.8 и старше** обновляться сами не умеют: поставьте файл вручную, поверх.
+
+## 🇷🇺 Что нового
+
+- **«Игры и звонки».** Переключатель в списке стран. Когда он включён, приложение само выбирает страну с самой короткой задержкой, где проходят звонки и игры (UDP), и переходит на неё без выключения VPN. Если выбрать страну вручную (в окне или в меню в трее), переключатель выключается.
+- **«Итог месяца».** Сколько дней и часов VPN был включён, сколько трафика прошло, любимая страна и самый долгий сеанс. Считается на этом компьютере и никуда не отправляется. Итог можно отправить картинкой: кнопка «Скопировать картинку» кладёт её в буфер обмена.
+- **«Мои прокси».** Если у вас есть свой прокси (например, из магазина proxysvpn.store), вставьте его строку, и пока VPN включён, через прокси пойдут выбранные сайты или весь трафик. По ссылке на заказ приложение показывает остаток трафика прокси. Звонки, игры и прочий UDP идут через VPN — прокси их не передаёт.
+- Всё из 0.3.20 на месте.
+
+## 🇷🇺 Известные ограничения
+
+- **«Игры и звонки» в английском окне** называют выбранную страну по-русски.
+- **«Итог месяца»** считает с того дня, когда на компьютере появилась эта версия: прошлые месяцы в нём пустые.
+- **Mac с Intel:** на настоящем Mac с Intel выпуск не запускался.
+- Остальное — как в 0.3.20, 0.3.19, 0.3.18 и 0.3.11: список на странице выпуска v0.3.11-beta.
+
+## 🇬🇧 Install
+
+Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The macOS images are signed with an Apple Developer ID certificate (Watafast LLC) and notarized by Apple. The Windows and Linux files are not code-signed yet, so Windows warns once.
+- **macOS 12+ (Apple Silicon):** open `ProxysVPN_0.3.21_aarch64.dmg`, drag ProxysVPN onto the Applications shortcut, and press "Open" at the first launch. The app asks for the administrator password at launch.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.21_x64.dmg`, same steps.
+- **Windows 10/11 (x64):** download `ProxysVPN_0.3.21_x64-setup.exe`. Microsoft Edge may hold the download: the save button hides behind the arrow right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". The installer asks for administrator rights once and installs the background service ProxysVPN Service: after that the app starts with no prompt. Installed outside Program Files, there is no service and every start asks for the rights, as before.
+- **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.21_arm64-setup.exe`, same steps.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.21_amd64.deb`. The package installs a system service, and connecting does not ask the person at this computer for a password. Remove with `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, x86_64 Linux):** `ProxysVPN_0.3.21_amd64.AppImage`. Make the file executable (`chmod +x`); the first start and the first connect happen in Desktop Mode. The AppImage asks for the system password, as before. The steps, Gaming Mode and the controller are in docs/STEAMDECK.md.
+- **If you have 0.3.9 to 0.3.20:** the app itself shows the line "Version 0.3.21 is out" at the foot of the window. 0.3.10 to 0.3.20 ask about a new version every six hours and 0.3.9 once a day, so the line may take a while. You need not wait: install the new file over it.
+- **0.3.8 and older** cannot update themselves: install the file by hand, over the old one.
+
+## 🇬🇧 What's new
+
+- **"Games and calls".** A switch in the country list. When it is on, the app picks the country with the shortest delay where calls and games (UDP) pass, and moves to it without turning the VPN off. Picking a country by hand (in the window or in the tray menu) turns the switch off.
+- **"Month recap".** How many days and hours the VPN was on, how much traffic passed, your favourite country and the longest session. It is counted on this computer and sent nowhere. You can send the recap as a picture: "Copy the picture" puts it on the clipboard.
+- **"My proxies".** If you have a proxy of your own (for example, from the proxysvpn.store shop), paste its line, and while the VPN is on, the sites you pick or all traffic go through the proxy. With the order link the app shows the proxy's traffic left. Calls, games and other UDP go through the VPN: the proxy does not carry them.
+- Everything from 0.3.20 is still there.
+
+## 🇬🇧 Known limitations
+
+- **"Games and calls" in the English window** names the picked country in Russian.
+- **"Month recap"** counts from the day this version arrived on the computer: earlier months are empty.
+- **Intel Mac:** the release was not run on a real Intel Mac.
+- Everything else is as in 0.3.20, 0.3.19, 0.3.18 and 0.3.11: see the v0.3.11-beta release page.
+
+---
+
 # ProxysVPN Desktop v0.3.20-beta
 
 🇷🇺 Этот выпуск — для Windows, Linux и Steam Deck. Для Mac пока остаётся 0.3.17. Строка нашего протокола, которую приложение не может подтвердить, больше не держит вас на месте.

@@ -1,0 +1,60 @@
+Memory cap for the Apple packet tunnel: XHTTP's HTTP/2 receive window.
+
+Under XHTTP the HTTP/2 library lets the server send 4 MiB ahead per stream
+and up to 1 GiB per connection; Xray's own settings do not reach it. Held in
+the extension, that alone outgrows its ~50 MiB (99 MiB measured with a slow
+reader). This patch passes limits through net/http.HTTP2Config: 512 KiB per
+stream, 4 MiB per connection (27 MiB measured).
+
+Trade-off: one stream then carries at most ~70 Mbit/s at 60 ms RTT (~28 at
+150 ms). UK and US run XHTTP only, so the per-stream figure must be tuned on
+a real device before it ships.
+
+NOT applied by default: it changes the engine of the iPhone build too, which
+is the owner's decision. For a device test:
+
+  bash scripts/build-libxray-tvos.sh \
+      --extra-patch scripts/libxray/xray-core-apple-xhttp-h2-window.patch
+
+LibXray.version then names it. If it ships, add it to build-libxray.sh and to
+the `modifications` of Xray-core in scripts/libxray-notices.json (MPL-2.0).
+
+diff --git a/transport/internet/splithttp/dialer.go b/transport/internet/splithttp/dialer.go
+index 9bac57a..0a9f7d9 100644
+--- a/transport/internet/splithttp/dialer.go
++++ b/transport/internet/splithttp/dialer.go
+@@ -255,13 +255,28 @@ func createHTTPClient(dest net.Destination, streamSettings *internet.MemoryStrea
+ 		if keepAlivePeriod < 0 {
+ 			keepAlivePeriod = 0
+ 		}
+-		transport = &http2.Transport{
+-			DialTLSContext: func(ctxInner context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error) {
+-				return dialContext(ctxInner)
+-			},
+-			IdleConnTimeout: net.ConnIdleTimeout,
+-			ReadIdleTimeout: keepAlivePeriod,
++		// What the server may send ahead of the reader is held in this
++		// process. x/net/http2 allows 4 MiB per stream and 1 GiB per
++		// connection by default, more than an Apple packet tunnel extension
++		// may hold (~50 MiB in all); the limits come in through a
++		// net/http.HTTP2Config, the only way x/net reads them.
++		h2Transport, err := http2.ConfigureTransports(&http.Transport{HTTP2: &http.HTTP2Config{
++			MaxReceiveBufferPerConnection: 4 << 20,
++			MaxReceiveBufferPerStream:     512 << 10,
++		}})
++		if err != nil {
++			errors.LogWarningInner(context.Background(), err, "XHTTP: HTTP/2 receive limits not applied")
++			h2Transport = &http2.Transport{}
++		}
++		// ConfigureTransports leaves dialing to net/http; this transport
++		// dials itself.
++		h2Transport.ConnPool = nil
++		h2Transport.DialTLSContext = func(ctxInner context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error) {
++			return dialContext(ctxInner)
+ 		}
++		h2Transport.IdleConnTimeout = net.ConnIdleTimeout
++		h2Transport.ReadIdleTimeout = keepAlivePeriod
++		transport = h2Transport
+ 	} else {
+ 		httpDialContext := func(ctxInner context.Context, network string, addr string) (net.Conn, error) {
+ 			return dialContext(ctxInner)
