@@ -1,3 +1,65 @@
+# ProxysVPN Desktop v0.3.23-beta
+
+🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Новое: когда сервер перестаёт пропускать трафик из вашей сети, приложение раньше пробует другой протокол и запасной путь, а остановившийся сервер пробует снова через пару минут, а не через несколько часов.
+
+🇬🇧 This release is for the Mac (Apple Silicon and Intel), Windows, Linux and the Steam Deck. New: when a server stops passing traffic from your network, the app tries another protocol and the reserve path sooner, and tries a stopped server again after a couple of minutes instead of hours.
+
+## 🇷🇺 Установка
+
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. Образы для macOS подписаны сертификатом Apple Developer ID (Watafast LLC) и заверены Apple. У файлов для Windows и Linux подписи кода пока нет, поэтому Windows один раз предупреждает.
+- **macOS 12+ (Apple Silicon):** откройте `ProxysVPN_0.3.23_aarch64.dmg`, перетащите ProxysVPN на ярлык Applications, при первом запуске нажмите «Открыть». При запуске приложение спрашивает пароль администратора.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.23_x64.dmg`, шаги те же.
+- **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.23_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». Установщик один раз спрашивает права администратора и ставит фоновую службу ProxysVPN Service: дальше приложение запускается без запроса прав. Если поставить приложение не в Program Files, службы нет и права спрашиваются при каждом запуске, как раньше.
+- **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.23_arm64-setup.exe`, шаги те же.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.23_amd64.deb`. Пакет ставит системную службу, и подключение не спрашивает пароль у того, кто сидит за этим компьютером. Удаление: `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, Linux x86_64):** `ProxysVPN_0.3.23_amd64.AppImage`. Сделайте файл исполняемым (`chmod +x`), первый запуск и первое подключение — в режиме рабочего стола. AppImage, как и раньше, спрашивает пароль системы. Шаги, игровой режим и управление — в docs/STEAMDECK.md.
+- **Если стоит 0.3.9–0.3.22:** приложение само покажет внизу окна строку «Вышла версия 0.3.23». 0.3.10–0.3.22 спрашивают о новой версии раз в шесть часов, 0.3.9 — раз в сутки, поэтому строка может появиться не сразу. Ждать не обязательно: новый файл можно поставить поверх.
+- **0.3.8 и старше** обновляться сами не умеют: поставьте файл вручную, поверх.
+
+## 🇷🇺 Что нового
+
+- **Другой протокол — раньше.** Если сервер перестал пропускать трафик из вашей сети, приложение после одной неудачной попытки с другой страной пробует другой протокол и запасной путь нашего собственного протокола, а не перебирает страны того же протокола одну за другой. Если страну выбрали вы, сначала пробуется она же по другому протоколу. Сервер «Россия» по-прежнему никогда не выбирается сам.
+- **Остановившийся сервер пробуется снова через пару минут.** Сервер, который уже пропускал трафик и остановился, не перезапускается на том же адресе и не откладывается на полдня: приложение возвращается к нему примерно через две минуты. Перезапуски при починке связи идут не чаще одного раза в две секунды.
+- **Когда наши сайты молчат.** Если ни один наш сайт не отвечает, приложение идёт по запасному пути раньше, чем перечитывает список стран, и больше не повторяет «Настройки подписки обновлены» по кругу. Пропуск для запасного пути берётся и из той копии списка, которая не новее сохранённой на этом устройстве.
+- **Отчёт для поддержки** показывает больше о починке связи: сколько серверов отложено и надолго ли, молчат ли наши сайты и чем закончилось обращение к запасной копии списка.
+- Всё из 0.3.22 на месте.
+
+## 🇷🇺 Известные ограничения
+
+- **Починка связи** проверена тестами, но не в по-настоящему заблокированной сети: если приложение ведёт себя не так, как описано, пришлите отчёт для поддержки.
+- **Mac с Intel:** на настоящем Mac с Intel выпуск не запускался.
+- Остальное — как в 0.3.22: список на странице выпуска v0.3.22-beta.
+
+## 🇬🇧 Install
+
+
+Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The macOS images are signed with an Apple Developer ID certificate (Watafast LLC) and notarized by Apple. The Windows and Linux files are not code-signed yet, so Windows warns once.
+- **macOS 12+ (Apple Silicon):** open `ProxysVPN_0.3.23_aarch64.dmg`, drag ProxysVPN onto the Applications shortcut, and press "Open" at the first launch. The app asks for the administrator password at launch.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.23_x64.dmg`, same steps.
+- **Windows 10/11 (x64):** download `ProxysVPN_0.3.23_x64-setup.exe`. Microsoft Edge may hold the download: the save button hides behind the arrow right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". The installer asks for administrator rights once and installs the background service ProxysVPN Service: after that the app starts with no prompt. Installed outside Program Files, there is no service and every start asks for the rights, as before.
+- **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.23_arm64-setup.exe`, same steps.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.23_amd64.deb`. The package installs a system service, and connecting does not ask the person at this computer for a password. Remove with `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, x86_64 Linux):** `ProxysVPN_0.3.23_amd64.AppImage`. Make the file executable (`chmod +x`); the first start and the first connect happen in Desktop Mode. The AppImage asks for the system password, as before. The steps, Gaming Mode and the controller are in docs/STEAMDECK.md.
+- **If you have 0.3.9 to 0.3.22:** the app itself shows the line "Version 0.3.23 is out" at the foot of the window. 0.3.10 to 0.3.22 ask about a new version every six hours and 0.3.9 once a day, so the line may take a while. You need not wait: install the new file over it.
+- **0.3.8 and older** cannot update themselves: install the file by hand, over the old one.
+
+## 🇬🇧 What's new
+
+- **Another protocol, sooner.** When a server stops passing traffic from your network, the app tries another protocol and the reserve path of our own protocol after one failed try of another country, instead of going through the countries of the same protocol one by one. If you picked the country yourself, that country is tried by another protocol first. The "Russia" server is still never chosen by itself.
+- **A stopped server is tried again after a couple of minutes.** A server that was passing traffic and then stopped is not restarted at the same address and not put aside for half a day: the app comes back to it after about two minutes. While repairing the connection, the app starts an engine no more than once every two seconds.
+- **When our sites are silent.** If none of our sites answers, the app takes the reserve path before re-reading the country list, and no longer repeats "Subscription settings updated" in a loop. The pass for the reserve path is also taken from a copy of the list that is not newer than the one saved on this device.
+- **The support report** says more about the repair: how many servers are put aside and for how long, whether our sites are silent, and what came of the reserve copy of the list.
+- Everything from 0.3.22 is still there.
+
+## 🇬🇧 Known limitations
+
+- **The repair of the connection** is covered by tests, but was not run on a really blocked network: if the app does not behave as described, send a support report.
+- **Intel Mac:** the release was not run on a real Intel Mac.
+- Everything else is as in 0.3.22: see the v0.3.22-beta release page.
+
+---
+
 # ProxysVPN Desktop v0.3.22-beta
 
 🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Новое: запасной путь, когда наши сайты не открываются, и выбранная страна, которая не теряется.
