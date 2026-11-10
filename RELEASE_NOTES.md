@@ -1,3 +1,69 @@
+# ProxysVPN Desktop v0.3.25-beta
+
+🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Новое: перед запуском приложение проверяет, какой сервер отвечает из вашей сети, и стартует через ответивший; там, где страны не соединяются, а запасной путь соединяется, приложение переходит на него раньше. Исправлено: кнопка «Проверить» в разделе «Мои прокси» больше не пишет «Не удалось связаться» про рабочий HTTP-прокси, когда VPN включён.
+
+🇬🇧 This release is for the Mac (Apple Silicon and Intel), Windows, Linux and the Steam Deck. New: before a start the app checks which server answers from your network and starts on one that does; where the countries do not connect and the reserve path does, the app goes to it sooner. Fixed: the "Check" button in "My proxies" no longer says "Could not connect" about a working HTTP proxy while the VPN is on.
+
+## 🇷🇺 Установка
+
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. Образы для macOS подписаны сертификатом Apple Developer ID (Watafast LLC) и заверены Apple. У файлов для Windows и Linux подписи кода пока нет, поэтому Windows один раз предупреждает.
+- **macOS 12+ (Apple Silicon):** откройте `ProxysVPN_0.3.25_aarch64.dmg`, перетащите ProxysVPN на ярлык Applications, при первом запуске нажмите «Открыть». При запуске приложение спрашивает пароль администратора.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.25_x64.dmg`, шаги те же.
+- **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.25_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». Установщик один раз спрашивает права администратора и ставит фоновую службу ProxysVPN Service: дальше приложение запускается без запроса прав. Если поставить приложение не в Program Files, службы нет и права спрашиваются при каждом запуске, как раньше.
+- **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.25_arm64-setup.exe`, шаги те же.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.25_amd64.deb`. Пакет ставит системную службу, и подключение не спрашивает пароль у того, кто сидит за этим компьютером. Удаление: `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, Linux x86_64):** `ProxysVPN_0.3.25_amd64.AppImage`. Сделайте файл исполняемым (`chmod +x`), первый запуск и первое подключение — в режиме рабочего стола. AppImage, как и раньше, спрашивает пароль системы. Шаги, игровой режим и управление — в docs/STEAMDECK.md.
+- **Если стоит 0.3.9–0.3.24:** приложение само покажет внизу окна строку «Вышла версия 0.3.25». 0.3.10–0.3.24 спрашивают о новой версии раз в шесть часов, 0.3.9 — раз в сутки, поэтому строка может появиться не сразу. Ждать не обязательно: новый файл можно поставить поверх.
+- **0.3.8 и старше** обновляться сами не умеют: поставьте файл вручную, поверх.
+
+## 🇷🇺 Что нового
+
+- **Стук перед стартом.** Перед запуском приложение стучится на выбранный сервер и ещё на несколько сразу. Если выбранный не ответил, а другой ответил, запуск идёт через ответивший. Раньше подключение к замолчавшему серверу тратило 12–20 секунд, прежде чем пробовало другой. Строки Hysteria2 так не проверяются: у них нет такого рукопожатия.
+- **Другой вход в ту же страну.** Если страна молчит, приложение пробует другой вход в неё, когда он есть в списке, и только потом переходит к другой стране. Прогрев после смены страны стал короче.
+- **Запасной путь раньше там, где страны не соединяются.** Если в вашей сети ни одна страна не соединилась, а запасной путь нашего протокола соединился, приложение помнит это около 12 часов: при следующих подключениях оно переходит на запасной путь сразу после первой страны, а не перебирает все страны заново. Первое подключение в такой сети по-прежнему один раз проходит по странам. Если страна снова соединилась или запасной путь не поднялся, приложение об этом забывает и идёт как обычно. В отчёте для поддержки появилась отметка `reserve-first`.
+- **Проверка прокси из магазина снова верна при включённом VPN.** HTTP-прокси, купленный в proxysvpn.store, после «Проверить» показывает свою страну и адрес. Раньше при включённом VPN проверка уходила не туда и писала «Не удалось связаться» или «не ответил вовремя», хотя прокси работал. SOCKS5-прокси это не касалось.
+- Всё из 0.3.24 на месте.
+
+## 🇷🇺 Известные ограничения
+
+- **Стук перед стартом** проверен вживую в виртуальных машинах с Windows 11 на ARM и Debian 13; на Mac вживую не проверялся. Другой вход в ту же страну проверен только тестами.
+- **Запасной путь раньше** проверен тестами и на модели сети, вживую — только на iPhone в сети, где страны соединяются. В сети, где страны не соединяются, выпуск не запускался: если подключение там по-прежнему идёт долго, пришлите отчёт для поддержки.
+- **Проверка прокси** проверена тестами и через тот же Xray, что в приложении, но не на компьютере покупателя с настоящим прокси: если «Проверить» снова пишет ошибку, а прокси работает, пришлите отчёт для поддержки.
+- **Mac с Intel:** на настоящем Mac с Intel выпуск не запускался.
+- Остальное — как в 0.3.24: список на странице выпуска v0.3.24-beta.
+
+## 🇬🇧 Install
+
+
+Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The macOS images are signed with an Apple Developer ID certificate (Watafast LLC) and notarized by Apple. The Windows and Linux files are not code-signed yet, so Windows warns once.
+- **macOS 12+ (Apple Silicon):** open `ProxysVPN_0.3.25_aarch64.dmg`, drag ProxysVPN onto the Applications shortcut, and press "Open" at the first launch. The app asks for the administrator password at launch.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.25_x64.dmg`, same steps.
+- **Windows 10/11 (x64):** download `ProxysVPN_0.3.25_x64-setup.exe`. Microsoft Edge may hold the download: the save button hides behind the arrow right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". The installer asks for administrator rights once and installs the background service ProxysVPN Service: after that the app starts with no prompt. Installed outside Program Files, there is no service and every start asks for the rights, as before.
+- **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.25_arm64-setup.exe`, same steps.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.25_amd64.deb`. The package installs a system service, and connecting does not ask the person at this computer for a password. Remove with `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, x86_64 Linux):** `ProxysVPN_0.3.25_amd64.AppImage`. Make the file executable (`chmod +x`); the first start and the first connect happen in Desktop Mode. The AppImage asks for the system password, as before. The steps, Gaming Mode and the controller are in docs/STEAMDECK.md.
+- **If you have 0.3.9 to 0.3.24:** the app itself shows the line "Version 0.3.25 is out" at the foot of the window. 0.3.10 to 0.3.24 ask about a new version every six hours and 0.3.9 once a day, so the line may take a while. You need not wait: install the new file over it.
+- **0.3.8 and older** cannot update themselves: install the file by hand, over the old one.
+
+## 🇬🇧 What's new
+
+- **A knock before the start.** Before a start the app knocks on the chosen server and a few others at once. If the chosen one does not answer and another does, the start goes through the one that answered. Before, a connect to a server that had gone silent spent 12 to 20 seconds before it tried another. Hysteria2 rows are not checked this way: they have no such handshake.
+- **Another entrance to the same country.** If a country stays silent, the app tries another entrance to it when the list has one, and only then moves to another country. The warm-up after a country switch is shorter.
+- **The reserve path sooner where the countries do not connect.** If no country connected on your network and the reserve path of our own protocol did, the app remembers it for about 12 hours: on the next connects it goes to the reserve path right after the first country instead of trying every country again. The first connect on such a network still goes through the countries once. If a country connects again or the reserve path does not come up, the app forgets it and goes on as usual. The support report has a new mark, `reserve-first`.
+- **The store proxy check is right again while the VPN is on.** An HTTP proxy bought at proxysvpn.store shows its country and address after "Check". Before, with the VPN on, the check went to the wrong place and said "Could not connect" or "did not answer in time" though the proxy worked. SOCKS5 proxies were not affected.
+- Everything from 0.3.24 is still there.
+
+## 🇬🇧 Known limitations
+
+- **The knock before the start** was run live in virtual machines with Windows 11 on ARM and Debian 13; it was not run live on a Mac. The other entrance to the same country is covered by tests only.
+- **The reserve path sooner** is covered by tests and a model of the network, and live only on an iPhone on a network where the countries connect. The release was not run on a network where the countries do not connect: if a connect there still takes long, send a support report.
+- **The proxy check** is covered by tests and was run through the app's own Xray, but not on a customer's computer with a real proxy: if "Check" still shows an error while the proxy works, send a support report.
+- **Intel Mac:** the release was not run on a real Intel Mac.
+- Everything else is as in 0.3.24: see the v0.3.24-beta release page.
+
+---
+
 # ProxysVPN Desktop v0.3.24-beta
 
 🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Новое: с сервера, который перестал отвечать посреди работы, приложение уходит намного раньше, а сервер, через который ничего не вернулось, не держит на «Подтвердить не удалось».
