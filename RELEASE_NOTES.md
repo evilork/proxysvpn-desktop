@@ -1,3 +1,65 @@
+# ProxysVPN Desktop v0.3.26-beta
+
+🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Новое: запасной путь нашего протокола помнит между запусками все входы на свой сервер. Если один вход перестал отвечать из вашей сети, следующее подключение пробует остальные.
+
+🇬🇧 This release is for the Mac (Apple Silicon and Intel), Windows, Linux and the Steam Deck. New: the reserve path of our own protocol remembers every way in to its server between starts. If one way in stops answering from your network, the next connect tries the others.
+
+## 🇷🇺 Установка
+
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. Образы для macOS подписаны сертификатом Apple Developer ID (Watafast LLC) и заверены Apple. У файлов для Windows и Linux подписи кода пока нет, поэтому Windows один раз предупреждает.
+- **macOS 12+ (Apple Silicon):** откройте `ProxysVPN_0.3.26_aarch64.dmg`, перетащите ProxysVPN на ярлык Applications, при первом запуске нажмите «Открыть». При запуске приложение спрашивает пароль администратора.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.26_x64.dmg`, шаги те же.
+- **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.26_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». Установщик один раз спрашивает права администратора и ставит фоновую службу ProxysVPN Service: дальше приложение запускается без запроса прав. Если поставить приложение не в Program Files, службы нет и права спрашиваются при каждом запуске, как раньше.
+- **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.26_arm64-setup.exe`, шаги те же.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.26_amd64.deb`. Пакет ставит системную службу, и подключение не спрашивает пароль у того, кто сидит за этим компьютером. Удаление: `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, Linux x86_64):** `ProxysVPN_0.3.26_amd64.AppImage`. Сделайте файл исполняемым (`chmod +x`), первый запуск и первое подключение — в режиме рабочего стола. AppImage, как и раньше, спрашивает пароль системы. Шаги, игровой режим и управление — в docs/STEAMDECK.md.
+- **Если стоит 0.3.9–0.3.25:** приложение само покажет внизу окна строку «Вышла версия 0.3.26». 0.3.10–0.3.25 спрашивают о новой версии раз в шесть часов, 0.3.9 — раз в сутки, поэтому строка может появиться не сразу. Ждать не обязательно: новый файл можно поставить поверх.
+- **0.3.8 и старше** обновляться сами не умеют: поставьте файл вручную, поверх.
+
+## 🇷🇺 Что нового
+
+- **Запасной путь помнит входы на свой сервер.** Сервер нашего протокола называет приложению все входы, через которые к нему можно подключиться. Раньше приложение на компьютере забывало их при выключении и каждый раз начинало с одного входа. Теперь оно хранит их на этом компьютере и при следующем подключении пробует все: если первый вход из вашей сети не отвечает, запасной путь идёт через другой.
+- **Когда это начинает работать.** Входы запоминаются после первого подключения через запасной путь в этой версии. До него приложение знает один вход, как раньше.
+- **Что хранится.** Только входы на серверы запасного пути, не больше восьми серверов. Файл лежит в папке данных приложения на этом компьютере; в журнал и в отчёт для поддержки его содержимое не попадает.
+- Всё из 0.3.25 на месте.
+
+## 🇷🇺 Известные ограничения
+
+- **Память о входах** проверена тестами. Вживую выпуск не запускался ни на настоящем компьютере, ни в сети, где часть входов закрыта: если запасной путь у вас по-прежнему не поднимается, пришлите отчёт для поддержки.
+- **Компьютер, который ни разу не подключался через запасной путь,** других входов не знает: первое такое подключение идёт как раньше.
+- **Mac с Intel:** на настоящем Mac с Intel выпуск не запускался.
+- Остальное — как в 0.3.25: список на странице выпуска v0.3.25-beta.
+
+## 🇬🇧 Install
+
+
+Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The macOS images are signed with an Apple Developer ID certificate (Watafast LLC) and notarized by Apple. The Windows and Linux files are not code-signed yet, so Windows warns once.
+- **macOS 12+ (Apple Silicon):** open `ProxysVPN_0.3.26_aarch64.dmg`, drag ProxysVPN onto the Applications shortcut, and press "Open" at the first launch. The app asks for the administrator password at launch.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.26_x64.dmg`, same steps.
+- **Windows 10/11 (x64):** download `ProxysVPN_0.3.26_x64-setup.exe`. Microsoft Edge may hold the download: the save button hides behind the arrow right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". The installer asks for administrator rights once and installs the background service ProxysVPN Service: after that the app starts with no prompt. Installed outside Program Files, there is no service and every start asks for the rights, as before.
+- **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.26_arm64-setup.exe`, same steps.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.26_amd64.deb`. The package installs a system service, and connecting does not ask the person at this computer for a password. Remove with `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, x86_64 Linux):** `ProxysVPN_0.3.26_amd64.AppImage`. Make the file executable (`chmod +x`); the first start and the first connect happen in Desktop Mode. The AppImage asks for the system password, as before. The steps, Gaming Mode and the controller are in docs/STEAMDECK.md.
+- **If you have 0.3.9 to 0.3.25:** the app itself shows the line "Version 0.3.26 is out" at the foot of the window. 0.3.10 to 0.3.25 ask about a new version every six hours and 0.3.9 once a day, so the line may take a while. You need not wait: install the new file over it.
+- **0.3.8 and older** cannot update themselves: install the file by hand, over the old one.
+
+## 🇬🇧 What's new
+
+- **The reserve path remembers the ways in to its server.** A server of our own protocol tells the app every way in it can be reached by. Before, the app on a computer forgot them when it was turned off and started from the same one each time. Now it keeps them on this computer and tries them all at the next connect: if the first way in does not answer from your network, the reserve path goes through another.
+- **When it starts to work.** The ways in are remembered after the first connect through the reserve path in this version. Until then the app knows one way in, as before.
+- **What is kept.** Only the ways in to the servers of the reserve path, for eight servers at most. The file is in the app's data folder on this computer; what it says never goes to the log or to a support report.
+- Everything from 0.3.25 is still there.
+
+## 🇬🇧 Known limitations
+
+- **The memory of the ways in** is covered by tests. The release was not run live, neither on a real computer nor on a network where some ways in are closed: if the reserve path still does not come up for you, send a support report.
+- **A computer that never connected through the reserve path** knows no other way in: the first such connect goes as before.
+- **Intel Mac:** the release was not run on a real Intel Mac.
+- Everything else is as in 0.3.25: see the v0.3.25-beta release page.
+
+---
+
 # ProxysVPN Desktop v0.3.25-beta
 
 🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Новое: перед запуском приложение проверяет, какой сервер отвечает из вашей сети, и стартует через ответивший; там, где страны не соединяются, а запасной путь соединяется, приложение переходит на него раньше. Исправлено: кнопка «Проверить» в разделе «Мои прокси» больше не пишет «Не удалось связаться» про рабочий HTTP-прокси, когда VPN включён.
