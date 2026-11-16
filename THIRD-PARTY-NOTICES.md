@@ -2,19 +2,22 @@
 
 ProxysVPN Desktop ships several components it does not own. None of them is
 committed to this repository: a build downloads the pinned versions
-and verifies their SHA-256 sums before it can bundle them.
+and verifies their SHA-256 sums before it can bundle them. The one exception
+is the Windows xray: it is built from the same pinned tag with our patch, and
+the build must arrive at the pinned SHA-256 as well (see below).
 
 | Component | Version | Upstream | Licence | Shipped as |
 |---|---|---|---|---|
-| Xray-core | 26.3.27 | https://github.com/XTLS/Xray-core | MPL-2.0; the binary also contains GPL-3.0-or-later code, see below | sidecar `xray` + `geoip.dat`, `geosite.dat` |
+| Xray-core | 26.3.27 | https://github.com/XTLS/Xray-core | MPL-2.0; the binary also contains GPL-3.0-or-later code, see below | sidecar `xray` + `geoip.dat`, `geosite.dat`; on Windows built with `scripts/libxray/xray-core-windows-pvpn1.patch` |
 | tun2socks | 2.6.0 | https://github.com/xjasonlyu/tun2socks | MIT | sidecar `tun2socks` |
 | hysteria | 2.9.3 | https://github.com/apernet/hysteria | MIT; the binary also contains GPL-3.0-or-later code, see below | sidecar `hysteria` |
 | Wintun | 0.14.1 | https://www.wintun.net | Prebuilt Binaries Licence (WireGuard LLC) | `wintun.dll`, Windows only |
 
 ## GPL-3.0-or-later code inside the desktop engines
 
-The desktop sidecars are the unmodified upstream release binaries. Two of them
-statically link Go modules licensed under the GNU General Public License,
+The desktop sidecars are the unmodified upstream release binaries, except the
+Windows xray, which is the same tag built with our patch (it leaves the modules
+below as they are). Two of the engines statically link Go modules licensed under the GNU General Public License,
 version 3 or (at your option) any later version (`go version -m` on the pinned
 releases):
 
@@ -28,7 +31,11 @@ releases):
 The complete corresponding source of each engine binary is its upstream
 release tag (https://github.com/XTLS/Xray-core/tree/v26.3.27,
 https://github.com/apernet/hysteria/tree/app/v2.9.3) together with the module
-versions above. The full GPL-3.0 text ships inside the app
+versions above. For the Windows xray it is that tag with
+`scripts/libxray/xray-core-windows-pvpn1.patch` applied, built by
+`scripts/libxray/build-xray-windows.sh` with the Go version that script pins;
+the patch says what it changes and why (a split by programs ended the stock
+engine under many new connections at once). The full GPL-3.0 text ships inside the app
 (shown on the "Open-source
 licences" screen) and the components are listed there for macOS, Windows and
 Linux. The iOS engine is built without these modules

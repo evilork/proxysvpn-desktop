@@ -1,3 +1,71 @@
+# ProxysVPN Desktop v0.3.30-beta
+
+🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Он для тех, кто на Windows делит трафик по программам: движок раздельного режима больше не падает, когда программы открывают много соединений сразу (игры, ускорители игр), и раздельный режим работает при запуске от имени администратора. На Mac и Linux новое только в номере версии.
+
+🇬🇧 This release is for the Mac (Apple Silicon and Intel), Windows, Linux and the Steam Deck. It is for those who split traffic by programs on Windows: the split engine no longer falls when programs open many connections at once (games, game boosters), and the split works when the app is started as administrator. On the Mac and Linux only the version number is new.
+
+## 🇷🇺 Установка
+
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. Образы для macOS подписаны сертификатом Apple Developer ID (Watafast LLC) и заверены Apple. У файлов для Windows и Linux подписи кода пока нет, поэтому Windows один раз предупреждает.
+- **macOS 12+ (Apple Silicon):** откройте `ProxysVPN_0.3.30_aarch64.dmg`, перетащите ProxysVPN на ярлык Applications, при первом запуске нажмите «Открыть». При запуске приложение спрашивает пароль администратора.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.30_x64.dmg`, шаги те же.
+- **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.30_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». Установщик один раз спрашивает права администратора и ставит фоновую службу ProxysVPN Service: дальше приложение запускается без запроса прав. Если поставить приложение не в Program Files, службы нет и права спрашиваются при каждом запуске, как раньше.
+- **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.30_arm64-setup.exe`, шаги те же.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.30_amd64.deb`. Пакет ставит системную службу, и подключение не спрашивает пароль у того, кто сидит за этим компьютером. Удаление: `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, Linux x86_64):** `ProxysVPN_0.3.30_amd64.AppImage`. Сделайте файл исполняемым (`chmod +x`), первый запуск и первое подключение — в режиме рабочего стола. AppImage, как и раньше, спрашивает пароль системы. Шаги, игровой режим и управление — в docs/STEAMDECK.md.
+- **Если стоит 0.3.9–0.3.29:** приложение само покажет внизу окна строку «Вышла версия 0.3.30». 0.3.10–0.3.29 спрашивают о новой версии раз в шесть часов, 0.3.9 — раз в сутки, поэтому строка может появиться не сразу. Ждать не обязательно: новый файл можно поставить поверх.
+- **0.3.8 и старше** обновляться сами не умеют: поставьте файл вручную, поверх.
+
+## 🇷🇺 Что нового
+
+- **Windows, программы через VPN и мимо VPN: движок больше не падает от наплыва соединений.** Раньше каждое новое соединение заставляло движок раздельного режима ждать ответа Windows (какая программа его открыла, какой у неё путь, какой сетевой адаптер), и на каждое ожидание уходил отдельный поток. Когда игра или ускоритель игр открывал тысячи соединений сразу, потоки кончались, движок падал, и на миг пропадало всё. Теперь ответы Windows делятся между соединениями, которые пришли вместе, и ненадолго запоминаются. В проверке 15 500 соединений сразу старый движок падал, новый держал не больше 34 потоков.
+- **Свой движок для Windows.** Поэтому установщики Windows ставят нашу сборку Xray-core 26.3.27 с этой правкой. Правка, сценарий сборки и её контрольные суммы лежат в открытом коде (`scripts/libxray`), сборку можно повторить и сверить байт в байт.
+- **Если движок всё же упадёт**, приложение поднимает его снова (до трёх раз за 30 минут), а отчёт для поддержки пишет, почему он упал.
+- **Запуск от имени администратора.** Раньше приложение, запущенное от имени администратора, отказывалось делить трафик по программам. Теперь оно запускает движок раздельного режима само.
+- **IPv6.** Если у линии нет IPv6, приложение в раздельном режиме больше не забирает IPv6 в туннель. Раньше программы мимо VPN на такой линии могли подолгу открывать сайты с IPv6 (google, cloudflare, telegram). А соединения IPv6 выбранной программы теперь идут по её правилу.
+- **Отчёт для поддержки** считает и программы мимо VPN и говорит, в каком режиме идёт раздельный режим.
+- Всё из 0.3.29 на месте.
+
+## 🇷🇺 Известные ограничения
+
+- **Windows, ping при разделении по программам.** Движок раздельного режима переносит только TCP и UDP, поэтому ping (ICMP) не проходит ни у одной программы, и у тех, что идут напрямую, тоже. Ускоритель игр, который проверяет свои серверы через ping, может считать, что интернета нет.
+- **Windows, программы:** проверено вживую на Windows 11 ARM в виртуальной машине. На обычном компьютере с x64 и с играми не запускалось.
+- **Mac с Intel:** на настоящем Mac с Intel выпуск не запускался.
+- Остальное — как в 0.3.29: список на странице выпуска v0.3.29-beta.
+
+## 🇬🇧 Install
+
+
+Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The macOS images are signed with an Apple Developer ID certificate (Watafast LLC) and notarized by Apple. The Windows and Linux files are not code-signed yet, so Windows warns once.
+- **macOS 12+ (Apple Silicon):** open `ProxysVPN_0.3.30_aarch64.dmg`, drag ProxysVPN onto the Applications shortcut, and press "Open" at the first launch. The app asks for the administrator password at launch.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.30_x64.dmg`, same steps.
+- **Windows 10/11 (x64):** download `ProxysVPN_0.3.30_x64-setup.exe`. Microsoft Edge may hold the download: the save button hides behind the arrow right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". The installer asks for administrator rights once and installs the background service ProxysVPN Service: after that the app starts with no prompt. Installed outside Program Files, there is no service and every start asks for the rights, as before.
+- **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.30_arm64-setup.exe`, same steps.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.30_amd64.deb`. The package installs a system service, and connecting does not ask the person at this computer for a password. Remove with `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, x86_64 Linux):** `ProxysVPN_0.3.30_amd64.AppImage`. Make the file executable (`chmod +x`); the first start and the first connect happen in Desktop Mode. The AppImage asks for the system password, as before. The steps, Gaming Mode and the controller are in docs/STEAMDECK.md.
+- **If you have 0.3.9 to 0.3.29:** the app itself shows the line "Version 0.3.30 is out" at the foot of the window. 0.3.10 to 0.3.29 ask about a new version every six hours and 0.3.9 once a day, so the line may take a while. You need not wait: install the new file over it.
+- **0.3.8 and older** cannot update themselves: install the file by hand, over the old one.
+
+## 🇬🇧 What's new
+
+- **Windows, programs through the VPN and around it: the engine no longer falls under a flood of connections.** Before, each new connection made the split engine wait for Windows (which program opened it, that program's path, which network adapter), and each wait took a thread of its own. When a game or a game booster opened thousands of connections at once, the threads ran out, the engine fell, and everything dropped for a moment. Now the answers from Windows are shared by connections that arrive together and kept for a short while. In a test with 15 500 connections at once the old engine fell, while the new one held at most 34 threads.
+- **Our own engine build for Windows.** So the Windows installers now carry our build of Xray-core 26.3.27 with this change. The change, the build script and its checksums are in the open source (`scripts/libxray`): the build can be repeated and compared byte for byte.
+- **If the engine still falls**, the app raises it again (up to three times in 30 minutes), and the support report says why it fell.
+- **Started as administrator.** Before, the app started as administrator refused to split traffic by programs. Now it runs the split engine itself.
+- **IPv6.** On a line with no IPv6, the split no longer takes IPv6 into the tunnel. Before, programs going around the VPN on such a line could take long to open sites with IPv6 (google, cloudflare, telegram). And the IPv6 connections of a chosen program now follow its rule.
+- **The support report** also counts the programs that go around the VPN and says which mode the split runs in.
+- Everything from 0.3.29 is still there.
+
+## 🇬🇧 Known limitations
+
+- **Windows, ping under a program split.** The split engine carries only TCP and UDP, so ping (ICMP) passes for no program, not even the ones that go direct. A game booster that checks its servers by ping may decide there is no internet.
+- **Windows, programs:** run live on Windows 11 ARM in a virtual machine. Not run on an ordinary x64 PC or with games.
+- **Intel Mac:** the release was not run on a real Intel Mac.
+- Everything else is as in 0.3.29: see the v0.3.29-beta release page.
+
+---
+
 # ProxysVPN Desktop v0.3.29-beta
 
 🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Новое: в «Мои правила» можно выбрать, что идёт через VPN: всё, кроме исключений, или только выбранные сайты или программы. На Windows теперь можно выбрать программы — и те, что идут через VPN, и те, что идут мимо него.

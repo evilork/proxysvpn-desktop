@@ -1,0 +1,1058 @@
+xray-core-windows-pvpn1.patch - Xray-core v26.3.27 as the Windows installers ship it
+
+Applied by scripts/libxray/build-xray-windows.sh to the upstream tag v26.3.27
+(commit d2758a023cd7f4174a5a5fa4ff66e487d4342ba0). The files it changes stay
+under MPL-2.0, and this patch is their source in that form. Every change
+carries its own test, and the build script runs those tests before it builds.
+
+Why (16.11.2026, a split by programs on Windows 11): in that mode a second
+xray runs as the tunnel itself (TUN inbound) and routes every new flow by the
+program that opened it. Stock 26.3.27 then dies under a burst of new
+connections - a game launcher, a torrent client, a browser reopening its tabs -
+with "fatal error: thread exhaustion", and the tunnel goes down with it.
+Measured on Windows 11 ARM with 8000 UDP and 7500 TCP flows opened at once:
+the stock engine reached 9885 OS threads and died; this one peaked at 34
+threads and stayed up.
+
+1. common/net/find_process_windows.go, common/net/process_table_cache.go:
+   the `process` condition copied the whole system connection table for every
+   new connection and opened the process again for its path. Both are
+   blocking system calls, and Go gives each goroutine blocked in one its own
+   OS thread. Lookups that arrive together now share one copy of a table, a
+   copy answers by itself for a short while, and process paths are kept
+   briefly with a bound on how many are asked for at once.
+2. transport/internet/interface_index_cache.go, sockopt_windows.go: an
+   outbound bound to an interface (`sockopt.interface`) listed every adapter
+   (net.InterfaceByName) for each socket. The index is now asked once per
+   name and kept for a second.
+3. common/net/net.go: the local address list is refreshed by one caller at a
+   time; the others keep the previous answer meanwhile.
+4. proxy/tun/udp_fullcone.go: closing an old UDP flow could remove the newer
+   flow from the same source (as upstream fixed after this tag), and packets
+   racing a close could panic on a closed channel.
+5. app/router/condition.go: the process lookup joined an IPv6 source and its
+   port with a bare ":", which does not parse, so no IPv6 flow ever matched a
+   process rule.
+
+diff --git a/app/router/condition.go b/app/router/condition.go
+index 54af816..dd98f7f 100644
+--- a/app/router/condition.go
++++ b/app/router/condition.go
+@@ -386,22 +386,29 @@ func NewProcessNameMatcher(names []string) *ProcessNameMatcher {
+ 	}
+ }
+ 
+-func (m *ProcessNameMatcher) Apply(ctx routing.Context) bool {
+-	if len(ctx.GetSourceIPs()) == 0 {
+-		return false
+-	}
+-	srcPort := ctx.GetSourcePort().String()
+-	srcIP := ctx.GetSourceIPs()[0].String()
+-	var network string
+-	switch ctx.GetNetwork() {
++// ProcessLookupSource is the local end of a flow as the process lookup wants
++// it. The host and port are joined with net.JoinHostPort: joined with a bare
++// ":" an IPv6 source ("fd00::2" and 50000 gave "tcp:fd00::2:50000") did not
++// parse, so no IPv6 flow ever matched a process rule and every one of them
++// fell through to the rules below.
++func ProcessLookupSource(network net.Network, ip net.IP, port net.Port) (net.Destination, error) {
++	var prefix string
++	switch network {
+ 	case net.Network_TCP:
+-		network = "tcp"
++		prefix = "tcp:"
+ 	case net.Network_UDP:
+-		network = "udp"
++		prefix = "udp:"
+ 	default:
++		return net.Destination{}, errors.New("no process lookup for network ", network)
++	}
++	return net.ParseDestination(prefix + net.JoinHostPort(ip.String(), port.String()))
++}
++
++func (m *ProcessNameMatcher) Apply(ctx routing.Context) bool {
++	if len(ctx.GetSourceIPs()) == 0 {
+ 		return false
+ 	}
+-	src, err := net.ParseDestination(strings.Join([]string{network, srcIP, srcPort}, ":"))
++	src, err := ProcessLookupSource(ctx.GetNetwork(), ctx.GetSourceIPs()[0], ctx.GetSourcePort())
+ 	if err != nil {
+ 		return false
+ 	}
+diff --git a/app/router/condition_process_test.go b/app/router/condition_process_test.go
+new file mode 100644
+index 0000000..c3ed703
+--- /dev/null
++++ b/app/router/condition_process_test.go
+@@ -0,0 +1,42 @@
++package router_test
++
++import (
++	"testing"
++
++	. "github.com/xtls/xray-core/app/router"
++	"github.com/xtls/xray-core/common/net"
++)
++
++func TestProcessLookupSourceTakesAnIPv6Source(t *testing.T) {
++	src, err := ProcessLookupSource(net.Network_TCP, net.ParseIP("fd00::2"), net.Port(50000))
++	if err != nil {
++		t.Fatalf("an IPv6 source did not parse: %v", err)
++	}
++	if src.Network != net.Network_TCP || src.Port != 50000 {
++		t.Fatalf("got %v", src)
++	}
++	if src.Address.Family() != net.AddressFamilyIPv6 || !src.Address.IP().Equal(net.ParseIP("fd00::2")) {
++		t.Fatalf("got address %v, want fd00::2 as IPv6", src.Address)
++	}
++}
++
++func TestProcessLookupSourceKeepsIPv4AsItWas(t *testing.T) {
++	for _, ip := range []net.IP{net.ParseIP("10.0.85.2"), net.ParseIP("10.0.85.2").To4()} {
++		src, err := ProcessLookupSource(net.Network_UDP, ip, net.Port(53))
++		if err != nil {
++			t.Fatalf("%v: %v", ip, err)
++		}
++		if src.Network != net.Network_UDP || src.Port != 53 {
++			t.Fatalf("got %v", src)
++		}
++		if src.Address.Family() != net.AddressFamilyIPv4 || src.Address.String() != "10.0.85.2" {
++			t.Fatalf("got address %v, want 10.0.85.2 as IPv4", src.Address)
++		}
++	}
++}
++
++func TestProcessLookupSourceRefusesOtherNetworks(t *testing.T) {
++	if _, err := ProcessLookupSource(net.Network_UNIX, net.ParseIP("10.0.85.2"), net.Port(1)); err == nil {
++		t.Fatal("a unix flow was given a lookup source")
++	}
++}
+diff --git a/common/net/find_process_windows.go b/common/net/find_process_windows.go
+index 46ddcc9..48ec462 100644
+--- a/common/net/find_process_windows.go
++++ b/common/net/find_process_windows.go
+@@ -8,6 +8,7 @@ import (
+ 	"strings"
+ 	"sync"
+ 	"syscall"
++	"time"
+ 	"unsafe"
+ 
+ 	"golang.org/x/sys/windows"
+@@ -28,6 +29,11 @@ var (
+ 
+ 	once    sync.Once
+ 	initErr error
++
++	// One copy of each table at a time, shared by the lookups of a burst,
++	// and few process paths asked at once (process_table_cache.go).
++	transportTables = newTableCache(time.Now)
++	processPaths    = newPathCache(8, time.Now)
+ )
+ 
+ func initWin32API() error {
+@@ -96,18 +102,17 @@ func FindProcess(dest Destination) (PID int, Name string, AbsolutePath string, e
+ 		family = windows.AF_INET6
+ 	}
+ 
+-	buf, err := getTransportTable(fn, family, class)
+-	if err != nil {
+-		return 0, "", "", err
+-	}
+-
+ 	s := newSearcher(dest.Network, dest.Address.Family())
+-
+-	pid, err := s.Search(buf, addr, uint16(port))
++	key := class<<8 | family
++	pid, err := transportTables.find(
++		key,
++		func() ([]byte, error) { return getTransportTable(fn, family, class) },
++		func(buf []byte) (uint32, error) { return s.Search(buf, addr, uint16(port)) },
++	)
+ 	if err != nil {
+ 		return 0, "", "", err
+ 	}
+-	NameWithPath, err := getExecPathFromPID(pid)
++	NameWithPath, err := processPaths.get(pid, getExecPathFromPID)
+ 	NameWithPath = filepath.ToSlash(NameWithPath)
+ 
+ 	// drop .exe and path
+diff --git a/common/net/net.go b/common/net/net.go
+index 9a21313..2ab7ebb 100644
+--- a/common/net/net.go
++++ b/common/net/net.go
+@@ -3,6 +3,7 @@ package net // import "github.com/xtls/xray-core/common/net"
+ 
+ import (
+ 	"net"
++	"sync"
+ 	"sync/atomic"
+ 	"time"
+ 
+@@ -28,20 +29,40 @@ type localIPCacheEntry struct {
+ 
+ var localIPCache = atomic.Pointer[localIPCacheEntry]{}
+ 
++// localIPRefresh lets one caller ask the system for the addresses again when
++// the kept answer is a minute old; the others keep using the old answer
++// meanwhile instead of all making the same blocking call at once.
++var localIPRefresh sync.Mutex
++
++func localAddrs() ([]net.Addr, error) {
++	entry := localIPCache.Load()
++	if entry != nil && time.Since(entry.lastUpdate) <= time.Minute {
++		return entry.addrs, nil
++	}
++	if entry == nil {
++		localIPRefresh.Lock()
++	} else if !localIPRefresh.TryLock() {
++		return entry.addrs, nil
++	}
++	defer localIPRefresh.Unlock()
++	if fresh := localIPCache.Load(); fresh != nil && time.Since(fresh.lastUpdate) <= time.Minute {
++		return fresh.addrs, nil
++	}
++	addrs, err := net.InterfaceAddrs()
++	if err != nil {
++		return nil, err
++	}
++	localIPCache.Store(&localIPCacheEntry{
++		addrs:      addrs,
++		lastUpdate: time.Now(),
++	})
++	return addrs, nil
++}
++
+ func IsLocal(ip net.IP) (bool, error) {
+-	var addrs []net.Addr
+-	if entry := localIPCache.Load(); entry == nil || time.Since(entry.lastUpdate) > time.Minute {
+-		var err error
+-		addrs, err = net.InterfaceAddrs()
+-		if err != nil {
+-			return false, err
+-		}
+-		localIPCache.Store(&localIPCacheEntry{
+-			addrs:      addrs,
+-			lastUpdate: time.Now(),
+-		})
+-	} else {
+-		addrs = entry.addrs
++	addrs, err := localAddrs()
++	if err != nil {
++		return false, err
+ 	}
+ 	for _, addr := range addrs {
+ 		if ipnet, ok := addr.(*net.IPNet); ok {
+diff --git a/common/net/process_table_cache.go b/common/net/process_table_cache.go
+new file mode 100644
+index 0000000..bead476
+--- /dev/null
++++ b/common/net/process_table_cache.go
+@@ -0,0 +1,165 @@
++package net
++
++import (
++	"sync"
++	"time"
++)
++
++// The `process` condition of a routing rule asks the system for its whole
++// connection table on every call: once per rule with such a condition, for
++// every new connection. On Windows that is a blocking system call, and Go
++// gives each goroutine blocked in one its own OS thread. A burst of new UDP
++// flows through the TUN inbound made thousands of threads at once and ended
++// the process at Go's limit of 10000 ("fatal error: thread exhaustion").
++//
++// tableCache lets every lookup that starts while a copy of a table is being
++// taken share that copy, and keeps the last copy for a short while: at most
++// one system call per table runs at a time, whatever the number of
++// connections being routed.
++
++// tableFreshFor is how long a copy of a table answers lookups by itself. A
++// connection opened after the copy was taken is not in it; that lookup misses
++// and asks for a copy begun after the lookup started (find).
++const tableFreshFor = 200 * time.Millisecond
++
++type tableCopy struct {
++	taken time.Time // when the system call that made it began
++	table []byte
++}
++
++type tableFlight struct {
++	started time.Time
++	done    chan struct{}
++	table   []byte
++	err     error
++}
++
++type tableCache struct {
++	mu      sync.Mutex
++	copies  map[int]tableCopy
++	flights map[int]*tableFlight
++	now     func() time.Time
++}
++
++func newTableCache(now func() time.Time) *tableCache {
++	return &tableCache{copies: map[int]tableCopy{}, flights: map[int]*tableFlight{}, now: now}
++}
++
++// get returns a copy of table `key` begun no earlier than `since`. It takes
++// one with `fetch` only when no such copy is kept or being taken; callers that
++// arrive while one is being taken wait for it. The table is shared and must
++// only be read.
++func (c *tableCache) get(key int, since time.Time, fetch func() ([]byte, error)) ([]byte, error) {
++	for {
++		c.mu.Lock()
++		if kept, ok := c.copies[key]; ok && !kept.taken.Before(since) {
++			c.mu.Unlock()
++			return kept.table, nil
++		}
++		if flight := c.flights[key]; flight != nil {
++			c.mu.Unlock()
++			<-flight.done
++			if !flight.started.Before(since) {
++				return flight.table, flight.err
++			}
++			// That copy began before this caller asked: wait for a newer one.
++			continue
++		}
++		flight := &tableFlight{started: c.now(), done: make(chan struct{})}
++		c.flights[key] = flight
++		c.mu.Unlock()
++
++		flight.table, flight.err = fetch()
++
++		c.mu.Lock()
++		delete(c.flights, key)
++		if flight.err == nil {
++			if kept, ok := c.copies[key]; !ok || kept.taken.Before(flight.started) {
++				c.copies[key] = tableCopy{taken: flight.started, table: flight.table}
++			}
++		}
++		c.mu.Unlock()
++		close(flight.done)
++		return flight.table, flight.err
++	}
++}
++
++// find runs `search` over a recent copy of table `key`, and once more over a
++// copy begun after this call when the recent one does not hold the
++// connection: a connection that existed when the lookup began is always in
++// such a copy.
++func (c *tableCache) find(key int, fetch func() ([]byte, error), search func([]byte) (uint32, error)) (uint32, error) {
++	asked := c.now()
++	table, err := c.get(key, asked.Add(-tableFreshFor), fetch)
++	if err != nil {
++		return 0, err
++	}
++	if pid, err := search(table); err == nil {
++		return pid, nil
++	}
++	table, err = c.get(key, asked, fetch)
++	if err != nil {
++		return 0, err
++	}
++	return search(table)
++}
++
++// pathFreshFor is how long the path of a process is kept. Every lookup used
++// to open the process and ask for its path again. A process id reused by
++// another program within this time would still give the old path, which is
++// why it is short.
++const pathFreshFor = time.Second
++
++// pathsKept bounds the paths kept; older ones are dropped beyond it.
++const pathsKept = 1024
++
++type pathEntry struct {
++	path  string
++	taken time.Time
++}
++
++type pathCache struct {
++	mu    sync.Mutex
++	paths map[uint32]pathEntry
++	slots chan struct{}
++	now   func() time.Time
++}
++
++// newPathCache keeps paths for pathFreshFor and lets at most `parallel`
++// lookups of a path run at once; the rest wait for a slot without holding an
++// OS thread.
++func newPathCache(parallel int, now func() time.Time) *pathCache {
++	return &pathCache{paths: map[uint32]pathEntry{}, slots: make(chan struct{}, parallel), now: now}
++}
++
++func (c *pathCache) get(pid uint32, lookup func(uint32) (string, error)) (string, error) {
++	c.mu.Lock()
++	if kept, ok := c.paths[pid]; ok && c.now().Sub(kept.taken) <= pathFreshFor {
++		c.mu.Unlock()
++		return kept.path, nil
++	}
++	c.mu.Unlock()
++
++	c.slots <- struct{}{}
++	taken := c.now()
++	path, err := lookup(pid)
++	<-c.slots
++	if err != nil {
++		return "", err
++	}
++
++	c.mu.Lock()
++	if len(c.paths) >= pathsKept {
++		for id, kept := range c.paths {
++			if taken.Sub(kept.taken) > pathFreshFor {
++				delete(c.paths, id)
++			}
++		}
++		if len(c.paths) >= pathsKept {
++			clear(c.paths)
++		}
++	}
++	c.paths[pid] = pathEntry{path: path, taken: taken}
++	c.mu.Unlock()
++	return path, nil
++}
+diff --git a/common/net/process_table_cache_test.go b/common/net/process_table_cache_test.go
+new file mode 100644
+index 0000000..5aa85c5
+--- /dev/null
++++ b/common/net/process_table_cache_test.go
+@@ -0,0 +1,261 @@
++package net
++
++import (
++	"errors"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++type fakeClock struct {
++	mu sync.Mutex
++	t  time.Time
++}
++
++func newFakeClock() *fakeClock { return &fakeClock{t: time.Unix(1_700_000_000, 0)} }
++
++func (c *fakeClock) now() time.Time {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	return c.t
++}
++
++func (c *fakeClock) advance(d time.Duration) {
++	c.mu.Lock()
++	c.t = c.t.Add(d)
++	c.mu.Unlock()
++}
++
++// table is a fake connection table: one byte per connection, its port.
++func searchPort(port byte) func([]byte) (uint32, error) {
++	return func(table []byte) (uint32, error) {
++		for _, p := range table {
++			if p == port {
++				return uint32(p) + 1000, nil
++			}
++		}
++		return 0, errors.New("not found")
++	}
++}
++
++func TestABurstOfLookupsSharesOneSystemCall(t *testing.T) {
++	cache := newTableCache(time.Now)
++	var calls atomic.Int32
++	release := make(chan struct{})
++	fetch := func() ([]byte, error) {
++		calls.Add(1)
++		<-release
++		return []byte{1, 2, 3}, nil
++	}
++
++	const burst = 500
++	var wg sync.WaitGroup
++	errs := make(chan error, burst)
++	for i := 0; i < burst; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			pid, err := cache.find(0, fetch, searchPort(2))
++			if err == nil && pid != 1002 {
++				err = errors.New("wrong pid")
++			}
++			if err != nil {
++				errs <- err
++			}
++		}()
++	}
++	// Let the burst pile up behind the first copy, then let it finish.
++	time.Sleep(50 * time.Millisecond)
++	close(release)
++	wg.Wait()
++	close(errs)
++	for err := range errs {
++		t.Fatal(err)
++	}
++	if got := calls.Load(); got != 1 {
++		t.Fatalf("%d system calls for one burst, want 1", got)
++	}
++}
++
++func TestAKeptCopyAnswersOnlyWhileFresh(t *testing.T) {
++	clock := newFakeClock()
++	cache := newTableCache(clock.now)
++	calls := 0
++	fetch := func() ([]byte, error) {
++		calls++
++		return []byte{7}, nil
++	}
++	for i := 0; i < 3; i++ {
++		if _, err := cache.find(0, fetch, searchPort(7)); err != nil {
++			t.Fatal(err)
++		}
++		clock.advance(tableFreshFor / 4)
++	}
++	if calls != 1 {
++		t.Fatalf("%d calls within the fresh time, want 1", calls)
++	}
++	clock.advance(tableFreshFor)
++	if _, err := cache.find(0, fetch, searchPort(7)); err != nil {
++		t.Fatal(err)
++	}
++	if calls != 2 {
++		t.Fatalf("%d calls after the fresh time, want 2", calls)
++	}
++}
++
++func TestAMissAsksForACopyBegunAfterTheLookup(t *testing.T) {
++	clock := newFakeClock()
++	cache := newTableCache(clock.now)
++	tables := [][]byte{{1}, {1, 9}}
++	calls := 0
++	fetch := func() ([]byte, error) {
++		table := tables[calls]
++		calls++
++		return table, nil
++	}
++	if _, err := cache.find(0, fetch, searchPort(1)); err != nil {
++		t.Fatal(err)
++	}
++	// A connection opened after that copy: the kept copy is still fresh but
++	// does not hold it, so one more copy is taken.
++	clock.advance(time.Millisecond)
++	pid, err := cache.find(0, fetch, searchPort(9))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if pid != 1009 || calls != 2 {
++		t.Fatalf("pid %d after %d calls, want 1009 after 2", pid, calls)
++	}
++	// A connection in no table: one fresh copy, then "not found".
++	clock.advance(time.Millisecond)
++	tables = append(tables, []byte{1, 9})
++	if _, err := cache.find(0, fetch, searchPort(5)); err == nil {
++		t.Fatal("found a connection in no table")
++	}
++	if calls != 3 {
++		t.Fatalf("%d calls, want 3", calls)
++	}
++}
++
++func TestTablesAreKeptApart(t *testing.T) {
++	clock := newFakeClock()
++	cache := newTableCache(clock.now)
++	tcp := func() ([]byte, error) { return []byte{1}, nil }
++	udp := func() ([]byte, error) { return []byte{2}, nil }
++	if _, err := cache.find(1, tcp, searchPort(1)); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := cache.find(2, udp, searchPort(2)); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := cache.find(1, tcp, searchPort(2)); err == nil {
++		t.Fatal("a port of table 2 was found in table 1")
++	}
++}
++
++func TestAFailedCopyIsReportedAndNotKept(t *testing.T) {
++	clock := newFakeClock()
++	cache := newTableCache(clock.now)
++	fail := errors.New("syscall error: 87")
++	calls := 0
++	fetch := func() ([]byte, error) {
++		calls++
++		if calls == 1 {
++			return nil, fail
++		}
++		return []byte{3}, nil
++	}
++	if _, err := cache.find(0, fetch, searchPort(3)); !errors.Is(err, fail) {
++		t.Fatalf("got %v, want the system call's error", err)
++	}
++	if _, err := cache.find(0, fetch, searchPort(3)); err != nil {
++		t.Fatalf("the next lookup did not take a new copy: %v", err)
++	}
++}
++
++func TestPathsAreKeptBrieflyAndLookedUpFewAtATime(t *testing.T) {
++	clock := newFakeClock()
++	cache := newPathCache(2, clock.now)
++	var running, most atomic.Int32
++	var calls atomic.Int32
++	lookup := func(pid uint32) (string, error) {
++		calls.Add(1)
++		n := running.Add(1)
++		for {
++			m := most.Load()
++			if n <= m || most.CompareAndSwap(m, n) {
++				break
++			}
++		}
++		time.Sleep(2 * time.Millisecond)
++		running.Add(-1)
++		return "C:/Games/game.exe", nil
++	}
++
++	var wg sync.WaitGroup
++	for pid := uint32(1); pid <= 40; pid++ {
++		wg.Add(1)
++		go func(pid uint32) {
++			defer wg.Done()
++			if _, err := cache.get(pid, lookup); err != nil {
++				t.Error(err)
++			}
++		}(pid)
++	}
++	wg.Wait()
++	if got := most.Load(); got > 2 {
++		t.Fatalf("%d path lookups at once, want at most 2", got)
++	}
++
++	before := calls.Load()
++	if path, err := cache.get(7, lookup); err != nil || path != "C:/Games/game.exe" {
++		t.Fatalf("kept path: %q %v", path, err)
++	}
++	if calls.Load() != before {
++		t.Fatal("a kept path was looked up again")
++	}
++	clock.advance(pathFreshFor + time.Millisecond)
++	if _, err := cache.get(7, lookup); err != nil {
++		t.Fatal(err)
++	}
++	if calls.Load() != before+1 {
++		t.Fatal("a stale path was not looked up again")
++	}
++}
++
++func TestPathsKeptStayBounded(t *testing.T) {
++	clock := newFakeClock()
++	cache := newPathCache(4, clock.now)
++	lookup := func(uint32) (string, error) { return "p", nil }
++	for pid := uint32(0); pid < 3*pathsKept; pid++ {
++		if _, err := cache.get(pid, lookup); err != nil {
++			t.Fatal(err)
++		}
++	}
++	cache.mu.Lock()
++	kept := len(cache.paths)
++	cache.mu.Unlock()
++	if kept > pathsKept {
++		t.Fatalf("%d paths kept, want at most %d", kept, pathsKept)
++	}
++}
++
++func TestAFailedPathIsNotKept(t *testing.T) {
++	clock := newFakeClock()
++	cache := newPathCache(1, clock.now)
++	calls := 0
++	lookup := func(uint32) (string, error) {
++		calls++
++		if calls == 1 {
++			return "", errors.New("access denied")
++		}
++		return "q", nil
++	}
++	if _, err := cache.get(9, lookup); err == nil {
++		t.Fatal("the error was lost")
++	}
++	if path, err := cache.get(9, lookup); err != nil || path != "q" {
++		t.Fatalf("got %q %v", path, err)
++	}
++}
+diff --git a/proxy/tun/udp_fullcone.go b/proxy/tun/udp_fullcone.go
+index df58ce4..90e8908 100644
+--- a/proxy/tun/udp_fullcone.go
++++ b/proxy/tun/udp_fullcone.go
+@@ -40,22 +40,26 @@ func (u *udpConnectionHandler) HandlePacket(src net.Destination, dst net.Destina
+ 
+ 		go u.handleConnection(conn, dst)
+ 	}
+-	u.Unlock()
+ 
+-	// send packet data to the egress channel, if it has buffer, or discard
++	// send packet data to the egress channel, if it has buffer, or discard.
++	// Still under the lock: connectionFinished closes the channel under it, and
++	// a send after that close panics ("send on closed channel", #5895). The
++	// send never blocks, so holding the lock for it costs nothing.
+ 	select {
+ 	case conn.egress <- data:
+ 	default:
+ 	}
++	u.Unlock()
+ 
+ 	return true
+ }
+ 
+-func (u *udpConnectionHandler) connectionFinished(src net.Destination) {
++func (u *udpConnectionHandler) connectionFinished(conn *udpConn) {
+ 	u.Lock()
+-	conn, found := u.udpConns[src]
+-	if found {
+-		delete(u.udpConns, src)
++	// Close runs twice per flow; a newer conn may already own this src
++	// (upstream XTLS/Xray-core#6814).
++	if u.udpConns[conn.src] == conn {
++		delete(u.udpConns, conn.src)
+ 		close(conn.egress)
+ 	}
+ 	u.Unlock()
+@@ -96,7 +100,7 @@ func (c *udpConn) Write(p []byte) (int, error) {
+ }
+ 
+ func (c *udpConn) Close() error {
+-	c.handler.connectionFinished(c.src)
++	c.handler.connectionFinished(c)
+ 
+ 	return nil
+ }
+diff --git a/proxy/tun/udp_fullcone_test.go b/proxy/tun/udp_fullcone_test.go
+new file mode 100644
+index 0000000..486b159
+--- /dev/null
++++ b/proxy/tun/udp_fullcone_test.go
+@@ -0,0 +1,112 @@
++package tun
++
++import (
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/xtls/xray-core/common/net"
++)
++
++// newTestHandler returns a handler whose new flows are handed to the test
++// instead of the dispatcher.
++func newTestHandler(t *testing.T) (*udpConnectionHandler, chan *udpConn) {
++	t.Helper()
++	started := make(chan *udpConn, 1024)
++	handler := newUdpConnectionHandler(
++		func(conn net.Conn, _ net.Destination) { started <- conn.(*udpConn) },
++		func([]byte, net.Destination, net.Destination) error { return nil },
++	)
++	return handler, started
++}
++
++func nextConn(t *testing.T, started chan *udpConn) *udpConn {
++	t.Helper()
++	select {
++	case conn := <-started:
++		return conn
++	case <-time.After(5 * time.Second):
++		t.Fatal("no flow started")
++		return nil
++	}
++}
++
++func TestSecondCloseOfAnOldFlowKeepsTheNewOne(t *testing.T) {
++	handler, started := newTestHandler(t)
++	src := net.UDPDestination(net.ParseAddress("10.0.0.2"), 40000)
++	dst := net.UDPDestination(net.ParseAddress("192.0.2.1"), 53)
++
++	handler.HandlePacket(src, dst, []byte("first"))
++	old := nextConn(t, started)
++	if err := old.Close(); err != nil {
++		t.Fatal(err)
++	}
++
++	handler.HandlePacket(src, dst, []byte("second"))
++	fresh := nextConn(t, started)
++	if fresh == old {
++		t.Fatal("the closed flow was reused")
++	}
++
++	// The old flow's second close must leave the new flow alone.
++	if err := old.Close(); err != nil {
++		t.Fatal(err)
++	}
++	handler.Lock()
++	owner := handler.udpConns[src]
++	handler.Unlock()
++	if owner != fresh {
++		t.Fatal("the second close of the old flow evicted the new one")
++	}
++
++	handler.HandlePacket(src, dst, []byte("third"))
++	buf := make([]byte, 16)
++	for _, want := range []string{"second", "third"} {
++		n, err := fresh.Read(buf)
++		if err != nil {
++			t.Fatalf("read %q: %v", want, err)
++		}
++		if got := string(buf[:n]); got != want {
++			t.Fatalf("got %q, want %q", got, want)
++		}
++	}
++}
++
++func TestPacketsRacingACloseNeverPanic(t *testing.T) {
++	handler, started := newTestHandler(t)
++	dst := net.UDPDestination(net.ParseAddress("192.0.2.1"), 53)
++	const sources = 8
++	const rounds = 2000
++
++	stop := make(chan struct{})
++	var closers sync.WaitGroup
++	closers.Add(1)
++	go func() {
++		defer closers.Done()
++		for {
++			select {
++			case conn := <-started:
++				// Close twice, as the dispatcher does on teardown.
++				_ = conn.Close()
++				_ = conn.Close()
++			case <-stop:
++				return
++			}
++		}
++	}()
++
++	var senders sync.WaitGroup
++	for s := 0; s < sources; s++ {
++		senders.Add(1)
++		go func(port net.Port) {
++			defer senders.Done()
++			src := net.UDPDestination(net.ParseAddress("10.0.0.2"), port)
++			for i := 0; i < rounds; i++ {
++				handler.HandlePacket(src, dst, []byte("x"))
++			}
++		}(net.Port(41000 + s))
++	}
++	senders.Wait()
++	close(stop)
++	closers.Wait()
++}
+diff --git a/transport/internet/interface_index_cache.go b/transport/internet/interface_index_cache.go
+new file mode 100644
+index 0000000..7bc277f
+--- /dev/null
++++ b/transport/internet/interface_index_cache.go
+@@ -0,0 +1,64 @@
++package internet
++
++import (
++	"net"
++	"sync"
++	"time"
++)
++
++// An outbound bound to an interface (`sockopt.interface`) used to ask the
++// system for the whole adapter list (net.InterfaceByName) for every socket it
++// opened. On Windows that is GetAdaptersAddresses, a slow blocking call, and
++// Go gives each goroutine blocked in one its own OS thread: a burst of new
++// flows through a TUN inbound routed to such an outbound held thousands of
++// threads in it. interfaceIndexCache asks once per name and keeps the answer
++// briefly; while one caller asks, the others wait for its answer.
++
++// interfaceFreshFor is how long the index of a named interface is kept. An
++// adapter that goes away or comes back under a new index is seen after at
++// most this long.
++const interfaceFreshFor = time.Second
++
++type interfaceIndex struct {
++	index int
++	taken time.Time
++}
++
++type interfaceIndexCache struct {
++	mu      sync.Mutex
++	indexes map[string]interfaceIndex
++	now     func() time.Time
++	lookup  func(name string) (int, error)
++}
++
++func newInterfaceIndexCache(now func() time.Time, lookup func(name string) (int, error)) *interfaceIndexCache {
++	return &interfaceIndexCache{indexes: map[string]interfaceIndex{}, now: now, lookup: lookup}
++}
++
++func lookupInterfaceIndex(name string) (int, error) {
++	inf, err := net.InterfaceByName(name)
++	if err != nil {
++		return 0, err
++	}
++	return inf.Index, nil
++}
++
++var outboundInterfaces = newInterfaceIndexCache(time.Now, lookupInterfaceIndex)
++
++// index returns the index of the interface called `name`. The lock is held
++// through the lookup on purpose: callers that arrive meanwhile park on it
++// without an OS thread and then take the fresh answer.
++func (c *interfaceIndexCache) index(name string) (int, error) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if kept, ok := c.indexes[name]; ok && c.now().Sub(kept.taken) <= interfaceFreshFor {
++		return kept.index, nil
++	}
++	index, err := c.lookup(name)
++	if err != nil {
++		delete(c.indexes, name)
++		return 0, err
++	}
++	c.indexes[name] = interfaceIndex{index: index, taken: c.now()}
++	return index, nil
++}
+diff --git a/transport/internet/interface_index_cache_test.go b/transport/internet/interface_index_cache_test.go
+new file mode 100644
+index 0000000..8d745ce
+--- /dev/null
++++ b/transport/internet/interface_index_cache_test.go
+@@ -0,0 +1,97 @@
++package internet
++
++import (
++	"errors"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++type stepClock struct {
++	mu sync.Mutex
++	t  time.Time
++}
++
++func (c *stepClock) now() time.Time {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	return c.t
++}
++
++func (c *stepClock) advance(d time.Duration) {
++	c.mu.Lock()
++	c.t = c.t.Add(d)
++	c.mu.Unlock()
++}
++
++func TestABurstOfSocketsAsksForTheInterfaceOnce(t *testing.T) {
++	var calls atomic.Int32
++	cache := newInterfaceIndexCache(time.Now, func(name string) (int, error) {
++		calls.Add(1)
++		time.Sleep(20 * time.Millisecond)
++		return 7, nil
++	})
++	var wg sync.WaitGroup
++	for i := 0; i < 300; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			if index, err := cache.index("Ethernet"); err != nil || index != 7 {
++				t.Errorf("got %d %v", index, err)
++			}
++		}()
++	}
++	wg.Wait()
++	if got := calls.Load(); got != 1 {
++		t.Fatalf("%d lookups for one burst, want 1", got)
++	}
++}
++
++func TestAnInterfaceIndexIsAskedAgainWhenStale(t *testing.T) {
++	clock := &stepClock{t: time.Unix(1_700_000_000, 0)}
++	next := 3
++	cache := newInterfaceIndexCache(clock.now, func(string) (int, error) { return next, nil })
++	if index, _ := cache.index("Ethernet"); index != 3 {
++		t.Fatalf("got %d, want 3", index)
++	}
++	next = 9
++	clock.advance(interfaceFreshFor / 2)
++	if index, _ := cache.index("Ethernet"); index != 3 {
++		t.Fatalf("a fresh index was asked again: got %d", index)
++	}
++	clock.advance(interfaceFreshFor)
++	if index, _ := cache.index("Ethernet"); index != 9 {
++		t.Fatalf("a stale index was kept: got %d, want 9", index)
++	}
++}
++
++func TestInterfaceNamesAreKeptApart(t *testing.T) {
++	clock := &stepClock{t: time.Unix(1_700_000_000, 0)}
++	cache := newInterfaceIndexCache(clock.now, func(name string) (int, error) { return len(name), nil })
++	if index, _ := cache.index("Ethernet"); index != 8 {
++		t.Fatalf("got %d", index)
++	}
++	if index, _ := cache.index("Wi-Fi"); index != 5 {
++		t.Fatalf("got %d", index)
++	}
++}
++
++func TestAMissingInterfaceIsReportedAndNotKept(t *testing.T) {
++	clock := &stepClock{t: time.Unix(1_700_000_000, 0)}
++	gone := errors.New("route ip+net: no such network interface")
++	calls := 0
++	cache := newInterfaceIndexCache(clock.now, func(string) (int, error) {
++		calls++
++		if calls == 1 {
++			return 0, gone
++		}
++		return 4, nil
++	})
++	if _, err := cache.index("Ethernet"); !errors.Is(err, gone) {
++		t.Fatalf("got %v, want the lookup's error", err)
++	}
++	if index, err := cache.index("Ethernet"); err != nil || index != 4 {
++		t.Fatalf("the next socket did not ask again: %d %v", index, err)
++	}
++}
+diff --git a/transport/internet/sockopt_windows.go b/transport/internet/sockopt_windows.go
+index 1389ca0..c522c4a 100644
+--- a/transport/internet/sockopt_windows.go
++++ b/transport/internet/sockopt_windows.go
+@@ -33,7 +33,9 @@ func setTFO(fd syscall.Handle, tfo int) error {
+ 
+ func applyOutboundSocketOptions(network string, address string, fd uintptr, config *SocketConfig) error {
+ 	if config.Interface != "" {
+-		inf, err := net.InterfaceByName(config.Interface)
++		// One adapter-list call per interface name at a time, kept briefly
++		// (interface_index_cache.go), instead of one for every socket.
++		infIndex, err := outboundInterfaces.index(config.Interface)
+ 		if err != nil {
+ 			return errors.New("failed to find the interface").Base(err)
+ 		}
+@@ -44,7 +46,7 @@ func applyOutboundSocketOptions(network string, address string, fd uintptr, conf
+ 		host, _, err := net.SplitHostPort(address)
+ 		if isV4 {
+ 			var bytes [4]byte
+-			binary.BigEndian.PutUint32(bytes[:], uint32(inf.Index))
++			binary.BigEndian.PutUint32(bytes[:], uint32(infIndex))
+ 			idx := *(*uint32)(unsafe.Pointer(&bytes[0]))
+ 			if err := syscall.SetsockoptInt(syscall.Handle(fd), syscall.IPPROTO_IP, IP_UNICAST_IF, int(idx)); err != nil {
+ 				return errors.New("failed to set IP_UNICAST_IF").Base(err)
+@@ -55,11 +57,11 @@ func applyOutboundSocketOptions(network string, address string, fd uintptr, conf
+ 				}
+ 			}
+ 		} else {
+-			if err := syscall.SetsockoptInt(syscall.Handle(fd), syscall.IPPROTO_IPV6, IPV6_UNICAST_IF, inf.Index); err != nil {
++			if err := syscall.SetsockoptInt(syscall.Handle(fd), syscall.IPPROTO_IPV6, IPV6_UNICAST_IF, infIndex); err != nil {
+ 				return errors.New("failed to set IPV6_UNICAST_IF").Base(err)
+ 			}
+ 			if ip := net.ParseIP(host); ip != nil && ip.IsMulticast() && isUDPSocket(network) {
+-				if err := syscall.SetsockoptInt(syscall.Handle(fd), syscall.IPPROTO_IPV6, syscall.IPV6_MULTICAST_IF, inf.Index); err != nil {
++				if err := syscall.SetsockoptInt(syscall.Handle(fd), syscall.IPPROTO_IPV6, syscall.IPV6_MULTICAST_IF, infIndex); err != nil {
+ 					return errors.New("failed to set IPV6_MULTICAST_IF").Base(err)
+ 				}
+ 			}
