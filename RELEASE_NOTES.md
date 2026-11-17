@@ -1,3 +1,65 @@
+# ProxysVPN Desktop v0.3.31-beta
+
+🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. На экране «Проверка» появились две вещи: проверка одного сервиса во всех странах сразу и строка «Что мешает», если на компьютере работает другая программа, которая уводит трафик мимо ProxysVPN.
+
+🇬🇧 This release is for the Mac (Apple Silicon and Intel), Windows, Linux and the Steam Deck. The Check screen gets two things: checking one service in every country at once, and a «What gets in the way» line when another program on the computer takes traffic around ProxysVPN.
+
+## 🇷🇺 Установка
+
+
+Сверьте SHA-256 файла со строкой в `SHA256SUMS.txt`. Образы для macOS подписаны сертификатом Apple Developer ID (Watafast LLC) и заверены Apple. У файлов для Windows и Linux подписи кода пока нет, поэтому Windows один раз предупреждает.
+- **macOS 12+ (Apple Silicon):** откройте `ProxysVPN_0.3.31_aarch64.dmg`, перетащите ProxysVPN на ярлык Applications, при первом запуске нажмите «Открыть». При запуске приложение спрашивает пароль администратора.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.31_x64.dmg`, шаги те же.
+- **Windows 10/11 (x64):** скачайте `ProxysVPN_0.3.31_x64-setup.exe`. Microsoft Edge может задержать загрузку: кнопка сохранения спрятана за стрелкой справа от «Удалить» → «Всё равно сохранить». Затем запустите файл; SmartScreen: «Подробнее» → «Выполнить в любом случае». Установщик один раз спрашивает права администратора и ставит фоновую службу ProxysVPN Service: дальше приложение запускается без запроса прав. Если поставить приложение не в Program Files, службы нет и права спрашиваются при каждом запуске, как раньше.
+- **Windows 10/11 на ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.31_arm64-setup.exe`, шаги те же.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.31_amd64.deb`. Пакет ставит системную службу, и подключение не спрашивает пароль у того, кто сидит за этим компьютером. Удаление: `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, Linux x86_64):** `ProxysVPN_0.3.31_amd64.AppImage`. Сделайте файл исполняемым (`chmod +x`), первый запуск и первое подключение — в режиме рабочего стола. AppImage, как и раньше, спрашивает пароль системы. Шаги, игровой режим и управление — в docs/STEAMDECK.md.
+- **Если стоит 0.3.9–0.3.30:** приложение само покажет внизу окна строку «Вышла версия 0.3.31». 0.3.10–0.3.30 спрашивают о новой версии раз в шесть часов, 0.3.9 — раз в сутки, поэтому строка может появиться не сразу. Ждать не обязательно: новый файл можно поставить поверх.
+- **0.3.8 и старше** обновляться сами не умеют: поставьте файл вручную, поверх.
+
+## 🇷🇺 Что нового
+
+- **Один сервис во всех странах.** На экране «Проверка» выберите YouTube, Instagram, Telegram, ChatGPT или Gemini и нажмите одну кнопку. Приложение спросит этот сервис через каждую страну вашего списка и для каждой скажет: открывается, отказывает, молчит или страна не ответила, и какую страну видит сам сервис. В конце — одна строка, например «YouTube открывается в странах: Германия, США». Видно, сколько стран уже проверено; проверку можно остановить, и она останавливается сама, если закрыть экран.
+- **Текущее подключение проверка не трогает.** Страну приложение не переключает: для каждой страны оно ненадолго поднимает отдельный проверочный вход и сразу закрывает его. Пока приложение подключается, проверка не начинается.
+- **«Что мешает».** Если на компьютере работает другой VPN (например, Radmin VPN), который забирает интернет себе, или системный прокси, приложение называет его над результатами и советует, что сделать: выключить его, затем проверить ещё раз. Пока другой VPN держит интернет, строки сервисов пишут, что их результат может быть неверным, вместо красного крестика. Антивирус и другой VPN, который интернет не забирает, называются только рядом с неудачной проверкой — как возможная причина.
+- **Технический журнал короче.** Повторяющиеся строки об истёкшем ожидании ответа DNS теперь сворачиваются в одну сводку раз в 10 минут. Работа DNS не изменилась.
+- Всё из 0.3.30 на месте.
+
+## 🇷🇺 Известные ограничения
+
+- **Проверка всех стран:** страны на Hysteria2 и на запасном протоколе так пока не проверяются, приложение пишет об этом в их строке. За раз проверяется до 30 стран, вся проверка занимает не больше двух минут.
+- **Другой VPN на компьютере:** пока он держит интернет, и ответы проверки всех стран могут относиться к его сети. Приложение пишет об этом под итогом.
+- Остальное — как в 0.3.30: список на странице выпуска v0.3.30-beta.
+
+## 🇬🇧 Install
+
+
+Check the file's SHA-256 against its line in `SHA256SUMS.txt`. The macOS images are signed with an Apple Developer ID certificate (Watafast LLC) and notarized by Apple. The Windows and Linux files are not code-signed yet, so Windows warns once.
+- **macOS 12+ (Apple Silicon):** open `ProxysVPN_0.3.31_aarch64.dmg`, drag ProxysVPN onto the Applications shortcut, and press "Open" at the first launch. The app asks for the administrator password at launch.
+- **macOS 12+ (Intel):** `ProxysVPN_0.3.31_x64.dmg`, same steps.
+- **Windows 10/11 (x64):** download `ProxysVPN_0.3.31_x64-setup.exe`. Microsoft Edge may hold the download: the save button hides behind the arrow right of "Delete" → "Keep anyway". Then run the file; SmartScreen: "More info" → "Run anyway". The installer asks for administrator rights once and installs the background service ProxysVPN Service: after that the app starts with no prompt. Installed outside Program Files, there is no service and every start asks for the rights, as before.
+- **Windows 10/11 on ARM (Snapdragon, Surface Pro X):** `ProxysVPN_0.3.31_arm64-setup.exe`, same steps.
+- **Linux (Debian 12+, Ubuntu 22.04+, x86_64):** `sudo apt install ./ProxysVPN_0.3.31_amd64.deb`. The package installs a system service, and connecting does not ask the person at this computer for a password. Remove with `sudo apt remove proxys-vpn`.
+- **Steam Deck (AppImage, x86_64 Linux):** `ProxysVPN_0.3.31_amd64.AppImage`. Make the file executable (`chmod +x`); the first start and the first connect happen in Desktop Mode. The AppImage asks for the system password, as before. The steps, Gaming Mode and the controller are in docs/STEAMDECK.md.
+- **If you have 0.3.9 to 0.3.30:** the app itself shows the line "Version 0.3.31 is out" at the foot of the window. 0.3.10 to 0.3.30 ask about a new version every six hours and 0.3.9 once a day, so the line may take a while. You need not wait: install the new file over it.
+- **0.3.8 and older** cannot update themselves: install the file by hand, over the old one.
+
+## 🇬🇧 What's new
+
+- **One service in every country.** On the Check screen pick YouTube, Instagram, Telegram, ChatGPT or Gemini and press one button. The app asks that service through every country of your list and says for each: it opens, it refuses, it keeps silent, or the country did not answer, and which country the service itself sees. It ends with one line, such as "YouTube opens in: Germany, USA". You see how many countries are done; the check can be stopped, and it stops by itself when the screen closes.
+- **The check leaves your connection alone.** The app does not switch countries: for each country it briefly raises a separate check entrance and closes it at once. While the app is connecting, the check does not start.
+- **«What gets in the way».** When another VPN on the computer (Radmin VPN, say) takes the internet for itself, or a system proxy is set, the app names it above the results and says what to do: turn it off, then check again. While another VPN holds the internet, the service rows say their result may be wrong instead of drawing a red cross. A security suite, and another VPN that does not take the internet, are named only next to a failed check, as a possible cause.
+- **A shorter technical log.** Repeated lines about a DNS answer that ran out of time now fold into one summary every 10 minutes. DNS itself works as before.
+- Everything from 0.3.30 is still there.
+
+## 🇬🇧 Known limitations
+
+- **Checking every country:** countries on Hysteria2 and on the fallback protocol cannot be checked this way yet; their row says so. Up to 30 countries are checked at a time, and the whole check takes at most two minutes.
+- **Another VPN on the computer:** while it holds the internet, the answers of the every-country check may come from its network too. The app says so under the summary.
+- Everything else is as in 0.3.30: see the v0.3.30-beta release page.
+
+---
+
 # ProxysVPN Desktop v0.3.30-beta
 
 🇷🇺 Этот выпуск — для Mac (Apple Silicon и Intel), Windows, Linux и Steam Deck. Он для тех, кто на Windows делит трафик по программам: движок раздельного режима больше не падает, когда программы открывают много соединений сразу (игры, ускорители игр), и раздельный режим работает при запуске от имени администратора. На Mac и Linux новое только в номере версии.
