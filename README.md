@@ -165,8 +165,8 @@ not been run on a real Steam Deck yet.
 
 - **No telemetry, no analytics.** The app talks to:
   - your subscription link's site and, if it is one of ours and does not
-    answer, the reserve sites `proxysvpn.com`, `proxysvnovich.vercel.app`,
-    `proksya.com`, `proksya.xyz` (subscription, signed server list, pairing).
+    answer, the reserve sites `proxysvpn.com`, `proxysvnovich.vercel.app`
+    and `proksya.com` (subscription, signed server list, pairing).
     These requests carry your link's token and a random device id
     (`x-hwid`), which is how the service enforces "one link, one device";
   - the VPN nodes the subscription lists;
